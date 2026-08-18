@@ -15,7 +15,7 @@ import shutil
 import sys
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import date
 from pathlib import Path
 
@@ -56,6 +56,19 @@ REVIEW_CSV_FIELDS = (
     "access_status",
     "redistribution_status",
     "figure_reproduction_status",
+)
+PUBLICATION_BOUNDARIES = (
+    "generation_records_written",
+    "generation_records_fsynced",
+    "generation_descriptor_written",
+    "generation_descriptor_fsynced",
+    "temporary_generation_directory_fsynced",
+    "generation_renamed",
+    "generations_parent_fsynced",
+    "pointer_written",
+    "pointer_fsynced",
+    "pointer_replaced",
+    "active_parent_fsynced",
 )
 
 _SAFE_METADATA_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}\Z")
@@ -469,11 +482,32 @@ def audit_dataset(
     return rows
 
 
-def _write_fsynced(path: Path, content: bytes) -> None:
+def _publication_boundary(name: str, hook: Callable[[str], None] | None) -> None:
+    if name not in PUBLICATION_BOUNDARIES:
+        raise ValueError(f"unknown publication boundary: {name}")
+    if hook is not None:
+        hook(name)
+    failpoint = os.environ.get("SCORE_SR_SMB_PUBLICATION_FAILPOINT")
+    if failpoint == f"{name}:raise":
+        raise OSError(f"injected publication failure after {name}")
+    if failpoint == f"{name}:exit":
+        os._exit(91)
+
+
+def _write_fsynced(
+    path: Path,
+    content: bytes,
+    *,
+    written_boundary: str,
+    fsynced_boundary: str,
+    boundary_hook: Callable[[str], None] | None,
+) -> None:
     with path.open("xb") as handle:
         handle.write(content)
         handle.flush()
+        _publication_boundary(written_boundary, boundary_hook)
         os.fsync(handle.fileno())
+        _publication_boundary(fsynced_boundary, boundary_hook)
 
 
 def _fsync_directory(path: Path) -> None:
@@ -542,6 +576,7 @@ def publish_manifest_generation(
     generation_root: Path,
     descriptor: Mapping[str, object],
     rows: Sequence[Mapping[str, object]],
+    boundary_hook: Callable[[str], None] | None = None,
 ) -> None:
     """Validate and publish one immutable content-addressed generation through one pointer."""
 
@@ -567,29 +602,53 @@ def publish_manifest_generation(
                 raise _publication_error("existing generation is not byte-identical")
         else:
             temp_generation.mkdir()
-            _write_fsynced(temp_generation / "manifest-descriptor.yaml", descriptor_bytes)
-            _write_fsynced(temp_generation / "manifest-records.jsonl", records_bytes)
+            _write_fsynced(
+                temp_generation / "manifest-records.jsonl",
+                records_bytes,
+                written_boundary="generation_records_written",
+                fsynced_boundary="generation_records_fsynced",
+                boundary_hook=boundary_hook,
+            )
+            _write_fsynced(
+                temp_generation / "manifest-descriptor.yaml",
+                descriptor_bytes,
+                written_boundary="generation_descriptor_written",
+                fsynced_boundary="generation_descriptor_fsynced",
+                boundary_hook=boundary_hook,
+            )
             _fsync_directory(temp_generation)
+            _publication_boundary("temporary_generation_directory_fsynced", boundary_hook)
             os.replace(temp_generation, generation_path)
+            _publication_boundary("generation_renamed", boundary_hook)
             _fsync_directory(root)
+            _publication_boundary("generations_parent_fsynced", boundary_hook)
 
         pointer_bytes = _canonical_descriptor(pointer)
         active_path.parent.mkdir(parents=True, exist_ok=True)
+        if active_path.is_file() and active_path.read_bytes() == pointer_bytes:
+            return
         pointer_temp = active_path.parent / f".{active_path.name}.tmp-{uuid.uuid4().hex}"
         try:
-            _write_fsynced(pointer_temp, pointer_bytes)
+            _write_fsynced(
+                pointer_temp,
+                pointer_bytes,
+                written_boundary="pointer_written",
+                fsynced_boundary="pointer_fsynced",
+                boundary_hook=boundary_hook,
+            )
             os.replace(pointer_temp, active_path)
             committed = True
+            _publication_boundary("pointer_replaced", boundary_hook)
             _fsync_directory(active_path.parent)
+            _publication_boundary("active_parent_fsynced", boundary_hook)
         finally:
             if pointer_temp.exists():
                 pointer_temp.unlink()
     except ManifestPublicationError:
         raise
-    except OSError as error:
-        raise _publication_error(
-            f"publication I/O failed: {error.strerror}", committed=committed
-        ) from error
+    except Exception as error:
+        detail = error.strerror if isinstance(error, OSError) else type(error).__name__
+        raise _publication_error(f"publication failed: {detail}", committed=committed) from error
     finally:
         if temp_generation.exists():
             shutil.rmtree(temp_generation)
