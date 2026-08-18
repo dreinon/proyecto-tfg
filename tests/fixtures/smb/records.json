@@ -1,0 +1,188 @@
+{
+  "active_pointer": {
+    "schema_version": 1,
+    "record_type": "manifest-active",
+    "manifest_id": "smb-evaluation-v1",
+    "generation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "descriptor_path": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/manifest-descriptor.yaml",
+    "records_path": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/manifest-records.jsonl",
+    "row_schema_id": "manifest-row",
+    "row_schema_version": 1,
+    "row_count": 685,
+    "records_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "manifest_descriptor": {
+    "schema_version": 1,
+    "record_type": "manifest-descriptor",
+    "manifest_id": "smb-evaluation-v1",
+    "generation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "generation_algorithm": {
+      "algorithm": "sha256",
+      "version": 1,
+      "domain_separator": "smb-manifest-generation-v1",
+      "descriptor_canonicalization": "yaml-safe-sort-keys-utf8-v1",
+      "records_canonicalization": "jsonl-utf8-sorted-keys-v1"
+    },
+    "source_key": "smb",
+    "source_revision": "96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb",
+    "creation_command": "uv run python -m score_super_resolution.smb_audit audit",
+    "code_revision": "1111111111111111111111111111111111111111",
+    "grouping_unit": "source_score",
+    "upstream_split": "test",
+    "project_split": "evaluation",
+    "deterministic_seed": 20260818,
+    "exclusions": [],
+    "row_schema_id": "manifest-row",
+    "row_schema_version": 1,
+    "row_count": 685,
+    "records_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "audit_version": "smb-audit-v1",
+    "benchmark_state": "AUDITED_LOCKED",
+    "hash_provenance": {
+      "encoded": {
+        "algorithm": "sha256",
+        "version": 1,
+        "canonicalization": "encoded-bytes-v1"
+      },
+      "pixels": {
+        "algorithm": "sha256",
+        "version": 1,
+        "canonicalization": "rgba-uint8-row-major-v1"
+      }
+    },
+    "duplicate_provenance": {
+      "exact": {
+        "algorithm": "encoded-and-pixel-sha256",
+        "version": 1
+      },
+      "near": {
+        "algorithm": "phash",
+        "version": 1,
+        "library": "ImageHash",
+        "library_version": "4.3.2",
+        "hash_size": 8,
+        "highfreq_factor": 4,
+        "maximum_hamming_distance": 6
+      }
+    },
+    "sample_selection": {
+      "algorithm": "sha256-rank",
+      "version": 1,
+      "seed": 20260818,
+      "population_size": 685,
+      "sample_size": 64,
+      "identity_fields": ["upstream_index", "item_id"],
+      "selection_state": "pre-review"
+    }
+  },
+  "normal_row": {
+    "schema_version": 1,
+    "record_type": "manifest-row",
+    "manifest_version": 1,
+    "source_key": "smb",
+    "source_revision": "96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb",
+    "split": "test",
+    "upstream_index": 0,
+    "item_id": "smb-test-000000",
+    "original_score": {"raw": "score-01", "normalized": "score-01"},
+    "source_group_id": "score-01",
+    "page": {"raw": "1", "normalized": "1"},
+    "page_texture": {"raw": "clean", "normalized": "clean"},
+    "encoded_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "pixel_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "declared_width": 32,
+    "declared_height": 24,
+    "decoded_width": 32,
+    "decoded_height": 24,
+    "image_mode": "RGB",
+    "image_format": "PNG",
+    "byte_count": 128,
+    "region_count": 1,
+    "bbox_valid": true,
+    "required_text_present": true,
+    "annotation_failures": [],
+    "quality": {
+      "review_status": "pending",
+      "flags": [],
+      "suitability_disposition": "pending",
+      "notes": ""
+    },
+    "exact_duplicate_group": null,
+    "near_duplicate_candidate_ids": [],
+    "duplicate_review": {
+      "review_status": "pending",
+      "disposition": "pending",
+      "reviewer": null,
+      "reviewed_at": null,
+      "rationale": ""
+    },
+    "expected_status": "processable",
+    "processing_status": "processed",
+    "unprocessable_reason": null,
+    "audit_sample_member": false,
+    "rights": {
+      "dataset_licence_status": "pending",
+      "item_provenance_status": "pending",
+      "access_status": "pending",
+      "redistribution_status": "pending",
+      "figure_reproduction_status": "pending"
+    },
+    "paired_eligible": true,
+    "paired_ineligibility_reason": null
+  },
+  "failure_row": {
+    "schema_version": 1,
+    "record_type": "manifest-row",
+    "manifest_version": 1,
+    "source_key": "smb",
+    "source_revision": "96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb",
+    "split": "test",
+    "upstream_index": 1,
+    "item_id": "smb-test-000001",
+    "original_score": {"raw": null, "normalized": null},
+    "source_group_id": null,
+    "page": {"raw": null, "normalized": null},
+    "page_texture": {"raw": null, "normalized": null},
+    "encoded_sha256": null,
+    "pixel_sha256": null,
+    "declared_width": null,
+    "declared_height": null,
+    "decoded_width": null,
+    "decoded_height": null,
+    "image_mode": null,
+    "image_format": null,
+    "byte_count": null,
+    "region_count": null,
+    "bbox_valid": null,
+    "required_text_present": null,
+    "annotation_failures": ["decode_failed"],
+    "quality": {
+      "review_status": "not_applicable",
+      "flags": ["unprocessable"],
+      "suitability_disposition": "unavailable",
+      "notes": "decode_failed"
+    },
+    "exact_duplicate_group": null,
+    "near_duplicate_candidate_ids": [],
+    "duplicate_review": {
+      "review_status": "not_applicable",
+      "disposition": "unavailable",
+      "reviewer": null,
+      "reviewed_at": null,
+      "rationale": "decode_failed"
+    },
+    "expected_status": "unprocessable",
+    "processing_status": "failed",
+    "unprocessable_reason": "decode_failed",
+    "audit_sample_member": false,
+    "rights": {
+      "dataset_licence_status": "pending",
+      "item_provenance_status": "unavailable",
+      "access_status": "confirmed",
+      "redistribution_status": "pending",
+      "figure_reproduction_status": "pending"
+    },
+    "paired_eligible": false,
+    "paired_ineligibility_reason": "decode_failed"
+  }
+}
