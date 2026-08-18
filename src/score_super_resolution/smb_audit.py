@@ -185,15 +185,28 @@ def _regions_valid(regions: object, width: int, height: int) -> tuple[int, bool,
     failures: list[str] = []
     for index, region in enumerate(regions):
         bbox = region.get("bbox") if isinstance(region, Mapping) else None
-        if (
-            not isinstance(bbox, Sequence)
-            or isinstance(bbox, (str, bytes, bytearray))
-            or len(bbox) != 4
-            or any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in bbox)
+        if isinstance(bbox, Mapping) and set(bbox) == {"x", "y", "width", "height"}:
+            values = tuple(bbox[field] for field in ("x", "y", "width", "height"))
+            if any(
+                isinstance(value, bool) or not isinstance(value, (int, float)) for value in values
+            ):
+                failures.append(f"region_{index}_invalid_bbox")
+                continue
+            left, top, box_width, box_height = values
+            right = left + box_width
+            bottom = top + box_height
+        elif (
+            isinstance(bbox, Sequence)
+            and not isinstance(bbox, (str, bytes, bytearray))
+            and len(bbox) == 4
+            and all(
+                not isinstance(value, bool) and isinstance(value, (int, float)) for value in bbox
+            )
         ):
+            left, top, right, bottom = bbox
+        else:
             failures.append(f"region_{index}_invalid_bbox")
             continue
-        left, top, right, bottom = bbox
         if not (0 <= left < right <= width and 0 <= top < bottom <= height):
             failures.append(f"region_{index}_out_of_bounds")
     return len(regions), not failures, failures
