@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "score-super-resolution"
+version = "0.1.0"
+description = "Reproducible experiments for super-resolution of digitized music scores"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "datasets>=5.0.1,<6",
+  "jsonschema>=4.26,<5",
+  "matplotlib>=3.11.1,<4",
+  "numpy>=2.5.2,<3",
+  "opencv-python-headless>=5.0.0.93,<6",
+  "pandas>=3.0.5,<4",
+  "pillow>=12.3,<13",
+  "pyyaml>=6.0.3,<7",
+  "safetensors>=0.8,<1",
+  "scikit-image>=0.26,<0.27",
+  "seaborn>=0.13.2,<0.14",
+  "tensorboard>=2.21,<3",
+  "tqdm>=4.70,<5",
+]
+
+[project.optional-dependencies]
+cpu = [
+  "torch==2.13.0+cpu",
+  "torchvision==0.28.0+cpu",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=9.1.1,<10",
+  "pytest-cov>=7.1,<8",
+  "ruff>=0.16.3,<0.17",
+]
+notebooks = [
+  "ipykernel>=7.3,<8",
+  "jupyterlab>=4.6.3,<5",
+]
+kaggle = [
+  "kaggle>=2.2.4,<3",
+  "kagglehub>=1.0.2,<2",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu", extra = "cpu" }
+torchvision = { index = "pytorch-cpu", extra = "cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/score_super_resolution"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.format]
+docstring-code-format = true

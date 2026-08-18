@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
 import score_super_resolution.contracts as contracts
 from score_super_resolution.contracts import (
     ContractValidationError,
@@ -20,7 +21,9 @@ MODEL_FORBIDDEN_FIELDS = (
     "selection_score",
     "execution_command",
     "runtime_output",
+    "runtime_outputs",
     "smb_result",
+    "smb_results",
 )
 
 
@@ -44,6 +47,28 @@ def test_valid_contract_fixtures_pass(case: dict[str, Any]) -> None:
 def test_invalid_contract_fixtures_fail(case: dict[str, Any]) -> None:
     with pytest.raises(ContractValidationError):
         validate_instance(case["schema_id"], case["instance"])
+
+
+@pytest.mark.parametrize("case", _fixture("valid-records.json").values())
+def test_every_record_type_rejects_missing_and_unknown_fields(case: dict[str, Any]) -> None:
+    missing = copy.deepcopy(case["instance"])
+    del missing["record_type"]
+    with pytest.raises(ContractValidationError):
+        validate_instance(case["schema_id"], missing)
+
+    unknown = copy.deepcopy(case["instance"])
+    unknown["unknown_field"] = True
+    with pytest.raises(ContractValidationError, match="additional properties"):
+        validate_instance(case["schema_id"], unknown)
+
+
+@pytest.mark.parametrize("case", _fixture("valid-records.json").values())
+def test_every_record_type_rejects_an_invalid_declared_version(case: dict[str, Any]) -> None:
+    instance = copy.deepcopy(case["instance"])
+    instance["schema_version"] = 2
+
+    with pytest.raises(ContractValidationError):
+        validate_instance(case["schema_id"], instance)
 
 
 def test_model_invalid_bundle_covers_every_required_provenance_field() -> None:

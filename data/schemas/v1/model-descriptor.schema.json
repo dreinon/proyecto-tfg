@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v1:model-descriptor",
+  "title": "Provenance-only model descriptor v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "model_id",
+    "source",
+    "checkpoint",
+    "license",
+    "input_assumptions",
+    "output_conventions",
+    "verification_date"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_type": {"const": "model-descriptor"},
+    "model_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "revision"],
+      "properties": {
+        "repository_url": {"type": "string", "pattern": "^https?://[^\\s]+$"},
+        "doi": {"type": "string", "pattern": "^10\\.[^\\s/]+/.+$"},
+        "official_url": {"type": "string", "pattern": "^https?://[^\\s]+$"},
+        "version": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "minLength": 1}
+      },
+      "anyOf": [
+        {"required": ["repository_url"]},
+        {"required": ["doi"]},
+        {"required": ["official_url"]}
+      ]
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {"enum": ["available", "not_applicable"]},
+        "identifier": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "oneOf": [
+        {
+          "properties": {"status": {"const": "available"}},
+          "required": ["identifier", "sha256"]
+        },
+        {
+          "properties": {"status": {"const": "not_applicable"}},
+          "not": {
+            "anyOf": [
+              {"required": ["identifier"]},
+              {"required": ["sha256"]}
+            ]
+          }
+        }
+      ]
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "url"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "url": {"type": "string", "pattern": "^https?://[^\\s]+$"}
+      }
+    },
+    "input_assumptions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "output_conventions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "verification_date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    }
+  }
+}

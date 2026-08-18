@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v1:claim-evidence",
+  "title": "Claim-to-evidence row v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "claim_id",
+    "chapter_section",
+    "status",
+    "evidence_ids",
+    "limitations",
+    "reviewer",
+    "review_date"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_type": {"const": "claim-evidence"},
+    "claim_id": {"type": "string", "pattern": "^[A-Z][A-Z0-9]*-[A-Z0-9-]+$"},
+    "chapter_section": {"type": "string", "minLength": 1},
+    "status": {"enum": ["draft", "pending", "reviewed", "rejected"]},
+    "evidence_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "limitations": {"type": "string"},
+    "reviewer": {"type": "string"},
+    "review_date": {
+      "type": "string",
+      "pattern": "^(|[0-9]{4}-[0-9]{2}-[0-9]{2})$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"status": {"const": "reviewed"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "evidence_ids": {"minItems": 1},
+          "limitations": {"minLength": 1},
+          "reviewer": {"minLength": 1},
+          "review_date": {
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          }
+        }
+      }
+    }
+  ]
+}

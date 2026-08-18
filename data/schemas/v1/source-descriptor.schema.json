@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v1:source-descriptor",
+  "title": "Source descriptor v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "key",
+    "name",
+    "role",
+    "provider",
+    "repository_id",
+    "url",
+    "revision",
+    "access",
+    "license",
+    "citation",
+    "upstream_splits",
+    "features",
+    "loading",
+    "metadata_reviewed_at"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_type": {"const": "source-descriptor"},
+    "key": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+    "name": {"type": "string", "minLength": 1},
+    "role": {"type": "string", "minLength": 1},
+    "provider": {"type": "string", "minLength": 1},
+    "repository_id": {"type": "string", "minLength": 1},
+    "url": {"type": "string", "pattern": "^https?://[^\\s]+$"},
+    "project_url": {"type": "string", "pattern": "^https?://[^\\s]+$"},
+    "revision": {"type": "string", "minLength": 1},
+    "upstream_updated_at": {"type": "string", "minLength": 1},
+    "access": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gated",
+        "authentication_environment_variable",
+        "store_credentials_in_repository"
+      ],
+      "properties": {
+        "gated": {"enum": ["manual", "automatic", "none"]},
+        "authentication_environment_variable": {"type": "string", "minLength": 1},
+        "store_credentials_in_repository": {"const": false}
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "url"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "url": {"type": "string", "pattern": "^https?://[^\\s]+$"}
+      }
+    },
+    "citation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "year", "doi"],
+      "properties": {
+        "title": {"type": "string", "minLength": 1},
+        "venue": {"type": "string", "minLength": 1},
+        "year": {"type": "integer", "minimum": 1900},
+        "doi": {"type": "string", "pattern": "^10\\.[^\\s/]+/.+$"}
+      }
+    },
+    "upstream_splits": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9_-]*$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["examples"],
+          "properties": {
+            "examples": {"type": "integer", "minimum": 1}
+          }
+        }
+      }
+    },
+    "features": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "loading": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["library", "call", "config"],
+      "properties": {
+        "library": {"type": "string", "minLength": 1},
+        "call": {"type": "string", "minLength": 1},
+        "config": {"type": "string", "minLength": 1}
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "metadata_reviewed_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    }
+  }
+}
