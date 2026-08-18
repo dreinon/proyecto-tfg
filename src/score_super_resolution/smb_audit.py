@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import uuid
 from collections import Counter, defaultdict
@@ -28,6 +29,7 @@ from score_super_resolution.benchmark_policy import (
     assert_smb_purpose_allowed,
 )
 from score_super_resolution.contracts import ContractValidationError, validate_instance
+from score_super_resolution.smb import _read_descriptor, load_smb
 
 EXPECTED_ROW_COUNT = 685
 DEFAULT_SAMPLE_SIZE = 64
@@ -166,6 +168,14 @@ def _encoded_image(record: Mapping[str, object]) -> bytes:
             return encoded
         if isinstance(encoded, bytearray):
             return bytes(encoded)
+        raw_path = image.get("path")
+        if isinstance(raw_path, str) and raw_path:
+            path = Path(raw_path)
+            try:
+                if path.is_file():
+                    return path.read_bytes()
+            except OSError:
+                pass
     raise ValueError("image_bytes_unavailable")
 
 
@@ -480,6 +490,217 @@ def audit_dataset(
         row["near_duplicate_candidate_ids"] = sorted(row["near_duplicate_candidate_ids"])  # type: ignore[arg-type]
         validate_instance("manifest-row", row)
     return rows
+
+
+def _current_code_revision() -> str:
+    project_root = Path(__file__).resolve().parents[2]
+    completed = subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+        cwd=project_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    revision = completed.stdout.strip()
+    if completed.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise RuntimeError("cannot resolve the proyecto code revision for the SMB audit")
+    return revision
+
+
+def _audit_creation_command(
+    *,
+    source_path: Path,
+    audit_descriptor_path: Path,
+    audit_records_path: Path,
+    sample_path: Path,
+    review_path: Path,
+    active_path: Path,
+    generation_root: Path,
+) -> str:
+    arguments = (
+        ("--source", source_path),
+        ("--audit-descriptor", audit_descriptor_path),
+        ("--audit-records", audit_records_path),
+        ("--sample", sample_path),
+        ("--review", review_path),
+        ("--manifest-active", active_path),
+        ("--manifest-generation-root", generation_root),
+    )
+    suffix = " ".join(f"{flag} {path.as_posix()}" for flag, path in arguments)
+    return f"uv run python -m score_super_resolution.smb_audit audit {suffix}"
+
+
+def _manifest_descriptor(
+    *,
+    source_descriptor: Mapping[str, object],
+    rows: Sequence[Mapping[str, object]],
+    code_revision: str,
+    creation_command: str,
+    deterministic_seed: int,
+) -> dict[str, object]:
+    exclusions = [
+        {
+            "upstream_index": row["upstream_index"],
+            "item_id": row["item_id"],
+            "reason": row["paired_ineligibility_reason"],
+        }
+        for row in rows
+        if row["paired_eligible"] is False
+    ]
+    return {
+        "schema_version": 1,
+        "record_type": "manifest-descriptor",
+        "manifest_id": "smb-evaluation-v1",
+        "generation_algorithm": {
+            "algorithm": "sha256",
+            "version": 1,
+            "domain_separator": "smb-manifest-generation-v1",
+            "descriptor_canonicalization": "yaml-safe-sort-keys-utf8-v1",
+            "records_canonicalization": "jsonl-utf8-sorted-keys-v1",
+        },
+        "source_key": "smb",
+        "source_revision": source_descriptor["revision"],
+        "creation_command": creation_command,
+        "code_revision": code_revision,
+        "grouping_unit": "source_score",
+        "upstream_split": "test",
+        "project_split": "evaluation",
+        "deterministic_seed": deterministic_seed,
+        "exclusions": exclusions,
+        "row_schema_id": "manifest-row",
+        "row_schema_version": 1,
+        "row_count": len(rows),
+        "records_sha256": "0" * 64,
+        "audit_version": "smb-audit-v1",
+        "benchmark_state": "AUDITED_LOCKED",
+        "hash_provenance": {
+            "encoded": {
+                "algorithm": "sha256",
+                "version": 1,
+                "canonicalization": "encoded-bytes-v1",
+            },
+            "pixels": {
+                "algorithm": "sha256",
+                "version": 1,
+                "canonicalization": "rgba-uint8-row-major-v1",
+            },
+        },
+        "duplicate_provenance": {
+            "exact": {"algorithm": "encoded-and-pixel-sha256", "version": 1},
+            "near": {
+                "algorithm": "phash",
+                "version": 1,
+                "library": "ImageHash",
+                "library_version": IMAGEHASH_VERSION,
+                "hash_size": HASH_SIZE,
+                "highfreq_factor": HIGHFREQ_FACTOR,
+                "maximum_hamming_distance": MAXIMUM_HAMMING_DISTANCE,
+            },
+        },
+        "sample_selection": {
+            "algorithm": "sha256-rank",
+            "version": 1,
+            "seed": deterministic_seed,
+            "population_size": EXPECTED_ROW_COUNT,
+            "sample_size": DEFAULT_SAMPLE_SIZE,
+            "identity_fields": ["upstream_index", "item_id"],
+            "selection_state": "pre-review",
+        },
+    }
+
+
+def _require_complete_audit_rows(rows: Sequence[Mapping[str, object]]) -> None:
+    expected_indices = set(range(EXPECTED_ROW_COUNT))
+    expected_ids = {f"smb-test-{index:06d}" for index in expected_indices}
+    indices = [row.get("upstream_index") for row in rows]
+    item_ids = [row.get("item_id") for row in rows]
+    if (
+        len(rows) != EXPECTED_ROW_COUNT
+        or len(set(indices)) != EXPECTED_ROW_COUNT
+        or set(indices) != expected_indices
+        or len(set(item_ids)) != EXPECTED_ROW_COUNT
+        or set(item_ids) != expected_ids
+    ):
+        raise ValueError("authenticated SMB audit must preserve exactly 685 unique identities")
+
+
+def _without_automatic_image_decoding(dataset: object) -> object:
+    cast_column = getattr(dataset, "cast_column", None)
+    features = getattr(dataset, "features", None)
+    if not callable(cast_column) or not isinstance(features, Mapping) or "image" not in features:
+        return dataset
+    from datasets import Image as DatasetImage
+
+    return cast_column("image", DatasetImage(decode=False))
+
+
+def run_authenticated_audit(
+    *,
+    source_path: Path,
+    audit_descriptor_path: Path,
+    audit_records_path: Path,
+    sample_path: Path,
+    review_path: Path,
+    active_path: Path,
+    generation_root: Path,
+    dataset_loader: Callable[..., object] | None = None,
+    deterministic_seed: int = 20260818,
+) -> dict[str, int]:
+    """Audit the exact gated SMB revision and publish only pointer-derived redacted evidence."""
+
+    source_descriptor = _read_descriptor(source_path)
+    dataset = load_smb(
+        purpose=BenchmarkPurpose.CONTENT_AUDIT,
+        loader=dataset_loader,
+        descriptor_path=source_path,
+    )
+    dataset = _without_automatic_image_decoding(dataset)
+    try:
+        source_count = len(dataset)  # type: ignore[arg-type]
+    except TypeError as error:
+        raise ValueError("authenticated SMB source must expose an exact row count") from error
+    if source_count != EXPECTED_ROW_COUNT:
+        raise ValueError(
+            f"authenticated SMB source must contain exactly 685 rows, found {source_count}"
+        )
+    rows = audit_dataset(
+        dataset,  # type: ignore[arg-type]
+        source_descriptor=source_descriptor,
+        deterministic_seed=deterministic_seed,
+        sample_size=DEFAULT_SAMPLE_SIZE,
+    )
+    _require_complete_audit_rows(rows)
+    descriptor = _manifest_descriptor(
+        source_descriptor=source_descriptor,
+        rows=rows,
+        code_revision=_current_code_revision(),
+        creation_command=_audit_creation_command(
+            source_path=source_path,
+            audit_descriptor_path=audit_descriptor_path,
+            audit_records_path=audit_records_path,
+            sample_path=sample_path,
+            review_path=review_path,
+            active_path=active_path,
+            generation_root=generation_root,
+        ),
+        deterministic_seed=deterministic_seed,
+    )
+    publish_manifest_generation(
+        active_path=active_path,
+        generation_root=generation_root,
+        descriptor=descriptor,
+        rows=rows,
+    )
+    report = reconcile_manifest(active_path=active_path, generation_root=generation_root)
+    emit_review_evidence_from_active_manifest(
+        active_path=active_path,
+        generation_root=generation_root,
+        audit_descriptor_path=audit_descriptor_path,
+        audit_records_path=audit_records_path,
+        sample_path=sample_path,
+        review_path=review_path,
+    )
+    return report
 
 
 def _publication_boundary(name: str, hook: Callable[[str], None] | None) -> None:
@@ -1185,6 +1406,14 @@ class _SafeArgumentParser(argparse.ArgumentParser):
 def _parser() -> argparse.ArgumentParser:
     parser = _SafeArgumentParser(description="Validate and reconcile an active SMB manifest")
     commands = parser.add_subparsers(dest="command", required=True)
+    audit = commands.add_parser("audit")
+    audit.add_argument("--source", type=Path, required=True)
+    audit.add_argument("--audit-descriptor", type=Path, required=True)
+    audit.add_argument("--audit-records", type=Path, required=True)
+    audit.add_argument("--sample", type=Path, required=True)
+    audit.add_argument("--review", type=Path, required=True)
+    audit.add_argument("--manifest-active", type=Path, required=True)
+    audit.add_argument("--manifest-generation-root", type=Path, required=True)
     reconcile = commands.add_parser("reconcile")
     reconcile.add_argument("--manifest-active", type=Path, required=True)
     reconcile.add_argument("--manifest-generation-root", type=Path, required=True)
@@ -1212,6 +1441,18 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
+    if arguments.command == "audit":
+        report = run_authenticated_audit(
+            source_path=arguments.source,
+            audit_descriptor_path=arguments.audit_descriptor,
+            audit_records_path=arguments.audit_records,
+            sample_path=arguments.sample,
+            review_path=arguments.review,
+            active_path=arguments.manifest_active,
+            generation_root=arguments.manifest_generation_root,
+        )
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
     if arguments.command == "reconcile":
         report = reconcile_manifest(
             active_path=arguments.manifest_active,

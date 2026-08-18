@@ -338,6 +338,8 @@ def test_authenticated_audit_orchestrates_exact_revision_and_redacted_exports(
     rows = _full_rows()
     for row in rows:
         row["source_revision"] = source_descriptor["revision"]
+    for row in rows[:64]:
+        row["audit_sample_member"] = True
     audited: list[tuple[object, dict[str, Any], int, int]] = []
 
     def loader(repository_id: str, *, split: str, revision: str) -> object:
@@ -377,9 +379,7 @@ def test_authenticated_audit_orchestrates_exact_revision_and_redacted_exports(
     assert loaded == [("PRAIG/SMB", "test", source_descriptor["revision"])]
     assert audited == [(records, source_descriptor, 20260818, 64)]
     assert report == {"row_count": 685, "processed": 685, "failed": 0, "paired_eligible": 685}
-    descriptor, resolved = resolve_active_manifest(
-        active_path=active, generation_root=generations
-    )
+    descriptor, resolved = resolve_active_manifest(active_path=active, generation_root=generations)
     assert descriptor["code_revision"] == "a" * 40
     assert descriptor["source_revision"] == source_descriptor["revision"]
     assert descriptor["benchmark_state"] == "AUDITED_LOCKED"
@@ -428,8 +428,10 @@ def test_audit_cli_exposes_the_exact_controlled_output_paths(
     monkeypatch.setattr(
         smb_audit,
         "run_authenticated_audit",
-        lambda **kwargs: calls.append(kwargs)
-        or {"row_count": 685, "processed": 685, "failed": 0, "paired_eligible": 685},
+        lambda **kwargs: (
+            calls.append(kwargs)
+            or {"row_count": 685, "processed": 685, "failed": 0, "paired_eligible": 685}
+        ),
     )
     arguments = [
         "audit",
