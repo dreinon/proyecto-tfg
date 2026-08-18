@@ -15,7 +15,25 @@ from score_super_resolution.contracts import (
 )
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "contracts"
-SCHEMA_IDS = ("claim-evidence", "model-descriptor", "source-descriptor")
+SCHEMA_IDS = (
+    "claim-evidence",
+    "degradation-trace",
+    "experiment-config",
+    "failure",
+    "method-output",
+    "metric-result",
+    "model-descriptor",
+    "run-record",
+    "source-descriptor",
+)
+EXECUTION_SCHEMA_IDS = {
+    "degradation-trace",
+    "experiment-config",
+    "failure",
+    "method-output",
+    "metric-result",
+    "run-record",
+}
 MODEL_FORBIDDEN_FIELDS = (
     "selected",
     "selection_score",
@@ -36,6 +54,22 @@ def test_all_v1_schemas_self_validate() -> None:
         schema = load_schema(schema_id)
         assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
         assert schema["$id"] == f"urn:score-super-resolution:schema:v1:{schema_id}"
+
+
+def test_fixture_bundles_cover_every_non_manifest_schema_family() -> None:
+    valid_schema_ids = {case["schema_id"] for case in _fixture("valid-records.json").values()}
+    invalid_schema_ids = {case["schema_id"] for case in _fixture("invalid-records.json").values()}
+
+    assert set(SCHEMA_IDS) <= valid_schema_ids
+    assert set(SCHEMA_IDS) <= invalid_schema_ids
+
+
+def test_execution_invalid_bundle_covers_missing_provenance_and_malformed_values() -> None:
+    cases = _fixture("invalid-records.json")
+    for schema_id in EXECUTION_SCHEMA_IDS:
+        prefix = schema_id.replace("-", "_")
+        assert f"{prefix}_missing_provenance" in cases
+        assert f"{prefix}_malformed_value" in cases
 
 
 @pytest.mark.parametrize("case", _fixture("valid-records.json").values())
@@ -98,6 +132,38 @@ def test_model_descriptor_forbids_selection_execution_and_results(field: str) ->
 
     with pytest.raises(ContractValidationError, match="additional properties"):
         validate_instance("model-descriptor", instance)
+
+
+def test_run_record_requires_complete_execution_provenance() -> None:
+    instance = _fixture("valid-records.json")["run_record_non_learned"]["instance"]
+    assert {
+        "experiment_id",
+        "execution_id",
+        "started_at",
+        "completed_at",
+        "repositories",
+        "manifest_ids",
+        "experiment_config_id",
+        "seeds",
+        "environment",
+        "hardware",
+        "paths",
+        "model_provenance",
+    } <= instance.keys()
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("selected_model", "selection_score", "load_model", "execute_model", "smb_results"),
+)
+def test_run_record_forbids_model_selection_execution_and_results(field: str) -> None:
+    instance = copy.deepcopy(
+        _fixture("valid-records.json")["run_record_learned_method"]["instance"]
+    )
+    instance[field] = "forbidden"
+
+    with pytest.raises(ContractValidationError, match="additional properties"):
+        validate_instance("run-record", instance)
 
 
 def test_claim_evidence_has_one_exact_shared_row_shape() -> None:
