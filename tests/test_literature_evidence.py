@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from score_super_resolution.contracts import validate_instance
 
 ROOT = Path(__file__).parents[1]
 LITERATURE_ROOT = ROOT / "docs" / "literature"
@@ -141,7 +142,7 @@ def test_matrix_covers_every_predeclared_layer_and_landmark_to_current_years() -
         assert match, row["evidence_id"]
         layers.update(match.group(1).split("|"))
 
-    assert REQUIRED_LAYERS <= layers
+    assert layers >= REQUIRED_LAYERS
     assert min(years) <= 1981
     assert 2026 in years
 
@@ -177,6 +178,9 @@ def test_claim_candidates_resolve_to_primary_or_official_matrix_evidence() -> No
         assert claim["record_type"] == "claim-evidence"
         assert claim["status"] in {"draft", "pending", "reviewed", "rejected"}
         assert claim["limitations"]
+        for value in claim.values():
+            if value:
+                assert not value.lstrip().startswith(FORMULA_PREFIXES), value
         ids = claim["evidence_ids"].split("|")
         assert ids and all(evidence_id in evidence for evidence_id in ids)
         assert all(
@@ -185,6 +189,14 @@ def test_claim_candidates_resolve_to_primary_or_official_matrix_evidence() -> No
         if claim["status"] == "reviewed":
             assert claim["reviewer"] and claim["reviewer"] != "not_assigned"
             date.fromisoformat(claim["review_date"])
+        validate_instance(
+            "claim-evidence",
+            {
+                **claim,
+                "schema_version": int(claim["schema_version"]),
+                "evidence_ids": ids,
+            },
+        )
 
 
 def test_review_does_not_select_models_or_claim_smb_outcomes() -> None:
