@@ -122,9 +122,7 @@ def test_fixture_audit_preserves_every_input_and_candidate_state() -> None:
 
 def test_audit_accepts_smb_xywh_region_mapping() -> None:
     record = _audit_records()[0]
-    record["regions"] = [
-        {"bbox": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}}
-    ]
+    record["regions"] = [{"bbox": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}}]
 
     row = audit_item(record, upstream_index=0, source_descriptor=_source_descriptor())
 
