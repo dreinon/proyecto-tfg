@@ -19,7 +19,7 @@ def _git(repository: Path, *args: str) -> str:
 
 
 def _init_repository(repository: Path, filename: str, content: str) -> str:
-    repository.mkdir(parents=True)
+    repository.mkdir(parents=True, exist_ok=True)
     _git(repository, "init", "--quiet")
     (repository / filename).write_text(content, encoding="utf-8")
     _git(repository, "add", filename)
@@ -64,9 +64,8 @@ def test_environment_snapshot_probes_three_repository_roles_independently(tmp_pa
     proyecto = workspace / "proyecto"
     memoria = workspace / "memoria"
 
-    workspace.mkdir()
-    (workspace / ".gitignore").write_text("proyecto/\nmemoria/\n", encoding="utf-8")
     workspace_revision = _init_repository(workspace, "planning.txt", "planning root\n")
+    (workspace / ".git" / "info" / "exclude").write_text("proyecto/\nmemoria/\n", encoding="utf-8")
     proyecto_revision = _init_repository(proyecto, "implementation.py", "VALUE = 1\n")
     (proyecto / "dirty.txt").write_text("uncommitted\n", encoding="utf-8")
     memoria.mkdir()

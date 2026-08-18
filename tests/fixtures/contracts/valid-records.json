@@ -271,7 +271,27 @@
       "started_at": "2026-08-18T12:00:00Z",
       "completed_at": "2026-08-18T12:00:04Z",
       "repositories": [
-        {"name": "proyecto", "revision": "2998c3c", "dirty": false}
+        {
+          "role": "workspace-planning",
+          "root": "/workspace",
+          "revision_state": "unborn",
+          "revision": null,
+          "dirty": true
+        },
+        {
+          "role": "proyecto",
+          "root": "/workspace/proyecto",
+          "revision_state": "committed",
+          "revision": "2998c3c",
+          "dirty": false
+        },
+        {
+          "role": "memoria",
+          "root": "/workspace/memoria",
+          "revision_state": "committed",
+          "revision": "9b2c8b4",
+          "dirty": true
+        }
       ],
       "manifest_ids": ["fixture-validation-v1"],
       "experiment_config_id": "experiment-config-fixture-v1",
@@ -309,7 +329,27 @@
       "started_at": "2026-08-18T12:01:00Z",
       "completed_at": "2026-08-18T12:01:04Z",
       "repositories": [
-        {"name": "proyecto", "revision": "2998c3c", "dirty": false}
+        {
+          "role": "workspace-planning",
+          "root": "/workspace",
+          "revision_state": "unborn",
+          "revision": null,
+          "dirty": true
+        },
+        {
+          "role": "proyecto",
+          "root": "/workspace/proyecto",
+          "revision_state": "committed",
+          "revision": "2998c3c",
+          "dirty": false
+        },
+        {
+          "role": "memoria",
+          "root": "/workspace/memoria",
+          "revision_state": "committed",
+          "revision": "9b2c8b4",
+          "dirty": true
+        }
       ],
       "manifest_ids": ["fixture-validation-v1"],
       "experiment_config_id": "experiment-config-learned-fixture-v1",

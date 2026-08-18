@@ -34,17 +34,66 @@
     "completed_at": {"$ref": "#/$defs/utc_timestamp"},
     "repositories": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "revision", "dirty"],
+        "required": ["role", "root", "revision_state", "revision", "dirty"],
         "properties": {
-          "name": {"$ref": "#/$defs/stable_id"},
-          "revision": {"type": "string", "pattern": "^[0-9a-f]{7,64}$"},
-          "dirty": {"type": "boolean"}
+          "role": {"enum": ["workspace-planning", "proyecto", "memoria"]},
+          "root": {"type": "string", "pattern": "^/[^\\u0000\\r\\n]+$"},
+          "revision_state": {"enum": ["committed", "unborn", "unavailable"]},
+          "revision": {
+            "oneOf": [
+              {"type": "string", "pattern": "^[0-9a-f]{7,64}$"},
+              {"type": "null"}
+            ]
+          },
+          "dirty": {"type": ["boolean", "null"]}
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"revision_state": {"const": "committed"}}},
+            "then": {
+              "properties": {
+                "revision": {"type": "string", "pattern": "^[0-9a-f]{7,64}$"},
+                "dirty": {"type": "boolean"}
+              }
+            }
+          },
+          {
+            "if": {"properties": {"revision_state": {"const": "unborn"}}},
+            "then": {
+              "properties": {"revision": {"type": "null"}, "dirty": {"type": "boolean"}}
+            }
+          },
+          {
+            "if": {"properties": {"revision_state": {"const": "unavailable"}}},
+            "then": {
+              "properties": {"revision": {"type": "null"}, "dirty": {"type": "null"}}
+            }
+          }
+        ]
+      },
+      "allOf": [
+        {
+          "contains": {"properties": {"role": {"const": "workspace-planning"}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"properties": {"role": {"const": "proyecto"}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"properties": {"role": {"const": "memoria"}}},
+          "minContains": 1,
+          "maxContains": 1
         }
-      }
+      ]
     },
     "manifest_ids": {
       "type": "array",
