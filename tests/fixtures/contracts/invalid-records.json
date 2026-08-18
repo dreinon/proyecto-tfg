@@ -1,0 +1,238 @@
+{
+  "source_descriptor_missing_revision": {
+    "schema_id": "source-descriptor",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "source-descriptor",
+      "key": "smb",
+      "name": "Sheet Music Benchmark",
+      "role": "evaluation_benchmark",
+      "provider": "hugging_face",
+      "repository_id": "PRAIG/SMB",
+      "url": "https://huggingface.co/datasets/PRAIG/SMB",
+      "access": {
+        "gated": "manual",
+        "authentication_environment_variable": "HF_TOKEN",
+        "store_credentials_in_repository": false
+      },
+      "license": {
+        "id": "CC-BY-NC-4.0",
+        "url": "https://creativecommons.org/licenses/by-nc/4.0/"
+      },
+      "citation": {
+        "title": "Sheet Music Benchmark: Standardized Optical Music Recognition Evaluation",
+        "year": 2025,
+        "doi": "10.5281/zenodo.17811446"
+      },
+      "upstream_splits": {
+        "test": {
+          "examples": 685
+        }
+      },
+      "features": ["image", "id"],
+      "loading": {
+        "library": "datasets",
+        "call": "load_dataset",
+        "config": "default"
+      },
+      "metadata_reviewed_at": "2026-08-14"
+    }
+  },
+  "model_descriptor_missing_model_id": {
+    "schema_id": "model-descriptor",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "model-descriptor",
+      "source": {
+        "official_url": "https://example.org/models/example",
+        "version": "v1",
+        "revision": "abc123"
+      },
+      "checkpoint": {"status": "not_applicable"},
+      "license": {"id": "BSD-3-Clause", "url": "https://example.org/LICENSE"},
+      "input_assumptions": ["RGB input"],
+      "output_conventions": ["RGB output"],
+      "verification_date": "2026-08-17"
+    }
+  },
+  "model_descriptor_missing_source_locator": {
+    "schema_id": "model-descriptor",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "model-descriptor",
+      "model_id": "example-model-v1",
+      "source": {"version": "v1", "revision": "abc123"},
+      "checkpoint": {"status": "not_applicable"},
+      "license": {"id": "BSD-3-Clause", "url": "https://example.org/LICENSE"},
+      "input_assumptions": ["RGB input"],
+      "output_conventions": ["RGB output"],
+      "verification_date": "2026-08-17"
+    }
+  },
+  "model_descriptor_missing_source_version": {
+    "schema_id": "model-descriptor",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "model-descriptor",
+      "model_id": "example-model-v1",
+      "source": {"official_url": "https://example.org/models/example", "revision": "abc123"},
+      "checkpoint": {"status": "not_applicable"},
+      "license": {"id": "BSD-3-Clause", "url": "https://example.org/LICENSE"},
+      "input_assumptions": ["RGB input"],
+      "output_conventions": ["RGB output"],
+      "verification_date": "2026-08-17"
+    }
+  },
+  "model_descriptor_missing_source_revision": {
+    "schema_id": "model-descriptor",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "model-descriptor",
+      "model_id": "example-model-v1",
+      "source": {"official_url": "https://example.org/models/example", "version": "v1"},
+      "checkpoint": {"status": "not_applicable"},
+      "license": {"id": "BSD-3-Clause", "url": "https://example.org/LICENSE"},
+      "input_assumptions": ["RGB input"],
+      "output_conventions": ["RGB output"],
+      "verification_date": "2026-08-17"
+    }
+  },
+  "model_descriptor_missing_checkpoint": {
+    "schema_id": "model-descriptor",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "model-descriptor",
+      "model_id": "example-model-v1",
+      "source": {
+        "official_url": "https://example.org/models/example",
+        "version": "v1",
+        "revision": "abc123"
+      },
+      "license": {"id": "BSD-3-Clause", "url": "https://example.org/LICENSE"},
+      "input_assumptions": ["RGB input"],
+      "output_conventions": ["RGB output"],
+      "verification_date": "2026-08-17"
+    }
+  },
+  "model_descriptor_checkpoint_missing_identity": {
+    "schema_id": "model-descriptor",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "model-descriptor",
+      "model_id": "example-model-v1",
+      "source": {
+        "official_url": "https://example.org/models/example",
+        "version": "v1",
+        "revision": "abc123"
+      },
+      "checkpoint": {
+        "status": "available",
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "license": {"id": "BSD-3-Clause", "url": "https://example.org/LICENSE"},
+      "input_assumptions": ["RGB input"],
+      "output_conventions": ["RGB output"],
+      "verification_date": "2026-08-17"
+    }
+  },
+  "model_descriptor_checkpoint_missing_checksum": {
+    "schema_id": "model-descriptor",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "model-descriptor",
+      "model_id": "example-model-v1",
+      "source": {
+        "official_url": "https://example.org/models/example",
+        "version": "v1",
+        "revision": "abc123"
+      },
+      "checkpoint": {"status": "available", "identifier": "example-x4"},
+      "license": {"id": "BSD-3-Clause", "url": "https://example.org/LICENSE"},
+      "input_assumptions": ["RGB input"],
+      "output_conventions": ["RGB output"],
+      "verification_date": "2026-08-17"
+    }
+  },
+  "model_descriptor_missing_license": {
+    "schema_id": "model-descriptor",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "model-descriptor",
+      "model_id": "example-model-v1",
+      "source": {
+        "official_url": "https://example.org/models/example",
+        "version": "v1",
+        "revision": "abc123"
+      },
+      "checkpoint": {"status": "not_applicable"},
+      "input_assumptions": ["RGB input"],
+      "output_conventions": ["RGB output"],
+      "verification_date": "2026-08-17"
+    }
+  },
+  "model_descriptor_missing_input_assumptions": {
+    "schema_id": "model-descriptor",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "model-descriptor",
+      "model_id": "example-model-v1",
+      "source": {
+        "official_url": "https://example.org/models/example",
+        "version": "v1",
+        "revision": "abc123"
+      },
+      "checkpoint": {"status": "not_applicable"},
+      "license": {"id": "BSD-3-Clause", "url": "https://example.org/LICENSE"},
+      "output_conventions": ["RGB output"],
+      "verification_date": "2026-08-17"
+    }
+  },
+  "model_descriptor_missing_output_conventions": {
+    "schema_id": "model-descriptor",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "model-descriptor",
+      "model_id": "example-model-v1",
+      "source": {
+        "official_url": "https://example.org/models/example",
+        "version": "v1",
+        "revision": "abc123"
+      },
+      "checkpoint": {"status": "not_applicable"},
+      "license": {"id": "BSD-3-Clause", "url": "https://example.org/LICENSE"},
+      "input_assumptions": ["RGB input"],
+      "verification_date": "2026-08-17"
+    }
+  },
+  "model_descriptor_missing_verification_date": {
+    "schema_id": "model-descriptor",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "model-descriptor",
+      "model_id": "example-model-v1",
+      "source": {
+        "official_url": "https://example.org/models/example",
+        "version": "v1",
+        "revision": "abc123"
+      },
+      "checkpoint": {"status": "not_applicable"},
+      "license": {"id": "BSD-3-Clause", "url": "https://example.org/LICENSE"},
+      "input_assumptions": ["RGB input"],
+      "output_conventions": ["RGB output"]
+    }
+  },
+  "claim_evidence_reviewed_without_evidence": {
+    "schema_id": "claim-evidence",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "claim-evidence",
+      "claim_id": "CLM-003",
+      "chapter_section": "04-datos/procedencia",
+      "status": "reviewed",
+      "evidence_ids": [],
+      "limitations": "",
+      "reviewer": "",
+      "review_date": ""
+    }
+  }
+}

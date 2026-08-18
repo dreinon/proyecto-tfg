@@ -1,0 +1,142 @@
+{
+  "source_descriptor": {
+    "schema_id": "source-descriptor",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "source-descriptor",
+      "key": "smb",
+      "name": "Sheet Music Benchmark",
+      "role": "evaluation_benchmark",
+      "provider": "hugging_face",
+      "repository_id": "PRAIG/SMB",
+      "url": "https://huggingface.co/datasets/PRAIG/SMB",
+      "revision": "96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb",
+      "access": {
+        "gated": "manual",
+        "authentication_environment_variable": "HF_TOKEN",
+        "store_credentials_in_repository": false
+      },
+      "license": {
+        "id": "CC-BY-NC-4.0",
+        "url": "https://creativecommons.org/licenses/by-nc/4.0/"
+      },
+      "citation": {
+        "title": "Sheet Music Benchmark: Standardized Optical Music Recognition Evaluation",
+        "year": 2025,
+        "doi": "10.5281/zenodo.17811446"
+      },
+      "upstream_splits": {
+        "test": {
+          "examples": 685
+        }
+      },
+      "features": [
+        "image",
+        "id",
+        "original_width",
+        "original_height",
+        "regions",
+        "page_texture",
+        "page",
+        "original_score"
+      ],
+      "loading": {
+        "library": "datasets",
+        "call": "load_dataset",
+        "config": "default"
+      },
+      "metadata_reviewed_at": "2026-08-14"
+    }
+  },
+  "model_descriptor_checkpoint": {
+    "schema_id": "model-descriptor",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "model-descriptor",
+      "model_id": "example-fidelity-model-v1",
+      "source": {
+        "repository_url": "https://example.org/repository/example-fidelity-model",
+        "official_url": "https://example.org/models/example-fidelity-model",
+        "version": "v1.2.0",
+        "revision": "7a34c92"
+      },
+      "checkpoint": {
+        "status": "available",
+        "identifier": "example-fidelity-model-x4",
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "license": {
+        "id": "BSD-3-Clause",
+        "url": "https://example.org/repository/example-fidelity-model/LICENSE"
+      },
+      "input_assumptions": [
+        "RGB images with three channels",
+        "Integer scale factor 4"
+      ],
+      "output_conventions": [
+        "RGB image",
+        "Output dimensions are four times the input dimensions"
+      ],
+      "verification_date": "2026-08-17"
+    }
+  },
+  "model_descriptor_not_applicable_checkpoint": {
+    "schema_id": "model-descriptor",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "model-descriptor",
+      "model_id": "example-procedure-v1",
+      "source": {
+        "doi": "10.0000/example.procedure",
+        "official_url": "https://example.org/procedures/example-v1",
+        "version": "1",
+        "revision": "published-2026-01-01"
+      },
+      "checkpoint": {
+        "status": "not_applicable"
+      },
+      "license": {
+        "id": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/"
+      },
+      "input_assumptions": [
+        "Single raster image"
+      ],
+      "output_conventions": [
+        "One raster image"
+      ],
+      "verification_date": "2026-08-17"
+    }
+  },
+  "claim_evidence_draft": {
+    "schema_id": "claim-evidence",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "claim-evidence",
+      "claim_id": "CLM-001",
+      "chapter_section": "01-introduccion/problema-profesional",
+      "status": "draft",
+      "evidence_ids": [],
+      "limitations": "",
+      "reviewer": "",
+      "review_date": ""
+    }
+  },
+  "claim_evidence_reviewed": {
+    "schema_id": "claim-evidence",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "claim-evidence",
+      "claim_id": "CLM-002",
+      "chapter_section": "04-datos/procedencia",
+      "status": "reviewed",
+      "evidence_ids": [
+        "SRC-SMB-CARD",
+        "SRC-SMB-PAPER"
+      ],
+      "limitations": "Dataset-card metadata remains distinct from the authenticated content audit.",
+      "reviewer": "Daniel Reinon",
+      "review_date": "2026-08-17"
+    }
+  }
+}
