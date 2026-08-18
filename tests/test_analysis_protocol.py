@@ -5,7 +5,6 @@ from typing import Any
 import pytest
 import yaml
 
-
 PROTOCOL_PATH = Path(__file__).parents[1] / "configs" / "protocols" / "analysis-v1.yaml"
 
 REQUIRED_INTERFACE_KEYS = {
@@ -57,7 +56,7 @@ def _load_protocol() -> dict[str, Any]:
 
 
 def _validate_protocol(protocol: dict[str, Any]) -> None:
-    assert REQUIRED_INTERFACE_KEYS <= protocol.keys()
+    assert protocol.keys() >= REQUIRED_INTERFACE_KEYS
     assert protocol["protocol_version"] == "1.0.0"
 
     status = protocol["status"]
@@ -73,7 +72,7 @@ def _validate_protocol(protocol: dict[str, Any]) -> None:
     if hypotheses is not None:
         assert isinstance(hypotheses, list)
         for hypothesis in hypotheses:
-            assert REQUIRED_HYPOTHESIS_FIELDS <= hypothesis.keys()
+            assert hypothesis.keys() >= REQUIRED_HYPOTHESIS_FIELDS
             assert all(hypothesis[field] for field in REQUIRED_HYPOTHESIS_FIELDS)
 
 
@@ -161,4 +160,3 @@ def test_protocol_selects_no_learned_method_or_checkpoint() -> None:
     assert "selected_model" not in protocol
     assert "selected_checkpoint" not in protocol
     assert "checkpoint_id" not in protocol
-

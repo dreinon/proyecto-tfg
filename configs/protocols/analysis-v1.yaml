@@ -1,0 +1,207 @@
+protocol_version: 1.0.0
+
+status:
+  contract: locally_frozen
+  smb_outcomes: locked
+  human_compatibility: pending_academic_closeout
+  result_claims_allowed: false
+
+professional_problem:
+  id: D-01
+  statement: >-
+    Determine when and how digitization, library, archive, conservation, and heritage
+    professionals can apply super-resolution to digitized music scores under evaluated
+    conditions without introducing visually plausible but musically meaningful changes.
+  contribution: method-by-degradation-by-use decision framework
+
+audiences:
+  primary:
+    - digitization professionals
+    - library professionals
+    - archive professionals
+    - conservation professionals
+    - heritage professionals
+  secondary:
+    - musicians
+    - researchers
+    - publishers
+
+objectives:
+  general:
+    id: OBJ-G
+    statement: >-
+      Evaluate a small scientifically contrasting set of super-resolution techniques under
+      controlled reproducible degradations, measure fidelity, resources, and music-notation
+      failures, and translate the evidence into bounded professional decisions.
+  specific:
+    - id: OBJ-S1
+      statement: Establish focused primary-source foundations and the score-specific gap.
+      measurable_evidence: traceable review matrix satisfying the frozen search protocol
+    - id: OBJ-S2
+      statement: Audit and immutably inventory SMB while preserving its evaluation-only role.
+      measurable_evidence: reconciled checksummed manifest with one status per upstream item
+    - id: OBJ-S3
+      statement: Predeclare comparisons, outcomes, units, rules, and claim bounds before outcomes.
+      measurable_evidence: versioned fail-closed controls with all required fields
+    - id: OBJ-S4
+      statement: Compare later-frozen methods on identical paired inputs and retain failures.
+      measurable_evidence: reconciled paired denominators for every outcome family
+    - id: OBJ-S5
+      statement: Record a bounded evidence-based adaptation GO or NO-GO without SMB selection.
+      measurable_evidence: reviewed decision gate covering data, grouping, selection, time, and compute
+    - id: OBJ-S6
+      statement: Produce reproducible professional guidance and an evidence-traceable thesis.
+      measurable_evidence: reviewed claim index linked to recoverable evidence and limitations
+
+evaluation_questions:
+  - id: EQ1
+    question: >-
+      Under each frozen controlled degradation and scale, how do interpolation and later-frozen
+      learned comparator roles differ in paired fidelity and music-notation failures?
+  - id: EQ2
+    question: >-
+      How do differences vary by severity and audited score characteristics when source
+      score/work is the independent grouping unit?
+  - id: EQ3
+    question: >-
+      Which fidelity, failure, runtime, memory, licence, and operational trade-offs make a method
+      suitable or unsuitable for each professional scenario?
+  - id: EQ4
+    question: >-
+      Do any later-frozen learned comparators add consistent value over bicubic interpolation
+      without increasing safety-critical musical alterations?
+  - id: EQ5
+    question: >-
+      If validation-only baselines expose a specific domain gap, does one bounded adaptation
+      improve the declared balance using independent licensed train/validation data?
+    conditional: true
+
+dataset_roles:
+  smb:
+    descriptor: data/sources/smb.yaml
+    role: evaluation_benchmark
+    official_split: test
+    outcomes_status: locked
+    audit_facts_status: pending_authenticated_audit
+    adaptive_use_allowed: false
+  development_fixtures:
+    role: pipeline_validation_only
+    smb_content_allowed: false
+  adaptation_data:
+    role: conditional_independent_training_validation
+    selection_status: not_selected
+    smb_content_allowed: false
+
+unit_hierarchy:
+  - id: UNIT-SOURCE
+    role: primary_independent_unit
+    definition: audited source score/work or reviewed source_group_id
+    audit_status: pending_confirmation
+  - id: UNIT-PAGE
+    role: paired_item
+    parent: UNIT-SOURCE
+    independent_replicate: false
+  - id: UNIT-REGION
+    role: nested_observation
+    parent: UNIT-PAGE
+    independent_replicate: false
+
+comparator_roles:
+  interpolation:
+    - id: CMP-NEAREST
+      method: nearest-neighbour
+      role: transparent_low_complexity_reference
+    - id: CMP-BILINEAR
+      method: bilinear
+      role: transparent_smooth_reference
+    - id: CMP-BICUBIC
+      method: bicubic
+      role: principal_simple_baseline
+  learned_methods:
+    selection_status: deferred_to_phase_3
+    allowed_now: false
+    role: small_later_frozen_scientifically_contrasting_set
+  domain_adaptation:
+    status: conditional_post_baseline_gate
+    required_for_completion: false
+
+outcome_definitions:
+  - id: OUT-FIDELITY
+    role: paired_reference_fidelity
+    phase_2_freeze_required: metric, colour, range, alignment, border, scale, and aggregation
+  - id: OUT-NOTATION
+    role: systematic_music_notation_failure_evidence
+    phase_2_freeze_required: taxonomy, sampling, denominators, and contradiction rules
+  - id: OUT-RESOURCE
+    role: professional_resource_cost
+    phase_2_freeze_required: timing, memory, hardware, repeats, batch, and tiling conventions
+  - id: OUT-PROFESSIONAL
+    role: bounded_suitability_or_no_use_decision
+    derived_from:
+      - OUT-FIDELITY
+      - OUT-NOTATION
+      - OUT-RESOURCE
+      - licence, rights, and operational constraints
+
+success_rule:
+  professional_supportability:
+    all_of:
+      - paired evidence improves a predeclared benefit over the relevant comparator
+      - notation failures do not contradict or make the named use unsafe
+      - resource, licence, rights, and operational constraints fit the named scenario
+      - evidence, denominators, and limitations reconcile
+  valid_null_outcome: no method recommended
+  stop_rules:
+    - stop SMB outcome work while any unlock prerequisite is incomplete
+    - withhold claims when evidence or denominators do not reconcile
+    - withhold recommendations when notation failures contradict the intended use
+    - withhold figure or reuse claims while rights are unresolved
+    - stop optional work before it threatens the controlled core or deposit margin
+
+claim_boundaries:
+  - id: CLAIM-SMB-CONTROLLED
+    allowed: audited SMB population under exact later-frozen controlled conditions only
+  - id: CLAIM-EXCLUDED
+    excluded: uncontrolled real scans, PDF, OMR benefit, application, deployment, and other populations
+  - id: CLAIM-PENDING-RESULTS
+    excluded: experimental results, rankings, recommendations, audit findings, and tutor statements
+
+forbidden_adaptations:
+  - SMB training or validation
+  - SMB-driven degradation or preprocessing selection
+  - SMB-driven learned-method, weights, hyperparameter, or threshold selection
+  - SMB-outcome-driven qualitative sampling
+  - formal hypotheses added after inspecting relevant SMB outcomes
+
+smb_unlock_prerequisites:
+  - id: smb_audit_complete
+    evidence_required: authenticated audit plus reviewed grouping, suitability, provenance, and rights
+  - id: evaluation_manifest_frozen
+    evidence_required: immutable reconciled inventory and denominator
+  - id: methods_frozen
+    evidence_required: versioned method and implementation identities
+  - id: checkpoints_frozen
+    evidence_required: learned weights identities and checksums where applicable
+  - id: controlled_conditions_frozen
+    evidence_required: versioned degradation and execution controls
+  - id: metrics_frozen
+    evidence_required: quantitative and qualitative outcome definitions
+  - id: independent_units_frozen
+    evidence_required: grouping, pairing, aggregation, and uncertainty rules
+  - id: exclusions_frozen
+    evidence_required: explicit exclusion and failure-handling rules
+  - id: seeds_frozen
+    evidence_required: generation, execution, and sampling seed policies
+  - id: qualitative_samples_frozen
+    evidence_required: outcome-independent qualitative sampling rule and item identities
+  - id: interpretation_rules_frozen
+    evidence_required: success, stop, contradiction, and claim rules
+  - id: human_unlock_recorded
+    evidence_required: accountable approval naming every preceding frozen control
+
+internal_target: "2026-08-31"
+hard_deadline: "2026-09-07"
+contingency_window:
+  start: "2026-09-01"
+  end: "2026-09-06"
+  purpose: corrections, clean replay, compliance review, and deposit contingency

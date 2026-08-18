@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-
 ROOT = Path(__file__).parents[1]
 CONTRACT_PATH = ROOT / "docs" / "study-contract.md"
 PROTOCOL_PATH = ROOT / "configs" / "protocols" / "analysis-v1.yaml"
@@ -48,7 +47,7 @@ def test_study_contract_contains_all_required_controls() -> None:
     assert "nearest-neighbour" in contract
     assert "bilinear" in contract
     assert "bicubic" in contract
-    assert "no method recommended" in contract
+    assert "no method recommended" in contract.lower()
     assert "31 August 2026" in contract
     assert "1-6 September 2026" in contract
     assert "7 September 2026" in contract
@@ -88,4 +87,3 @@ def test_contract_keeps_human_approval_and_results_pending() -> None:
     assert "human compatibility and approval are pending" in contract
     assert "no smb outcome" in contract
     assert "no learned method or checkpoint is selected" in contract
-
