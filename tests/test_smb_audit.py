@@ -120,6 +120,20 @@ def test_fixture_audit_preserves_every_input_and_candidate_state() -> None:
         validate_instance("manifest-row", row)
 
 
+def test_audit_accepts_smb_xywh_region_mapping() -> None:
+    record = _audit_records()[0]
+    record["regions"] = [
+        {"bbox": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}}
+    ]
+
+    row = audit_item(record, upstream_index=0, source_descriptor=_source_descriptor())
+
+    assert row["region_count"] == 1
+    assert row["bbox_valid"] is True
+    assert row["paired_eligible"] is True
+    assert row["paired_ineligibility_reason"] is None
+
+
 def test_visual_sample_is_exact_deterministic_and_outcome_independent() -> None:
     identities = [
         {"upstream_index": index, "item_id": f"smb-test-{index:06d}"} for index in range(685)
