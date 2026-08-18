@@ -54,12 +54,14 @@ def test_valid_manifest_fixtures_pass(fixture_name: str, schema_id: str) -> None
 def test_manifest_shapes_reject_missing_and_unknown_fields(
     fixture_name: str, schema_id: str
 ) -> None:
-    instance = copy.deepcopy(_fixtures()[fixture_name])
-    del instance[next(field for field in instance if field not in {"schema_version", "record_type"})]
-    with pytest.raises(ContractValidationError, match="required property"):
-        validate_instance(schema_id, instance)
+    fixture = _fixtures()[fixture_name]
+    for field in fixture:
+        instance = copy.deepcopy(fixture)
+        del instance[field]
+        with pytest.raises(ContractValidationError, match="required property"):
+            validate_instance(schema_id, instance)
 
-    instance = copy.deepcopy(_fixtures()[fixture_name])
+    instance = copy.deepcopy(fixture)
     instance["unknown_field"] = True
     with pytest.raises(ContractValidationError, match="additional properties"):
         validate_instance(schema_id, instance)

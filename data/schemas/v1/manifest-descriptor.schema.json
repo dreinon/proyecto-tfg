@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v1:manifest-descriptor",
+  "title": "Immutable SMB manifest generation descriptor v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "manifest_id",
+    "generation_id",
+    "generation_algorithm",
+    "source_key",
+    "source_revision",
+    "creation_command",
+    "code_revision",
+    "grouping_unit",
+    "upstream_split",
+    "project_split",
+    "deterministic_seed",
+    "exclusions",
+    "row_schema_id",
+    "row_schema_version",
+    "row_count",
+    "records_sha256",
+    "audit_version",
+    "benchmark_state",
+    "hash_provenance",
+    "duplicate_provenance",
+    "sample_selection"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_type": {"const": "manifest-descriptor"},
+    "manifest_id": {"const": "smb-evaluation-v1"},
+    "generation_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "generation_algorithm": {"$ref": "#/$defs/generation_algorithm"},
+    "source_key": {"const": "smb"},
+    "source_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "creation_command": {"type": "string", "minLength": 1},
+    "code_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "grouping_unit": {"const": "source_score"},
+    "upstream_split": {"const": "test"},
+    "project_split": {"const": "evaluation"},
+    "deterministic_seed": {"type": "integer", "minimum": 0},
+    "exclusions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/exclusion"}
+    },
+    "row_schema_id": {"const": "manifest-row"},
+    "row_schema_version": {"const": 1},
+    "row_count": {"const": 685},
+    "records_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "audit_version": {"const": "smb-audit-v1"},
+    "benchmark_state": {"const": "AUDITED_LOCKED"},
+    "hash_provenance": {"$ref": "#/$defs/hash_provenance"},
+    "duplicate_provenance": {"$ref": "#/$defs/duplicate_provenance"},
+    "sample_selection": {"$ref": "#/$defs/sample_selection"}
+  },
+  "$defs": {
+    "generation_algorithm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "version",
+        "domain_separator",
+        "descriptor_canonicalization",
+        "records_canonicalization"
+      ],
+      "properties": {
+        "algorithm": {"const": "sha256"},
+        "version": {"const": 1},
+        "domain_separator": {"const": "smb-manifest-generation-v1"},
+        "descriptor_canonicalization": {"const": "yaml-safe-sort-keys-utf8-v1"},
+        "records_canonicalization": {"const": "jsonl-utf8-sorted-keys-v1"}
+      }
+    },
+    "exclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["upstream_index", "item_id", "reason"],
+      "properties": {
+        "upstream_index": {"type": "integer", "minimum": 0, "maximum": 684},
+        "item_id": {"type": "string", "pattern": "^smb-test-[0-9]{6}$"},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "hash_algorithm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "version", "canonicalization"],
+      "properties": {
+        "algorithm": {"const": "sha256"},
+        "version": {"const": 1},
+        "canonicalization": {
+          "enum": ["encoded-bytes-v1", "rgba-uint8-row-major-v1"]
+        }
+      }
+    },
+    "hash_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["encoded", "pixels"],
+      "properties": {
+        "encoded": {"$ref": "#/$defs/hash_algorithm"},
+        "pixels": {"$ref": "#/$defs/hash_algorithm"}
+      }
+    },
+    "exact_duplicate_algorithm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "version"],
+      "properties": {
+        "algorithm": {"const": "encoded-and-pixel-sha256"},
+        "version": {"const": 1}
+      }
+    },
+    "near_duplicate_algorithm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "version",
+        "library",
+        "library_version",
+        "hash_size",
+        "highfreq_factor",
+        "maximum_hamming_distance"
+      ],
+      "properties": {
+        "algorithm": {"const": "phash"},
+        "version": {"const": 1},
+        "library": {"const": "ImageHash"},
+        "library_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "hash_size": {"type": "integer", "minimum": 4},
+        "highfreq_factor": {"type": "integer", "minimum": 1},
+        "maximum_hamming_distance": {"type": "integer", "minimum": 0}
+      }
+    },
+    "duplicate_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exact", "near"],
+      "properties": {
+        "exact": {"$ref": "#/$defs/exact_duplicate_algorithm"},
+        "near": {"$ref": "#/$defs/near_duplicate_algorithm"}
+      }
+    },
+    "sample_selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "version",
+        "seed",
+        "population_size",
+        "sample_size",
+        "identity_fields",
+        "selection_state"
+      ],
+      "properties": {
+        "algorithm": {"const": "sha256-rank"},
+        "version": {"const": 1},
+        "seed": {"type": "integer", "minimum": 0},
+        "population_size": {"const": 685},
+        "sample_size": {"const": 64},
+        "identity_fields": {
+          "type": "array",
+          "prefixItems": [
+            {"const": "upstream_index"},
+            {"const": "item_id"}
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "selection_state": {"const": "pre-review"}
+      }
+    }
+  }
+}

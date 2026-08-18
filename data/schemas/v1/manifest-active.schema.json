@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v1:manifest-active",
+  "title": "Active SMB manifest generation pointer v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "manifest_id",
+    "generation_id",
+    "descriptor_path",
+    "records_path",
+    "row_schema_id",
+    "row_schema_version",
+    "row_count",
+    "records_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_type": {"const": "manifest-active"},
+    "manifest_id": {"const": "smb-evaluation-v1"},
+    "generation_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "descriptor_path": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}/manifest-descriptor\\.yaml$"
+    },
+    "records_path": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}/manifest-records\\.jsonl$"
+    },
+    "row_schema_id": {"const": "manifest-row"},
+    "row_schema_version": {"const": 1},
+    "row_count": {"const": 685},
+    "records_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

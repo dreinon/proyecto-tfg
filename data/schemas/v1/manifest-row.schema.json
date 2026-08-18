@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v1:manifest-row",
+  "title": "SMB manifest inventory row v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "manifest_version",
+    "source_key",
+    "source_revision",
+    "split",
+    "upstream_index",
+    "item_id",
+    "original_score",
+    "source_group_id",
+    "page",
+    "page_texture",
+    "encoded_sha256",
+    "pixel_sha256",
+    "declared_width",
+    "declared_height",
+    "decoded_width",
+    "decoded_height",
+    "image_mode",
+    "image_format",
+    "byte_count",
+    "region_count",
+    "bbox_valid",
+    "required_text_present",
+    "annotation_failures",
+    "quality",
+    "exact_duplicate_group",
+    "near_duplicate_candidate_ids",
+    "duplicate_review",
+    "expected_status",
+    "processing_status",
+    "unprocessable_reason",
+    "audit_sample_member",
+    "rights",
+    "paired_eligible",
+    "paired_ineligibility_reason"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_type": {"const": "manifest-row"},
+    "manifest_version": {"const": 1},
+    "source_key": {"const": "smb"},
+    "source_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "split": {"const": "test"},
+    "upstream_index": {"type": "integer", "minimum": 0, "maximum": 684},
+    "item_id": {"type": "string", "pattern": "^smb-test-[0-9]{6}$"},
+    "original_score": {"$ref": "#/$defs/raw_normalized"},
+    "source_group_id": {
+      "type": ["string", "null"],
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "page": {"$ref": "#/$defs/raw_normalized"},
+    "page_texture": {"$ref": "#/$defs/raw_normalized"},
+    "encoded_sha256": {"$ref": "#/$defs/nullable_sha256"},
+    "pixel_sha256": {"$ref": "#/$defs/nullable_sha256"},
+    "declared_width": {"$ref": "#/$defs/nullable_positive_integer"},
+    "declared_height": {"$ref": "#/$defs/nullable_positive_integer"},
+    "decoded_width": {"$ref": "#/$defs/nullable_positive_integer"},
+    "decoded_height": {"$ref": "#/$defs/nullable_positive_integer"},
+    "image_mode": {"type": ["string", "null"], "minLength": 1, "maxLength": 16},
+    "image_format": {"type": ["string", "null"], "minLength": 1, "maxLength": 16},
+    "byte_count": {"type": ["integer", "null"], "minimum": 0},
+    "region_count": {"type": ["integer", "null"], "minimum": 0},
+    "bbox_valid": {"type": ["boolean", "null"]},
+    "required_text_present": {"type": ["boolean", "null"]},
+    "annotation_failures": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "quality": {"$ref": "#/$defs/quality"},
+    "exact_duplicate_group": {
+      "type": ["string", "null"],
+      "pattern": "^exact-[0-9a-f]{16}$"
+    },
+    "near_duplicate_candidate_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^candidate-[0-9a-f]{16}$"}
+    },
+    "duplicate_review": {"$ref": "#/$defs/duplicate_review"},
+    "expected_status": {"enum": ["processable", "unprocessable"]},
+    "processing_status": {"enum": ["processed", "failed"]},
+    "unprocessable_reason": {"type": ["string", "null"], "minLength": 1},
+    "audit_sample_member": {"type": "boolean"},
+    "rights": {"$ref": "#/$defs/rights"},
+    "paired_eligible": {"type": "boolean"},
+    "paired_ineligibility_reason": {"type": ["string", "null"], "minLength": 1}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"processing_status": {"const": "failed"}}},
+      "then": {
+        "properties": {
+          "unprocessable_reason": {"type": "string", "minLength": 1},
+          "paired_eligible": {"const": false},
+          "paired_ineligibility_reason": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"paired_eligible": {"const": true}}},
+      "then": {"properties": {"paired_ineligibility_reason": {"type": "null"}}},
+      "else": {
+        "properties": {
+          "paired_ineligibility_reason": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "raw_normalized": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw", "normalized"],
+      "properties": {
+        "raw": {"type": ["string", "integer", "null"]},
+        "normalized": {
+          "type": ["string", "null"],
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+        }
+      }
+    },
+    "nullable_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nullable_positive_integer": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["review_status", "flags", "suitability_disposition", "notes"],
+      "properties": {
+        "review_status": {"enum": ["pending", "reviewed", "not_applicable"]},
+        "flags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "blurred",
+              "low_contrast",
+              "oversized",
+              "skewed",
+              "unprocessable"
+            ]
+          }
+        },
+        "suitability_disposition": {
+          "enum": ["pending", "suitable", "unsuitable", "unavailable"]
+        },
+        "notes": {"type": "string"}
+      }
+    },
+    "duplicate_review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["review_status", "disposition", "reviewer", "reviewed_at", "rationale"],
+      "properties": {
+        "review_status": {"enum": ["pending", "reviewed", "not_applicable"]},
+        "disposition": {
+          "enum": ["pending", "distinct", "duplicate", "related", "unavailable"]
+        },
+        "reviewer": {"type": ["string", "null"], "minLength": 1},
+        "reviewed_at": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "rationale": {"type": "string"}
+      }
+    },
+    "rights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_licence_status",
+        "item_provenance_status",
+        "access_status",
+        "redistribution_status",
+        "figure_reproduction_status"
+      ],
+      "properties": {
+        "dataset_licence_status": {"enum": ["pending", "confirmed", "restricted"]},
+        "item_provenance_status": {"enum": ["pending", "confirmed", "unavailable"]},
+        "access_status": {"enum": ["pending", "confirmed", "restricted"]},
+        "redistribution_status": {"enum": ["pending", "permitted", "prohibited"]},
+        "figure_reproduction_status": {"enum": ["pending", "permitted", "prohibited"]}
+      }
+    }
+  }
+}
