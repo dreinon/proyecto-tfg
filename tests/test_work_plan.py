@@ -34,7 +34,12 @@ FORMULA_PREFIXES = ("=", "+", "-", "@")
 
 def _markdown_table(text: str, heading: str) -> tuple[tuple[str, ...], list[dict[str, str]]]:
     section = text.split(heading, maxsplit=1)[1]
-    lines = [line for line in section.splitlines() if line.startswith("|")]
+    lines = []
+    for line in section.splitlines():
+        if line.startswith("|"):
+            lines.append(line)
+        elif lines:
+            break
     header = tuple(cell.strip() for cell in lines[0].strip("|").split("|"))
     rows = []
     for line in lines[2:]:

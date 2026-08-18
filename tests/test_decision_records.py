@@ -44,7 +44,12 @@ FORMULA_PREFIXES = ("=", "+", "-", "@")
 def _markdown_table(path: Path, heading: str) -> tuple[tuple[str, ...], list[dict[str, str]]]:
     text = path.read_text(encoding="utf-8")
     section = text.split(heading, maxsplit=1)[1]
-    lines = [line for line in section.splitlines() if line.startswith("|")]
+    lines = []
+    for line in section.splitlines():
+        if line.startswith("|"):
+            lines.append(line)
+        elif lines:
+            break
     header = tuple(cell.strip() for cell in lines[0].strip("|").split("|"))
     rows = []
     for line in lines[2:]:
@@ -143,7 +148,9 @@ def test_claim_contract_rejects_incomplete_and_unsubstantiated_review() -> None:
         validate_instance("claim-evidence", incomplete)
 
     unsupported = _typed_claim(rows[0])
-    unsupported.update(status="reviewed", evidence_ids=[], limitations="", reviewer="", review_date="")
+    unsupported.update(
+        status="reviewed", evidence_ids=[], limitations="", reviewer="", review_date=""
+    )
     with pytest.raises(ContractValidationError):
         validate_instance("claim-evidence", unsupported)
 
