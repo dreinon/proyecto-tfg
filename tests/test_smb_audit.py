@@ -327,3 +327,137 @@ def test_audit_module_has_no_outcome_producing_imports() -> None:
     source = Path(smb_audit.__file__).read_text(encoding="utf-8")
     forbidden = ("degradation", "inference", "model", "metric", "outcome_ranking")
     assert all(f"score_super_resolution.{name}" not in source for name in forbidden)
+
+
+def test_authenticated_audit_orchestrates_exact_revision_and_redacted_exports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_descriptor = _source_descriptor()
+    loaded: list[tuple[str, str, str]] = []
+    records = [object()] * 685
+    rows = _full_rows()
+    for row in rows:
+        row["source_revision"] = source_descriptor["revision"]
+    audited: list[tuple[object, dict[str, Any], int, int]] = []
+
+    def loader(repository_id: str, *, split: str, revision: str) -> object:
+        loaded.append((repository_id, split, revision))
+        return records
+
+    def audit(
+        received: object,
+        *,
+        source_descriptor: dict[str, Any],
+        deterministic_seed: int,
+        sample_size: int,
+    ) -> list[dict[str, Any]]:
+        audited.append((received, source_descriptor, deterministic_seed, sample_size))
+        return rows
+
+    monkeypatch.setattr(smb_audit, "audit_dataset", audit)
+    monkeypatch.setattr(smb_audit, "_current_code_revision", lambda: "a" * 40)
+    audit_descriptor = tmp_path / "data" / "audits" / "smb-audit-v1.yaml"
+    audit_records = tmp_path / "data" / "audits" / "smb-audit-v1.jsonl"
+    sample = tmp_path / "data" / "audits" / "smb-visual-sample-v1.csv"
+    review = tmp_path / "data" / "audits" / "smb-review-v1.csv"
+    active = tmp_path / "data" / "manifests" / "smb-evaluation-v1.yaml"
+    generations = tmp_path / "artifacts" / "smb-manifests" / "generations"
+
+    report = smb_audit.run_authenticated_audit(
+        source_path=SOURCE_PATH,
+        audit_descriptor_path=audit_descriptor,
+        audit_records_path=audit_records,
+        sample_path=sample,
+        review_path=review,
+        active_path=active,
+        generation_root=generations,
+        dataset_loader=loader,
+    )
+
+    assert loaded == [("PRAIG/SMB", "test", source_descriptor["revision"])]
+    assert audited == [(records, source_descriptor, 20260818, 64)]
+    assert report == {"row_count": 685, "processed": 685, "failed": 0, "paired_eligible": 685}
+    descriptor, resolved = resolve_active_manifest(
+        active_path=active, generation_root=generations
+    )
+    assert descriptor["code_revision"] == "a" * 40
+    assert descriptor["source_revision"] == source_descriptor["revision"]
+    assert descriptor["benchmark_state"] == "AUDITED_LOCKED"
+    assert len(resolved) == 685
+    exported = [json.loads(line) for line in audit_records.read_text().splitlines()]
+    assert len(exported) == 685
+    assert set(exported[0]) == {
+        "audit_sample_member",
+        "item_id",
+        "processing_status",
+        "source_group_id",
+        "upstream_index",
+    }
+    assert len(list(csv.DictReader(sample.open(encoding="utf-8", newline="")))) == 64
+    assert len(list(csv.DictReader(review.open(encoding="utf-8", newline="")))) == 685
+
+
+def test_authenticated_audit_rejects_wrong_upstream_count_before_auditing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        smb_audit,
+        "audit_dataset",
+        lambda *_args, **_kwargs: pytest.fail("audit must not run for a wrong source count"),
+    )
+
+    with pytest.raises(ValueError, match="exactly 685"):
+        smb_audit.run_authenticated_audit(
+            source_path=SOURCE_PATH,
+            audit_descriptor_path=tmp_path / "audit.yaml",
+            audit_records_path=tmp_path / "audit.jsonl",
+            sample_path=tmp_path / "sample.csv",
+            review_path=tmp_path / "review.csv",
+            active_path=tmp_path / "active.yaml",
+            generation_root=tmp_path / "generations",
+            dataset_loader=lambda *_args, **_kwargs: [object()] * 684,
+        )
+
+    assert not (tmp_path / "active.yaml").exists()
+
+
+def test_audit_cli_exposes_the_exact_controlled_output_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        smb_audit,
+        "run_authenticated_audit",
+        lambda **kwargs: calls.append(kwargs)
+        or {"row_count": 685, "processed": 685, "failed": 0, "paired_eligible": 685},
+    )
+    arguments = [
+        "audit",
+        "--source",
+        str(SOURCE_PATH),
+        "--audit-descriptor",
+        str(tmp_path / "audit.yaml"),
+        "--audit-records",
+        str(tmp_path / "audit.jsonl"),
+        "--sample",
+        str(tmp_path / "sample.csv"),
+        "--review",
+        str(tmp_path / "review.csv"),
+        "--manifest-active",
+        str(tmp_path / "active.yaml"),
+        "--manifest-generation-root",
+        str(tmp_path / "generations"),
+    ]
+
+    assert smb_audit.main(arguments) == 0
+    assert calls == [
+        {
+            "source_path": SOURCE_PATH,
+            "audit_descriptor_path": tmp_path / "audit.yaml",
+            "audit_records_path": tmp_path / "audit.jsonl",
+            "sample_path": tmp_path / "sample.csv",
+            "review_path": tmp_path / "review.csv",
+            "active_path": tmp_path / "active.yaml",
+            "generation_root": tmp_path / "generations",
+        }
+    ]
