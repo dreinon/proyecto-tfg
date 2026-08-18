@@ -101,13 +101,9 @@ def test_only_reviewed_resolved_primary_or_official_claims_are_promotable() -> N
 
 def test_pending_and_draft_rows_cannot_be_selected_for_promotion() -> None:
     _, rows = _csv_rows(CLAIM_PATH)
-    promoted_ids = {
-        claim["claim_id"] for claim in _promotable_claims(rows, _evidence_registry())
-    }
+    promoted_ids = {claim["claim_id"] for claim in _promotable_claims(rows, _evidence_registry())}
 
-    unreviewed_ids = {
-        row["claim_id"] for row in rows if row["status"] in {"draft", "pending"}
-    }
+    unreviewed_ids = {row["claim_id"] for row in rows if row["status"] in {"draft", "pending"}}
     assert unreviewed_ids
     assert promoted_ids.isdisjoint(unreviewed_ids)
 
