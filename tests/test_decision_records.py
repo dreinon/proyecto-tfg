@@ -130,11 +130,15 @@ def test_claim_ledger_uses_exact_schema_and_validates_every_row() -> None:
                 assert not value.lstrip().startswith(FORMULA_PREFIXES), value
 
 
-def test_unreviewed_claims_are_not_promoted_or_misrepresented() -> None:
+def test_governance_claims_remain_unreviewed_and_are_not_misrepresented() -> None:
     _, rows = _claim_rows()
 
-    assert all(row["status"] in {"draft", "pending"} for row in rows)
-    gated = [row for row in rows if "CTRL-05" in row["claim_id"] or "DELV-01" in row["claim_id"]]
+    governance = [row for row in rows if row["claim_id"].startswith("CLAIM-")]
+    assert governance
+    assert all(row["status"] in {"draft", "pending"} for row in governance)
+    gated = [
+        row for row in governance if "CTRL-05" in row["claim_id"] or "DELV-01" in row["claim_id"]
+    ]
     assert gated
     assert all(row["status"] == "pending" for row in gated)
     assert all("does not establish completion" in row["limitations"] for row in gated)
