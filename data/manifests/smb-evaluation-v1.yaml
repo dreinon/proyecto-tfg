@@ -1,0 +1,10 @@
+descriptor_path: d2443f0ee2b866f642ae08098175654f5d0cf7090f91c6bf3869d28d62214a5e/manifest-descriptor.yaml
+generation_id: d2443f0ee2b866f642ae08098175654f5d0cf7090f91c6bf3869d28d62214a5e
+manifest_id: smb-evaluation-v1
+record_type: manifest-active
+records_path: d2443f0ee2b866f642ae08098175654f5d0cf7090f91c6bf3869d28d62214a5e/manifest-records.jsonl
+records_sha256: 58b7149f37f4b5713f5ce1d4746c007f0bbb9111cc86bd1c9346b05002278638
+row_count: 685
+row_schema_id: manifest-row
+row_schema_version: 1
+schema_version: 1

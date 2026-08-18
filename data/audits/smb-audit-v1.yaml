@@ -1,0 +1,9 @@
+audit_version: smb-audit-v1
+benchmark_state: AUDITED_LOCKED
+manifest_id: smb-evaluation-v1
+record_type: smb-audit-export
+records_sha256: 58b7149f37f4b5713f5ce1d4746c007f0bbb9111cc86bd1c9346b05002278638
+row_count: 685
+schema_version: 1
+source_key: smb
+source_revision: 96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb
