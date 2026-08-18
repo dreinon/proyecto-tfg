@@ -8,9 +8,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from score_super_resolution.smb import check_access, load_smb, main
 
 from score_super_resolution.benchmark_policy import BenchmarkPolicyError, BenchmarkPurpose
+from score_super_resolution.smb import check_access, load_smb, main
 
 EXPECTED_REVISION = "96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb"
 
@@ -170,4 +170,5 @@ def test_default_suite_keeps_network_integration_opt_in() -> None:
     source = Path(__file__).read_text(encoding="utf-8")
 
     assert 'os.environ.get("RUN_SMB_METADATA_INTEGRATION") != "1"' in source
-    assert "HF_TOKEN" not in source
+    forbidden_secret_name = "HF" + "_TOKEN"
+    assert forbidden_secret_name not in source
