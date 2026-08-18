@@ -89,7 +89,9 @@ def test_audit_guard_runs_before_decode_and_hash(monkeypatch: pytest.MonkeyPatch
 
 def test_fixture_audit_preserves_every_input_and_candidate_state() -> None:
     records = _audit_records()
-    rows = audit_dataset(records, source_descriptor=_source_descriptor(), sample_size=3)
+    rows = audit_dataset(
+        records, source_descriptor=_source_descriptor(), sample_size=3, max_pixels=2048
+    )
 
     assert len(rows) == len(records)
     assert [row["upstream_index"] for row in rows] == list(range(len(records)))
@@ -175,9 +177,7 @@ def test_publication_is_content_addressed_and_resolves_only_active_generation(
 
 
 @pytest.mark.parametrize("mutation", ("missing", "unknown"))
-def test_publication_validates_every_row_before_writing(
-    tmp_path: Path, mutation: str
-) -> None:
+def test_publication_validates_every_row_before_writing(tmp_path: Path, mutation: str) -> None:
     rows = _full_rows()
     if mutation == "missing":
         del rows[300]["processing_status"]
@@ -223,11 +223,22 @@ def test_manifest_checksum_and_generation_change_when_a_row_changes(tmp_path: Pa
     assert first["generation_id"] != second["generation_id"]
 
 
+def test_publication_rejects_inaccurate_imagehash_provenance(tmp_path: Path) -> None:
+    descriptor = _descriptor()
+    descriptor["duplicate_provenance"]["near"]["library_version"] = "9.9.9"
+
+    with pytest.raises(ManifestPublicationError, match="ImageHash provenance"):
+        publish_manifest_generation(
+            active_path=tmp_path / "active.yaml",
+            generation_root=tmp_path / "generations",
+            descriptor=descriptor,
+            rows=_full_rows(),
+        )
+
+
 @pytest.mark.parametrize("target", ("pointer", "descriptor", "row"))
 @pytest.mark.parametrize("mutation", ("missing", "unknown"))
-def test_resolution_revalidates_every_contract(
-    tmp_path: Path, target: str, mutation: str
-) -> None:
+def test_resolution_revalidates_every_contract(tmp_path: Path, target: str, mutation: str) -> None:
     active_path = tmp_path / "active.yaml"
     generation_root = tmp_path / "generations"
     publish_manifest_generation(
@@ -279,7 +290,7 @@ def test_reconciliation_retains_failures_and_rejects_index_mismatch(
     assert report == {"row_count": 685, "processed": 684, "failed": 1, "paired_eligible": 684}
 
     rows[-1]["upstream_index"] = 683
-    with pytest.raises(ManifestPublicationError, match="duplicate.*missing"):
+    with pytest.raises(ManifestPublicationError, match=r"duplicate.*missing"):
         reconcile_manifest(active_path=Path("unused"), generation_root=Path("unused"))
 
 

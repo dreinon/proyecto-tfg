@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping, Sequence
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -131,14 +132,23 @@ def load_schema(schema_id: str, version: int = 1) -> dict[str, Any]:
     return loaded
 
 
+@lru_cache(maxsize=64)
+def _cached_validator(
+    schema_id: str, version: int, _schema_root_identity: str
+) -> Draft202012Validator:
+    """Reuse a self-checked immutable schema for row-heavy manifest validation."""
+
+    return Draft202012Validator(load_schema(schema_id, version))
+
+
 def validate_instance(schema_id: str, instance: Mapping[str, Any], version: int = 1) -> None:
     """Validate a mapping and raise one deterministic error containing every violation."""
 
-    schema = load_schema(schema_id, version)
+    schema_id, version = _validated_locator(schema_id, version)
     if not isinstance(instance, Mapping):
         raise ContractValidationError(schema_id, version, ("instance $: must be a mapping",))
 
-    validator = Draft202012Validator(schema)
+    validator = _cached_validator(schema_id, version, str(SCHEMA_ROOT.resolve()))
     validation_errors = sorted(
         validator.iter_errors(instance),
         key=lambda error: (

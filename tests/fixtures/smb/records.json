@@ -249,15 +249,14 @@
     {
       "case": "oversized",
       "id": "oversized-image",
-      "image_base64": "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAAAAABWESUoAAAAR0lEQVR4nGP8z4AfMBGQHyYKWBgYGPFI/2dgpH1AUe4GFjQ+IwMDqhYmDHk0Kxn/k+YGRogobiv+o8sT5YthEBeDIVVTrgAASsMRO3JulSQAAAAASUVORK5CYII=",
-      "original_width": 32,
-      "original_height": 32,
+      "image_base64": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAAAAACPAi4CAAAALElEQVR4nO3MoQEAAAjDMOD/n+GIGUTqm97KmvAHAAAAAAAAAAAAAAAA8B44UC0Bf7Sd28IAAAAASUVORK5CYII=",
+      "original_width": 64,
+      "original_height": 64,
       "regions": [],
       "page_texture": "clean",
       "page": "6",
       "original_score": "score-epsilon",
-      "expected_status": "unprocessable",
-      "max_pixels": 100
+      "expected_status": "unprocessable"
     },
     {
       "case": "missing_metadata",
