@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v1:experiment-config",
+  "title": "Experiment configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "config_id",
+    "protocol_id",
+    "manifest_ids",
+    "method",
+    "degradation_config_id",
+    "evaluation_config_id",
+    "seeds"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_type": {"const": "experiment-config"},
+    "config_id": {"$ref": "#/$defs/stable_id"},
+    "protocol_id": {"$ref": "#/$defs/stable_id"},
+    "manifest_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/stable_id"}
+    },
+    "method": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method_id", "family", "model_provenance"],
+      "properties": {
+        "method_id": {"$ref": "#/$defs/stable_id"},
+        "family": {"enum": ["non_learned", "learned"]},
+        "model_provenance": {"$ref": "#/$defs/model_provenance"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"family": {"const": "learned"}}},
+          "then": {
+            "properties": {
+              "model_provenance": {
+                "properties": {"status": {"const": "descriptor_reference"}}
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "model_provenance": {
+                "properties": {"status": {"const": "not_applicable"}}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "degradation_config_id": {"$ref": "#/$defs/stable_id"},
+    "evaluation_config_id": {"$ref": "#/$defs/stable_id"},
+    "seeds": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "value"],
+        "properties": {
+          "name": {"$ref": "#/$defs/stable_id"},
+          "value": {"type": "integer", "minimum": 0}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "stable_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "model_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {"enum": ["descriptor_reference", "not_applicable"]},
+        "model_descriptor_id": {"$ref": "#/$defs/stable_id"}
+      },
+      "oneOf": [
+        {
+          "properties": {"status": {"const": "descriptor_reference"}},
+          "required": ["model_descriptor_id"]
+        },
+        {
+          "properties": {"status": {"const": "not_applicable"}},
+          "not": {"required": ["model_descriptor_id"]}
+        }
+      ]
+    }
+  }
+}

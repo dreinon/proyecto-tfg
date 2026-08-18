@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v1:failure",
+  "title": "Explicit execution failure v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "failure_id",
+    "experiment_id",
+    "execution_id",
+    "scope",
+    "stage",
+    "code",
+    "message",
+    "recoverable",
+    "related_record_ids",
+    "occurred_at",
+    "redacted"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_type": {"const": "failure"},
+    "failure_id": {"$ref": "#/$defs/stable_id"},
+    "experiment_id": {"$ref": "#/$defs/stable_id"},
+    "execution_id": {"$ref": "#/$defs/stable_id"},
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level"],
+      "properties": {
+        "level": {"enum": ["run", "item"]},
+        "item_id": {"$ref": "#/$defs/stable_id"}
+      },
+      "oneOf": [
+        {
+          "properties": {"level": {"const": "item"}},
+          "required": ["item_id"]
+        },
+        {
+          "properties": {"level": {"const": "run"}},
+          "not": {"required": ["item_id"]}
+        }
+      ]
+    },
+    "stage": {
+      "enum": ["configuration", "degradation", "inference", "metric", "persistence"]
+    },
+    "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+    "message": {"type": "string", "minLength": 1},
+    "recoverable": {"type": "boolean"},
+    "related_record_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/stable_id"}
+    },
+    "occurred_at": {"$ref": "#/$defs/utc_timestamp"},
+    "redacted": {"const": true}
+  },
+  "$defs": {
+    "stable_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "utc_timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+    }
+  }
+}

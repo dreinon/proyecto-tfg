@@ -138,5 +138,209 @@
       "reviewer": "Daniel Reinon",
       "review_date": "2026-08-17"
     }
+  },
+  "experiment_config_non_learned": {
+    "schema_id": "experiment-config",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "experiment-config",
+      "config_id": "experiment-config-fixture-v1",
+      "protocol_id": "analysis-v1",
+      "manifest_ids": ["fixture-validation-v1"],
+      "method": {
+        "method_id": "bicubic-x4",
+        "family": "non_learned",
+        "model_provenance": {"status": "not_applicable"}
+      },
+      "degradation_config_id": "controlled-x4-v1",
+      "evaluation_config_id": "fidelity-v1",
+      "seeds": [{"name": "python", "value": 20260818}]
+    }
+  },
+  "experiment_config_learned": {
+    "schema_id": "experiment-config",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "experiment-config",
+      "config_id": "experiment-config-learned-fixture-v1",
+      "protocol_id": "analysis-v1",
+      "manifest_ids": ["fixture-validation-v1"],
+      "method": {
+        "method_id": "example-fidelity-model-x4",
+        "family": "learned",
+        "model_provenance": {
+          "status": "descriptor_reference",
+          "model_descriptor_id": "example-fidelity-model-v1"
+        }
+      },
+      "degradation_config_id": "controlled-x4-v1",
+      "evaluation_config_id": "fidelity-v1",
+      "seeds": [{"name": "python", "value": 20260818}]
+    }
+  },
+  "degradation_trace": {
+    "schema_id": "degradation-trace",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "degradation-trace",
+      "trace_id": "trace-fixture-0001",
+      "experiment_id": "experiment-fixture-v1",
+      "execution_id": "execution-fixture-0001",
+      "item_id": "fixture-page-0001",
+      "degradation_config_id": "controlled-x4-v1",
+      "seed": 20260818,
+      "input_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "output_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "operations": [
+        {
+          "order": 1,
+          "operator_id": "downsample",
+          "parameters": [
+            {"name": "scale", "value": 4},
+            {"name": "kernel", "value": "bicubic"}
+          ]
+        }
+      ]
+    }
+  },
+  "method_output": {
+    "schema_id": "method-output",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "method-output",
+      "output_id": "output-fixture-0001",
+      "experiment_id": "experiment-fixture-v1",
+      "execution_id": "execution-fixture-0001",
+      "item_id": "fixture-page-0001",
+      "method_id": "bicubic-x4",
+      "input_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "output_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "output_path": "artifacts/execution-fixture-0001/outputs/fixture-page-0001.png",
+      "dimensions": {"width": 1600, "height": 2400},
+      "color_mode": "L",
+      "produced_at": "2026-08-18T12:00:01Z"
+    }
+  },
+  "metric_result": {
+    "schema_id": "metric-result",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "metric-result",
+      "metric_result_id": "metric-fixture-0001-psnr",
+      "experiment_id": "experiment-fixture-v1",
+      "execution_id": "execution-fixture-0001",
+      "item_id": "fixture-page-0001",
+      "method_output_id": "output-fixture-0001",
+      "reference_item_id": "fixture-page-0001-hr",
+      "metric": {
+        "name": "psnr",
+        "version": "scikit-image-0.25.2",
+        "parameters": [{"name": "data-range", "value": 255}]
+      },
+      "value": 31.25,
+      "computed_at": "2026-08-18T12:00:02Z"
+    }
+  },
+  "failure": {
+    "schema_id": "failure",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "failure",
+      "failure_id": "failure-fixture-0001",
+      "experiment_id": "experiment-fixture-v1",
+      "execution_id": "execution-fixture-0001",
+      "scope": {"level": "item", "item_id": "fixture-page-0002"},
+      "stage": "persistence",
+      "code": "OUTPUT_WRITE_FAILED",
+      "message": "Output could not be persisted to the declared path.",
+      "recoverable": true,
+      "related_record_ids": [],
+      "occurred_at": "2026-08-18T12:00:03Z",
+      "redacted": true
+    }
+  },
+  "run_record_non_learned": {
+    "schema_id": "run-record",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "run-record",
+      "run_record_id": "run-fixture-0001",
+      "experiment_id": "experiment-fixture-v1",
+      "execution_id": "execution-fixture-0001",
+      "status": "partial",
+      "started_at": "2026-08-18T12:00:00Z",
+      "completed_at": "2026-08-18T12:00:04Z",
+      "repositories": [
+        {"name": "proyecto", "revision": "2998c3c", "dirty": false}
+      ],
+      "manifest_ids": ["fixture-validation-v1"],
+      "experiment_config_id": "experiment-config-fixture-v1",
+      "method": {"method_id": "bicubic-x4", "family": "non_learned"},
+      "seeds": [{"name": "python", "value": 20260818}],
+      "environment": {
+        "python_version": "3.12.12",
+        "dependency_snapshot_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "runtime": "local-cpu"
+      },
+      "hardware": {
+        "device_type": "cpu",
+        "device_name": "fixture-cpu",
+        "memory_bytes": 8589934592
+      },
+      "paths": {
+        "config": "configs/experiments/experiment-fixture-v1.json",
+        "logs": "artifacts/execution-fixture-0001/logs",
+        "outputs": "artifacts/execution-fixture-0001/outputs",
+        "metrics": "artifacts/execution-fixture-0001/metrics.jsonl",
+        "failures": "artifacts/execution-fixture-0001/failures.jsonl"
+      },
+      "model_provenance": {"status": "not_applicable"}
+    }
+  },
+  "run_record_learned_method": {
+    "schema_id": "run-record",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "run-record",
+      "run_record_id": "run-fixture-0002",
+      "experiment_id": "experiment-learned-fixture-v1",
+      "execution_id": "execution-fixture-0002",
+      "status": "succeeded",
+      "started_at": "2026-08-18T12:01:00Z",
+      "completed_at": "2026-08-18T12:01:04Z",
+      "repositories": [
+        {"name": "proyecto", "revision": "2998c3c", "dirty": false}
+      ],
+      "manifest_ids": ["fixture-validation-v1"],
+      "experiment_config_id": "experiment-config-learned-fixture-v1",
+      "method": {"method_id": "example-fidelity-model-x4", "family": "learned"},
+      "seeds": [{"name": "python", "value": 20260818}],
+      "environment": {
+        "python_version": "3.12.12",
+        "dependency_snapshot_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "runtime": "local-cpu-fixture"
+      },
+      "hardware": {
+        "device_type": "cpu",
+        "device_name": "fixture-cpu",
+        "memory_bytes": 8589934592
+      },
+      "paths": {
+        "config": "configs/experiments/experiment-learned-fixture-v1.json",
+        "logs": "artifacts/execution-fixture-0002/logs",
+        "outputs": "artifacts/execution-fixture-0002/outputs",
+        "metrics": "artifacts/execution-fixture-0002/metrics.jsonl",
+        "failures": "artifacts/execution-fixture-0002/failures.jsonl"
+      },
+      "model_provenance": {
+        "status": "descriptor_reference",
+        "model_descriptor_id": "example-fidelity-model-v1",
+        "checkpoint": {
+          "status": "available",
+          "identifier": "example-fidelity-model-x4",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      }
+    }
   }
 }

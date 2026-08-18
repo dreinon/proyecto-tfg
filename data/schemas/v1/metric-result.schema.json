@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v1:metric-result",
+  "title": "Per-item metric result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "metric_result_id",
+    "experiment_id",
+    "execution_id",
+    "item_id",
+    "method_output_id",
+    "reference_item_id",
+    "metric",
+    "value",
+    "computed_at"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_type": {"const": "metric-result"},
+    "metric_result_id": {"$ref": "#/$defs/stable_id"},
+    "experiment_id": {"$ref": "#/$defs/stable_id"},
+    "execution_id": {"$ref": "#/$defs/stable_id"},
+    "item_id": {"$ref": "#/$defs/stable_id"},
+    "method_output_id": {"$ref": "#/$defs/stable_id"},
+    "reference_item_id": {"$ref": "#/$defs/stable_id"},
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "parameters"],
+      "properties": {
+        "name": {"$ref": "#/$defs/stable_id"},
+        "version": {"type": "string", "minLength": 1},
+        "parameters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "value"],
+            "properties": {
+              "name": {"$ref": "#/$defs/stable_id"},
+              "value": {"type": ["string", "number", "integer", "boolean"]}
+            }
+          }
+        }
+      }
+    },
+    "value": {"type": "number"},
+    "computed_at": {"$ref": "#/$defs/utc_timestamp"}
+  },
+  "$defs": {
+    "stable_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "utc_timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+    }
+  }
+}

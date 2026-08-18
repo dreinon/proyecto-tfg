@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v1:run-record",
+  "title": "Execution provenance envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "run_record_id",
+    "experiment_id",
+    "execution_id",
+    "status",
+    "started_at",
+    "completed_at",
+    "repositories",
+    "manifest_ids",
+    "experiment_config_id",
+    "method",
+    "seeds",
+    "environment",
+    "hardware",
+    "paths",
+    "model_provenance"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_type": {"const": "run-record"},
+    "run_record_id": {"$ref": "#/$defs/stable_id"},
+    "experiment_id": {"$ref": "#/$defs/stable_id"},
+    "execution_id": {"$ref": "#/$defs/stable_id"},
+    "status": {"enum": ["succeeded", "partial", "failed"]},
+    "started_at": {"$ref": "#/$defs/utc_timestamp"},
+    "completed_at": {"$ref": "#/$defs/utc_timestamp"},
+    "repositories": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "revision", "dirty"],
+        "properties": {
+          "name": {"$ref": "#/$defs/stable_id"},
+          "revision": {"type": "string", "pattern": "^[0-9a-f]{7,64}$"},
+          "dirty": {"type": "boolean"}
+        }
+      }
+    },
+    "manifest_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/stable_id"}
+    },
+    "experiment_config_id": {"$ref": "#/$defs/stable_id"},
+    "method": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method_id", "family"],
+      "properties": {
+        "method_id": {"$ref": "#/$defs/stable_id"},
+        "family": {"enum": ["non_learned", "learned"]}
+      }
+    },
+    "seeds": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "value"],
+        "properties": {
+          "name": {"$ref": "#/$defs/stable_id"},
+          "value": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["python_version", "dependency_snapshot_sha256", "runtime"],
+      "properties": {
+        "python_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "dependency_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+        "runtime": {"type": "string", "minLength": 1}
+      }
+    },
+    "hardware": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_type", "device_name", "memory_bytes"],
+      "properties": {
+        "device_type": {"enum": ["cpu", "gpu", "tpu", "other"]},
+        "device_name": {"type": "string", "minLength": 1},
+        "memory_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["config", "logs", "outputs", "metrics", "failures"],
+      "properties": {
+        "config": {"$ref": "#/$defs/relative_path"},
+        "logs": {"$ref": "#/$defs/relative_path"},
+        "outputs": {"$ref": "#/$defs/relative_path"},
+        "metrics": {"$ref": "#/$defs/relative_path"},
+        "failures": {"$ref": "#/$defs/relative_path"}
+      }
+    },
+    "model_provenance": {"$ref": "#/$defs/model_provenance"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "method": {"properties": {"family": {"const": "learned"}}}
+        }
+      },
+      "then": {
+        "properties": {
+          "model_provenance": {
+            "properties": {"status": {"const": "descriptor_reference"}}
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "model_provenance": {
+            "properties": {"status": {"const": "not_applicable"}}
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "stable_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "relative_path": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"},
+    "utc_timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {"enum": ["available", "not_applicable"]},
+        "identifier": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "oneOf": [
+        {
+          "properties": {"status": {"const": "available"}},
+          "required": ["identifier", "sha256"]
+        },
+        {
+          "properties": {"status": {"const": "not_applicable"}},
+          "not": {"anyOf": [{"required": ["identifier"]}, {"required": ["sha256"]}]}
+        }
+      ]
+    },
+    "model_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {"enum": ["descriptor_reference", "not_applicable"]},
+        "model_descriptor_id": {"$ref": "#/$defs/stable_id"},
+        "checkpoint": {"$ref": "#/$defs/checkpoint"}
+      },
+      "oneOf": [
+        {
+          "properties": {"status": {"const": "descriptor_reference"}},
+          "required": ["model_descriptor_id", "checkpoint"]
+        },
+        {
+          "properties": {"status": {"const": "not_applicable"}},
+          "not": {
+            "anyOf": [
+              {"required": ["model_descriptor_id"]},
+              {"required": ["checkpoint"]}
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
