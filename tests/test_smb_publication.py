@@ -14,7 +14,6 @@ import yaml
 
 import score_super_resolution.smb_audit as smb_audit
 
-
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "smb" / "records.json"
 
 

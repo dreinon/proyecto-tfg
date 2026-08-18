@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import hashlib
 import importlib.metadata
@@ -15,6 +16,7 @@ import sys
 import uuid
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
+from datetime import date
 from pathlib import Path
 
 import imagehash
@@ -67,6 +69,14 @@ class ManifestPublicationError(RuntimeError):
     def __init__(self, message: str, *, committed: bool) -> None:
         self.committed = committed
         super().__init__(message)
+
+
+class ReviewFinalizationError(ValueError):
+    """Report an invalid or incomplete human review without changing evidence."""
+
+
+def _review_error(detail: str) -> ReviewFinalizationError:
+    return ReviewFinalizationError(f"SMB review error: {detail}")
 
 
 def _publication_error(detail: str, *, committed: bool = False) -> ManifestPublicationError:
@@ -740,21 +750,22 @@ def _review_row(row: Mapping[str, object]) -> dict[str, str]:
     }
 
 
-def write_review_csv(*, active_path: Path, generation_root: Path, output_path: Path) -> None:
-    """Write redacted review rows derived exclusively from validated active resolution."""
-
-    _, rows = resolve_active_manifest(active_path=active_path, generation_root=generation_root)
-    review_rows = [_review_row(row) for row in rows]
+def _candidate_review_rows(rows: Sequence[Mapping[str, object]]) -> list[dict[str, str]]:
     candidates: dict[str, list[str]] = defaultdict(list)
     for row in rows:
-        for candidate_id in row["near_duplicate_candidate_ids"]:  # type: ignore[union-attr]
+        candidate_ids = row["near_duplicate_candidate_ids"]
+        assert isinstance(candidate_ids, Sequence)
+        for candidate_id in candidate_ids:
             candidates[str(candidate_id)].append(str(row["item_id"]))
+    review_rows: list[dict[str, str]] = []
     for candidate_id, item_ids in sorted(candidates.items()):
         unique_ids = sorted(set(item_ids))
-        if len(unique_ids) != 2:
-            raise _publication_error(
-                "near-duplicate candidate does not identify two rows", committed=True
+        if len(unique_ids) != 2 or len(item_ids) != 2:
+            raise _review_error(
+                f"candidate {candidate_id} must identify exactly two unique manifest rows"
             )
+        if candidate_id != _candidate_id(*unique_ids):
+            raise _review_error(f"candidate {candidate_id} is not the canonical key for its pair")
         review_rows.append(
             {
                 **{field: "" for field in REVIEW_CSV_FIELDS},
@@ -766,11 +777,344 @@ def write_review_csv(*, active_path: Path, generation_root: Path, output_path: P
                 "duplicate_disposition": "pending",
             }
         )
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8", newline="") as handle:
+    return review_rows
+
+
+def _expected_review_rows(rows: Sequence[Mapping[str, object]]) -> list[dict[str, str]]:
+    return [*(_review_row(row) for row in rows), *_candidate_review_rows(rows)]
+
+
+def _write_review_rows(path: Path, review_rows: Sequence[Mapping[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=REVIEW_CSV_FIELDS, quoting=csv.QUOTE_ALL)
         writer.writeheader()
         writer.writerows(review_rows)
+
+
+def write_review_csv(*, active_path: Path, generation_root: Path, output_path: Path) -> None:
+    """Write redacted review rows derived exclusively from validated active resolution."""
+
+    _, rows = resolve_active_manifest(active_path=active_path, generation_root=generation_root)
+    _write_review_rows(output_path, _expected_review_rows(rows))
+
+
+def _write_csv(
+    path: Path, *, fieldnames: Sequence[str], rows: Sequence[Mapping[str, object]]
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, quoting=csv.QUOTE_ALL)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def emit_review_evidence_from_active_manifest(
+    *,
+    active_path: Path,
+    generation_root: Path,
+    audit_descriptor_path: Path,
+    audit_records_path: Path,
+    sample_path: Path,
+    review_path: Path,
+) -> None:
+    """Regenerate tracked, redacted review evidence from one validated active generation."""
+
+    descriptor, rows = resolve_active_manifest(
+        active_path=active_path, generation_root=generation_root
+    )
+    audit_descriptor = {
+        "audit_version": descriptor["audit_version"],
+        "benchmark_state": descriptor["benchmark_state"],
+        "manifest_id": descriptor["manifest_id"],
+        "record_type": "smb-audit-export",
+        "records_sha256": descriptor["records_sha256"],
+        "row_count": len(rows),
+        "schema_version": 1,
+        "source_key": descriptor["source_key"],
+        "source_revision": descriptor["source_revision"],
+    }
+    redacted_rows = [
+        {
+            "audit_sample_member": row["audit_sample_member"],
+            "item_id": row["item_id"],
+            "processing_status": row["processing_status"],
+            "source_group_id": row["source_group_id"],
+            "upstream_index": row["upstream_index"],
+        }
+        for row in rows
+    ]
+    sample_rows = [row for row in redacted_rows if row["audit_sample_member"] is True]
+    audit_descriptor_path.parent.mkdir(parents=True, exist_ok=True)
+    audit_descriptor_path.write_bytes(_canonical_descriptor(audit_descriptor))
+    audit_records_path.parent.mkdir(parents=True, exist_ok=True)
+    audit_records_path.write_bytes(_canonical_jsonl(redacted_rows))
+    _write_csv(
+        sample_path,
+        fieldnames=(
+            "upstream_index",
+            "item_id",
+            "source_group_id",
+            "processing_status",
+            "audit_sample_member",
+        ),
+        rows=sample_rows,
+    )
+    _write_review_rows(review_path, _expected_review_rows(rows))
+
+
+def _read_review_rows(review_path: Path) -> list[dict[str, str]]:
+    try:
+        with review_path.open(encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if tuple(reader.fieldnames or ()) != REVIEW_CSV_FIELDS:
+                raise _review_error("CSV header does not match the exact review contract")
+            rows = list(reader)
+    except ReviewFinalizationError:
+        raise
+    except (OSError, UnicodeError, csv.Error) as error:
+        raise _review_error(f"cannot read review CSV: {type(error).__name__}") from error
+    if any(None in row or set(row) != set(REVIEW_CSV_FIELDS) for row in rows):
+        raise _review_error("review CSV row does not match the exact header")
+    return [{field: str(row[field]) for field in REVIEW_CSV_FIELDS} for row in rows]
+
+
+_QUALITY_DISPOSITIONS = {
+    "blurred",
+    "low_contrast",
+    "oversized",
+    "skewed",
+    "unprocessable",
+}
+_SUITABILITY_DISPOSITIONS = {"suitable", "unsuitable", "unavailable"}
+_DUPLICATE_DISPOSITIONS = {"distinct", "duplicate", "related", "unavailable"}
+_DATASET_LICENCE_STATUSES = {"confirmed", "restricted"}
+_ITEM_PROVENANCE_STATUSES = {"confirmed", "unavailable"}
+_ACCESS_STATUSES = {"confirmed", "restricted"}
+_REDISTRIBUTION_STATUSES = {"permitted", "prohibited"}
+_FIGURE_REPRODUCTION_STATUSES = {"permitted", "prohibited"}
+
+
+def _quality_flags(value: str, *, review_key: str) -> list[str]:
+    if value == "acceptable":
+        return []
+    flags = value.split(";")
+    if not flags or any(flag not in _QUALITY_DISPOSITIONS for flag in flags):
+        raise _review_error(f"{review_key}: invalid quality_disposition")
+    if flags != sorted(set(flags)):
+        raise _review_error(f"{review_key}: quality_disposition must be unique and canonical")
+    return flags
+
+
+def _require_enum(row: Mapping[str, str], field: str, allowed: set[str]) -> None:
+    if row[field] not in allowed:
+        raise _review_error(f"{row['review_key']}: invalid {field}")
+
+
+def _validated_review_rows(
+    rows: Sequence[Mapping[str, object]], review_rows: Sequence[Mapping[str, str]]
+) -> list[dict[str, str]]:
+    expected_rows = _expected_review_rows(rows)
+    expected = {row["review_key"]: row for row in expected_rows}
+    seen: dict[str, dict[str, str]] = {}
+    for untrusted in review_rows:
+        if set(untrusted) != set(REVIEW_CSV_FIELDS):
+            raise _review_error("review row does not match the exact header")
+        row = {field: str(untrusted[field]) for field in REVIEW_CSV_FIELDS}
+        key = row["review_key"]
+        if key in seen:
+            raise _review_error(f"duplicate review key: {key}")
+        if key not in expected:
+            raise _review_error(f"unknown review key: {key}")
+        expected_row = expected[key]
+        if row["review_kind"] != expected_row["review_kind"]:
+            raise _review_error(f"{key}: review_kind does not match the emitted key")
+        if row["review_kind"] == "candidate" and (row["item_id"], row["candidate_item_id"]) != (
+            expected_row["item_id"],
+            expected_row["candidate_item_id"],
+        ):
+            raise _review_error(f"{key}: candidate pair is not in canonical order")
+        if row["item_id"] != expected_row["item_id"]:
+            raise _review_error(f"{key}: item_id does not match the emitted key")
+        if row["candidate_item_id"] != expected_row["candidate_item_id"]:
+            raise _review_error(f"{key}: candidate_item_id does not match the emitted key")
+        if row["review_status"] != "reviewed":
+            raise _review_error(f"{key}: review_status must be reviewed")
+        for field in ("reviewer", "rationale"):
+            if not row[field].strip():
+                raise _review_error(f"{key}: {field} is required")
+        try:
+            if date.fromisoformat(row["reviewed_at"]).isoformat() != row["reviewed_at"]:
+                raise ValueError
+        except ValueError:
+            raise _review_error(f"{key}: reviewed_at must be an ISO date") from None
+
+        if row["review_kind"] == "candidate":
+            _require_enum(row, "duplicate_disposition", _DUPLICATE_DISPOSITIONS)
+            irrelevant = (
+                "source_group_id",
+                "quality_disposition",
+                "suitability_disposition",
+                "dataset_licence_status",
+                "item_provenance_status",
+                "access_status",
+                "redistribution_status",
+                "figure_reproduction_status",
+            )
+            if any(row[field] for field in irrelevant):
+                raise _review_error(f"{key}: candidate row contains item-only dispositions")
+        else:
+            _quality_flags(row["quality_disposition"], review_key=key)
+            _require_enum(row, "suitability_disposition", _SUITABILITY_DISPOSITIONS)
+            _require_enum(row, "duplicate_disposition", _DUPLICATE_DISPOSITIONS)
+            _require_enum(row, "dataset_licence_status", _DATASET_LICENCE_STATUSES)
+            _require_enum(row, "item_provenance_status", _ITEM_PROVENANCE_STATUSES)
+            _require_enum(row, "access_status", _ACCESS_STATUSES)
+            _require_enum(row, "redistribution_status", _REDISTRIBUTION_STATUSES)
+            _require_enum(row, "figure_reproduction_status", _FIGURE_REPRODUCTION_STATUSES)
+            source_group_id = row["source_group_id"]
+            if source_group_id and _SAFE_METADATA_PATTERN.fullmatch(source_group_id) is None:
+                raise _review_error(f"{key}: invalid source_group_id")
+        seen[key] = row
+
+    missing = sorted(set(expected) - set(seen))
+    if missing:
+        raise _review_error(f"missing review key: {missing[0]}")
+
+    item_dispositions = {
+        key: row["duplicate_disposition"]
+        for key, row in seen.items()
+        if row["review_kind"] == "item"
+    }
+    candidate_updates: dict[str, dict[str, str]] = {}
+    for row in seen.values():
+        if row["review_kind"] != "candidate":
+            continue
+        for item_id in (row["item_id"], row["candidate_item_id"]):
+            if item_dispositions[item_id] != row["duplicate_disposition"]:
+                raise _review_error(f"{item_id}: ambiguous duplicate dispositions")
+            existing = candidate_updates.get(item_id)
+            if (
+                existing is not None
+                and existing["duplicate_disposition"] != row["duplicate_disposition"]
+            ):
+                raise _review_error(f"{item_id}: ambiguous candidate dispositions")
+            candidate_updates[item_id] = row
+    return [seen[row["review_key"]] for row in expected_rows]
+
+
+def apply_review_dispositions(
+    rows: Sequence[Mapping[str, object]], review_rows: Sequence[Mapping[str, str]]
+) -> list[dict[str, object]]:
+    """Apply one complete stable-key review to copied manifest rows."""
+
+    validated = _validated_review_rows(rows, review_rows)
+    updated = copy.deepcopy(list(rows))
+    by_id = {str(row["item_id"]): row for row in updated}
+    if len(by_id) != len(updated):
+        raise _review_error("manifest contains duplicate item identities")
+    for review in validated:
+        if review["review_kind"] != "item":
+            continue
+        row = by_id[review["item_id"]]
+        row["source_group_id"] = review["source_group_id"] or None
+        quality = row["quality"]
+        duplicate_review = row["duplicate_review"]
+        rights = row["rights"]
+        assert isinstance(quality, dict)
+        assert isinstance(duplicate_review, dict)
+        assert isinstance(rights, dict)
+        quality.update(
+            {
+                "review_status": "reviewed",
+                "flags": _quality_flags(
+                    review["quality_disposition"], review_key=review["review_key"]
+                ),
+                "suitability_disposition": review["suitability_disposition"],
+                "notes": review["rationale"],
+            }
+        )
+        duplicate_review.update(
+            {
+                "review_status": "reviewed",
+                "disposition": review["duplicate_disposition"],
+                "reviewer": review["reviewer"],
+                "reviewed_at": review["reviewed_at"],
+                "rationale": review["rationale"],
+            }
+        )
+        for field in (
+            "dataset_licence_status",
+            "item_provenance_status",
+            "access_status",
+            "redistribution_status",
+            "figure_reproduction_status",
+        ):
+            rights[field] = review[field]
+
+    for review in validated:
+        if review["review_kind"] != "candidate":
+            continue
+        disposition = {
+            "review_status": "reviewed",
+            "disposition": review["duplicate_disposition"],
+            "reviewer": review["reviewer"],
+            "reviewed_at": review["reviewed_at"],
+            "rationale": review["rationale"],
+        }
+        for item_id in (review["item_id"], review["candidate_item_id"]):
+            by_id[item_id]["duplicate_review"] = copy.deepcopy(disposition)
+
+    for index, row in enumerate(updated):
+        try:
+            validate_instance("manifest-row", row)
+        except ContractValidationError as error:
+            raise _review_error(
+                f"updated manifest-row[{index}] failed validation: {error}"
+            ) from error
+    return updated
+
+
+def validate_review_from_active_manifest(
+    *, review_path: Path, active_path: Path, generation_root: Path
+) -> None:
+    """Validate an existing review against the active manifest without writing any file."""
+
+    _, rows = resolve_active_manifest(active_path=active_path, generation_root=generation_root)
+    apply_review_dispositions(rows, _read_review_rows(review_path))
+
+
+def _require_complete_denominator(rows: Sequence[Mapping[str, object]]) -> None:
+    expected_ids = {f"smb-test-{index:06d}" for index in range(EXPECTED_ROW_COUNT)}
+    actual_ids = [str(row["item_id"]) for row in rows]
+    actual_indices = [row["upstream_index"] for row in rows]
+    if (
+        len(rows) != EXPECTED_ROW_COUNT
+        or len(set(actual_ids)) != EXPECTED_ROW_COUNT
+        or set(actual_ids) != expected_ids
+        or set(actual_indices) != set(range(EXPECTED_ROW_COUNT))
+    ):
+        raise _review_error("finalized manifest does not preserve all 685 identities")
+
+
+def finalize_reviewed_manifest(
+    *, review_path: Path, active_path: Path, generation_root: Path
+) -> None:
+    """Resolve, validate, apply, and atomically publish one completed review."""
+
+    descriptor, rows = resolve_active_manifest(
+        active_path=active_path, generation_root=generation_root
+    )
+    updated = apply_review_dispositions(rows, _read_review_rows(review_path))
+    _require_complete_denominator(updated)
+    if descriptor["benchmark_state"] != "AUDITED_LOCKED":
+        raise _review_error("finalization cannot change a non-locked benchmark")
+    publish_manifest_generation(
+        active_path=active_path,
+        generation_root=generation_root,
+        descriptor=descriptor,
+        rows=updated,
+    )
 
 
 class _SafeArgumentParser(argparse.ArgumentParser):
@@ -789,6 +1133,21 @@ def _parser() -> argparse.ArgumentParser:
     review.add_argument("--manifest-active", type=Path, required=True)
     review.add_argument("--manifest-generation-root", type=Path, required=True)
     review.add_argument("--output", type=Path, required=True)
+    prepare = commands.add_parser("prepare-review")
+    prepare.add_argument("--manifest-active", type=Path, required=True)
+    prepare.add_argument("--manifest-generation-root", type=Path, required=True)
+    prepare.add_argument("--audit-descriptor", type=Path, required=True)
+    prepare.add_argument("--audit-records", type=Path, required=True)
+    prepare.add_argument("--sample", type=Path, required=True)
+    prepare.add_argument("--review", type=Path, required=True)
+    validate_review = commands.add_parser("validate-review")
+    validate_review.add_argument("--review", type=Path, required=True)
+    validate_review.add_argument("--manifest-active", type=Path, required=True)
+    validate_review.add_argument("--manifest-generation-root", type=Path, required=True)
+    finalize = commands.add_parser("finalize-review")
+    finalize.add_argument("--review", type=Path, required=True)
+    finalize.add_argument("--manifest-active", type=Path, required=True)
+    finalize.add_argument("--manifest-generation-root", type=Path, required=True)
     return parser
 
 
@@ -801,11 +1160,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0
-    write_review_csv(
-        active_path=arguments.manifest_active,
-        generation_root=arguments.manifest_generation_root,
-        output_path=arguments.output,
-    )
+    if arguments.command == "write-review":
+        write_review_csv(
+            active_path=arguments.manifest_active,
+            generation_root=arguments.manifest_generation_root,
+            output_path=arguments.output,
+        )
+    elif arguments.command == "prepare-review":
+        emit_review_evidence_from_active_manifest(
+            active_path=arguments.manifest_active,
+            generation_root=arguments.manifest_generation_root,
+            audit_descriptor_path=arguments.audit_descriptor,
+            audit_records_path=arguments.audit_records,
+            sample_path=arguments.sample,
+            review_path=arguments.review,
+        )
+    elif arguments.command == "validate-review":
+        validate_review_from_active_manifest(
+            review_path=arguments.review,
+            active_path=arguments.manifest_active,
+            generation_root=arguments.manifest_generation_root,
+        )
+    else:
+        finalize_reviewed_manifest(
+            review_path=arguments.review,
+            active_path=arguments.manifest_active,
+            generation_root=arguments.manifest_generation_root,
+        )
     return 0
 
 
