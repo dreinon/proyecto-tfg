@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping, Sequence
+from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -141,8 +142,49 @@ def _cached_validator(
     return Draft202012Validator(load_schema(schema_id, version))
 
 
+def _parse_date_field(
+    instance: Mapping[str, Any], field: str, *, allow_empty: bool = False
+) -> tuple[date | None, list[str]]:
+    value = instance[field]
+    if allow_empty and value == "":
+        return None, []
+    try:
+        return date.fromisoformat(value), []
+    except ValueError:
+        return None, [f"instance $.{field}: must be a real ISO calendar date"]
+
+
+def _parse_utc_timestamp_field(
+    instance: Mapping[str, Any], field: str
+) -> tuple[datetime | None, list[str]]:
+    value = instance[field]
+    try:
+        parsed = datetime.fromisoformat(f"{value[:-1]}+00:00")
+    except ValueError:
+        return None, [f"instance $.{field}: must be a real canonical UTC timestamp"]
+    return parsed, []
+
+
+def _semantic_validation_errors(schema_id: str, instance: Mapping[str, Any]) -> list[str]:
+    if schema_id == "claim-evidence":
+        _, errors = _parse_date_field(instance, "review_date", allow_empty=True)
+        return errors
+    if schema_id == "model-descriptor":
+        _, errors = _parse_date_field(instance, "verification_date")
+        return errors
+    if schema_id != "run-record":
+        return []
+
+    started_at, started_errors = _parse_utc_timestamp_field(instance, "started_at")
+    completed_at, completed_errors = _parse_utc_timestamp_field(instance, "completed_at")
+    errors = [*started_errors, *completed_errors]
+    if not errors and completed_at < started_at:
+        errors.append("instance $.completed_at: must not be earlier than $.started_at")
+    return errors
+
+
 def validate_instance(schema_id: str, instance: Mapping[str, Any], version: int = 1) -> None:
-    """Validate a mapping and raise one deterministic error containing every violation."""
+    """Validate structural and schema-specific semantic evidence constraints."""
 
     schema_id, version = _validated_locator(schema_id, version)
     if not isinstance(instance, Mapping):
@@ -157,12 +199,14 @@ def validate_instance(schema_id: str, instance: Mapping[str, Any], version: int 
             error.message,
         ),
     )
-    if not validation_errors:
-        return
+    if validation_errors:
+        details = []
+        for error in validation_errors:
+            location = _json_path(tuple(error.absolute_path))
+            message = error.message[:1].lower() + error.message[1:]
+            details.append(f"instance {location}: {message}")
+        raise ContractValidationError(schema_id, version, details)
 
-    details = []
-    for error in validation_errors:
-        location = _json_path(tuple(error.absolute_path))
-        message = error.message[:1].lower() + error.message[1:]
-        details.append(f"instance {location}: {message}")
-    raise ContractValidationError(schema_id, version, details)
+    semantic_errors = _semantic_validation_errors(schema_id, instance)
+    if semantic_errors:
+        raise ContractValidationError(schema_id, version, semantic_errors)
