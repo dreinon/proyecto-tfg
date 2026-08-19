@@ -25,6 +25,7 @@ from score_super_resolution.contracts import load_schema, recovery_metadata_sha2
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "smb" / "records.json"
 PUBLICATION_BOUNDARIES = (
+    "generation_parent_anchored",
     "generation_records_written",
     "generation_records_fsynced",
     "generation_descriptor_written",
@@ -32,6 +33,7 @@ PUBLICATION_BOUNDARIES = (
     "temporary_generation_directory_fsynced",
     "generation_renamed",
     "generations_parent_fsynced",
+    "active_parent_anchored",
     "pointer_written",
     "pointer_fsynced",
     "pointer_replaced",
@@ -1319,6 +1321,99 @@ def test_publication_boundaries_are_ordered_before_and_after_one_pointer_commit(
     assert events.index("generations_parent_fsynced") < events.index("pointer_written")
     assert events.index("pointer_fsynced") < events.index("pointer_replaced")
     assert events[-1] == "active_parent_fsynced"
+
+
+def test_publication_generation_parent_swap_stays_on_retained_inode(tmp_path: Path) -> None:
+    storage = tmp_path / "storage"
+    generation_root = storage / "generations"
+    active_path = tmp_path / "manifests" / "active.yaml"
+    outside = tmp_path / "outside"
+    storage.mkdir()
+    active_path.parent.mkdir()
+    outside.mkdir()
+    sentinel = outside / "sentinel"
+    sentinel.write_bytes(b"outside-generation-sentinel")
+    retained = tmp_path / "retained-storage"
+    swapped = False
+
+    def hook(boundary: str) -> None:
+        nonlocal swapped
+        if boundary == "generation_parent_anchored":
+            storage.rename(retained)
+            storage.symlink_to(outside, target_is_directory=True)
+            swapped = True
+
+    smb_audit.publish_manifest_generation(
+        active_path=active_path,
+        generation_root=generation_root,
+        descriptor=_descriptor(),
+        rows=_full_rows(),
+        boundary_hook=hook,
+    )
+
+    assert swapped is True
+    assert sentinel.read_bytes() == b"outside-generation-sentinel"
+    assert list(outside.iterdir()) == [sentinel]
+    assert any((retained / "generations").iterdir())
+
+
+def test_publication_active_parent_swap_stays_on_retained_inode(tmp_path: Path) -> None:
+    active_path, generation_root = _publish(tmp_path, _full_rows())
+    old_generation_id = yaml.safe_load(active_path.read_text(encoding="utf-8"))["generation_id"]
+    active_parent = active_path.parent
+    retained = tmp_path / "retained-manifests"
+    outside = tmp_path / "outside-active"
+    outside.mkdir()
+    outside_active = outside / active_path.name
+    outside_active.write_bytes(b"outside-active-sentinel")
+    swapped = False
+
+    def hook(boundary: str) -> None:
+        nonlocal swapped
+        if boundary == "active_parent_anchored":
+            active_parent.rename(retained)
+            active_parent.symlink_to(outside, target_is_directory=True)
+            swapped = True
+
+    smb_audit.publish_manifest_generation(
+        active_path=active_path,
+        generation_root=generation_root,
+        descriptor=_descriptor(),
+        rows=_changed_rows(),
+        boundary_hook=hook,
+    )
+
+    assert swapped is True
+    assert outside_active.read_bytes() == b"outside-active-sentinel"
+    retained_pointer = yaml.safe_load((retained / active_path.name).read_text(encoding="utf-8"))
+    assert retained_pointer["generation_id"] != old_generation_id
+
+
+def test_install_candidate_surface_and_permanent_lock_ignore_are_declared() -> None:
+    project_root = Path(__file__).parents[1]
+    lock_path = project_root / "data/manifests/.smb-evaluation-v1.install.lock"
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q", str(lock_path.relative_to(project_root))],
+        cwd=project_root,
+        check=False,
+    )
+
+    assert ignored.returncode == 0
+    assert hasattr(smb_audit, "install_candidate")
+    parser = smb_audit._parser()
+    command = parser.parse_args(
+        [
+            "install-candidate",
+            "--stage-root",
+            "stage",
+            "--manifest-generation-root",
+            "generations",
+            "--manifest-active",
+            "active.yaml",
+            "--expected-active-sha256-from-stage",
+        ]
+    )
+    assert command.expected_active_sha256_from_stage is True
 
 
 @pytest.mark.parametrize("boundary", PUBLICATION_BOUNDARIES)
