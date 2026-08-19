@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v1:manifest-recovery",
+  "title": "Content-addressed compact SMB manifest recovery descriptor v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "manifest_id",
+    "generation_id",
+    "active_pointer_path",
+    "active_pointer_sha256",
+    "descriptor_path",
+    "descriptor_sha256",
+    "descriptor_yaml",
+    "records_path",
+    "row_schema_id",
+    "row_schema_version",
+    "row_count",
+    "records_sha256",
+    "source_revision",
+    "source_provenance",
+    "audit_version",
+    "benchmark_state",
+    "recovery_records_path",
+    "compression",
+    "compressed_sha256",
+    "compressed_size_bytes",
+    "uncompressed_size_bytes",
+    "recovery_command",
+    "metadata_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_type": {"const": "manifest-recovery"},
+    "manifest_id": {"const": "smb-evaluation-v2"},
+    "generation_id": {"$ref": "#/$defs/sha256"},
+    "active_pointer_path": {
+      "const": "data/manifests/smb-evaluation-v1.yaml"
+    },
+    "active_pointer_sha256": {"$ref": "#/$defs/sha256"},
+    "descriptor_path": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}/manifest-descriptor\\.yaml$"
+    },
+    "descriptor_sha256": {"$ref": "#/$defs/sha256"},
+    "descriptor_yaml": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 131072
+    },
+    "records_path": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}/manifest-records\\.jsonl$"
+    },
+    "row_schema_id": {"const": "manifest-row"},
+    "row_schema_version": {"const": 2},
+    "row_count": {"const": 685},
+    "records_sha256": {"$ref": "#/$defs/sha256"},
+    "source_revision": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_provenance": {"$ref": "#/$defs/source_provenance"},
+    "audit_version": {"const": "smb-audit-v2"},
+    "benchmark_state": {"const": "AUDITED_LOCKED"},
+    "recovery_records_path": {
+      "const": "data/manifests/smb-evaluation-v1-recovery.jsonl.gz"
+    },
+    "compression": {"$ref": "#/$defs/compression"},
+    "compressed_sha256": {"$ref": "#/$defs/sha256"},
+    "compressed_size_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2097152
+    },
+    "uncompressed_size_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16777216
+    },
+    "recovery_command": {
+      "const": "uv run python -m score_super_resolution.smb_audit recover-active --manifest-active data/manifests/smb-evaluation-v1.yaml --recovery-descriptor data/manifests/smb-evaluation-v1-recovery.yaml --recovery-records data/manifests/smb-evaluation-v1-recovery.jsonl.gz --manifest-generation-root artifacts/smb-manifests/generations"
+    },
+    "metadata_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_set_version",
+        "algorithm",
+        "revision",
+        "dirty",
+        "source_tree_sha256",
+        "patch_sha256",
+        "lock_sha256"
+      ],
+      "properties": {
+        "source_set_version": {"const": 1},
+        "algorithm": {"const": "sha256"},
+        "revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "dirty": {"type": "boolean"},
+        "source_tree_sha256": {"$ref": "#/$defs/sha256"},
+        "patch_sha256": {"$ref": "#/$defs/sha256"},
+        "lock_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "compression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "format_version",
+        "compresslevel",
+        "mtime",
+        "filename"
+      ],
+      "properties": {
+        "algorithm": {"const": "gzip"},
+        "format_version": {"const": 1},
+        "compresslevel": {"const": 9},
+        "mtime": {"const": 0},
+        "filename": {"const": ""}
+      }
+    }
+  }
+}

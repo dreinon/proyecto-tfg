@@ -96,7 +96,13 @@ def _recovery_metadata_sha256(record: dict[str, Any]) -> str:
 
 
 def _recovery_record() -> dict[str, Any]:
-    descriptor = copy.deepcopy(_fixtures()["manifest_descriptor"]["instance"])
+    descriptor = copy.deepcopy(
+        json.loads(
+            (Path(__file__).parent / "fixtures" / "smb" / "records.json").read_text(
+                encoding="utf-8"
+            )
+        )["manifest_descriptor"]
+    )
     descriptor.update(
         {
             "schema_version": 2,

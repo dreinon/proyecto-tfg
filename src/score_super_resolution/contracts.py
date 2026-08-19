@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -10,6 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import yaml
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
@@ -17,6 +19,7 @@ SCHEMA_ROOT = Path(__file__).resolve().parents[2] / "data" / "schemas"
 _SCHEMA_ID_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 _DRAFT_2020_12_ID = "https://json-schema.org/draft/2020-12/schema"
 _SCHEMA_URN_PREFIX = "urn:score-super-resolution:schema"
+_RECOVERY_METADATA_DOMAIN = b"manifest-recovery-metadata-v1\0"
 
 
 class ContractValidationError(ValueError):
@@ -210,6 +213,98 @@ def _manifest_row_semantic_errors(instance: Mapping[str, Any]) -> list[str]:
     return errors
 
 
+def _canonical_yaml(record: Mapping[str, Any]) -> bytes:
+    return yaml.safe_dump(
+        dict(record), allow_unicode=True, sort_keys=True, default_flow_style=False
+    ).encode("utf-8")
+
+
+def recovery_metadata_sha256(instance: Mapping[str, Any]) -> str:
+    """Hash the complete recovery mapping except its self-address field."""
+
+    unsigned = {key: value for key, value in instance.items() if key != "metadata_sha256"}
+    payload = json.dumps(
+        unsigned,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(_RECOVERY_METADATA_DOMAIN + payload).hexdigest()
+
+
+def _manifest_recovery_semantic_errors(instance: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    descriptor_text = instance["descriptor_yaml"]
+    try:
+        descriptor = yaml.safe_load(descriptor_text)
+    except yaml.YAMLError:
+        return ["instance $.descriptor_yaml: must contain canonical YAML"]
+    if not isinstance(descriptor, dict):
+        return ["instance $.descriptor_yaml: must contain a descriptor mapping"]
+    descriptor_bytes = descriptor_text.encode("utf-8")
+    if descriptor_bytes != _canonical_yaml(descriptor):
+        errors.append("instance $.descriptor_yaml: must use canonical YAML bytes")
+    try:
+        validate_instance("manifest-descriptor", descriptor, version=2)
+    except ContractValidationError as error:
+        errors.append(f"instance $.descriptor_yaml: invalid embedded descriptor ({error})")
+        return sorted(errors)
+
+    descriptor_sha256 = hashlib.sha256(descriptor_bytes).hexdigest()
+    if instance["descriptor_sha256"] != descriptor_sha256:
+        errors.append("instance $.descriptor_sha256: must hash $.descriptor_yaml")
+
+    matching_fields = (
+        "manifest_id",
+        "generation_id",
+        "row_schema_id",
+        "row_schema_version",
+        "row_count",
+        "records_sha256",
+        "source_revision",
+        "source_provenance",
+        "audit_version",
+        "benchmark_state",
+    )
+    for field in matching_fields:
+        if instance[field] != descriptor[field]:
+            errors.append(f"instance $.{field}: must equal embedded descriptor $.{field}")
+
+    generation_id = instance["generation_id"]
+    expected_descriptor_path = f"{generation_id}/manifest-descriptor.yaml"
+    expected_records_path = f"{generation_id}/manifest-records.jsonl"
+    if instance["descriptor_path"] != expected_descriptor_path:
+        errors.append("instance $.descriptor_path: must name the recovered generation")
+    if instance["records_path"] != expected_records_path:
+        errors.append("instance $.records_path: must name the recovered generation")
+
+    pointer = {
+        "schema_version": 2,
+        "record_type": "manifest-active",
+        "manifest_id": instance["manifest_id"],
+        "generation_id": generation_id,
+        "descriptor_path": instance["descriptor_path"],
+        "records_path": instance["records_path"],
+        "row_schema_id": instance["row_schema_id"],
+        "row_schema_version": instance["row_schema_version"],
+        "row_count": instance["row_count"],
+        "records_sha256": instance["records_sha256"],
+    }
+    try:
+        validate_instance("manifest-active", pointer, version=2)
+    except ContractValidationError as error:
+        errors.append(f"instance $: invalid reconstructed active pointer ({error})")
+    pointer_sha256 = hashlib.sha256(_canonical_yaml(pointer)).hexdigest()
+    if instance["active_pointer_sha256"] != pointer_sha256:
+        errors.append(
+            "instance $.active_pointer_sha256: must hash the reconstructed active pointer"
+        )
+    if instance["metadata_sha256"] != recovery_metadata_sha256(instance):
+        errors.append("instance $.metadata_sha256: must address the canonical recovery metadata")
+    return sorted(errors)
+
+
 def _semantic_validation_errors(schema_id: str, instance: Mapping[str, Any]) -> list[str]:
     if schema_id == "claim-evidence":
         _, errors = _parse_date_field(instance, "review_date", allow_empty=True)
@@ -219,6 +314,8 @@ def _semantic_validation_errors(schema_id: str, instance: Mapping[str, Any]) -> 
         return errors
     if schema_id == "manifest-row":
         return _manifest_row_semantic_errors(instance)
+    if schema_id == "manifest-recovery":
+        return _manifest_recovery_semantic_errors(instance)
     if schema_id != "run-record":
         return []
 

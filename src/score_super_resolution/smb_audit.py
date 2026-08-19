@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
+import gzip
 import hashlib
 import importlib.metadata
 import io
@@ -30,7 +31,12 @@ from score_super_resolution.benchmark_policy import (
     BenchmarkPurpose,
     assert_smb_purpose_allowed,
 )
-from score_super_resolution.contracts import ContractValidationError, validate_instance
+from score_super_resolution.contracts import (
+    ContractValidationError,
+    load_schema,
+    recovery_metadata_sha256,
+    validate_instance,
+)
 from score_super_resolution.review_evidence import (
     REVIEW_FIELDS as REVIEW_CSV_FIELDS,
 )
@@ -61,6 +67,14 @@ AUDIT_SOURCE_TREE_DOMAIN = b"smb-audit-source-tree-v1\0"
 AUDIT_PATCH_DOMAIN = b"smb-audit-patch-state-v1\0"
 AUDIT_LOCK_DOMAIN = b"smb-audit-uv-lock-v1\0"
 RAW_METADATA_DOMAIN = b"smb-raw-metadata-v1\0"
+RECOVERY_COMMAND = (
+    "uv run python -m score_super_resolution.smb_audit recover-active "
+    "--manifest-active data/manifests/smb-evaluation-v1.yaml "
+    "--recovery-descriptor data/manifests/smb-evaluation-v1-recovery.yaml "
+    "--recovery-records data/manifests/smb-evaluation-v1-recovery.jsonl.gz "
+    "--manifest-generation-root artifacts/smb-manifests/generations"
+)
+RECOVERY_READ_CHUNK_SIZE = 64 * 1024
 AUTHORITATIVE_MIGRATION_STAGE = ".migrate-authoritative-v2"
 PUBLICATION_BOUNDARIES = (
     "generation_records_written",
@@ -2395,6 +2409,394 @@ def reconcile_manifest(
     }
 
 
+def _manifest_recovery_limits() -> tuple[int, int]:
+    schema = load_schema("manifest-recovery", version=1)
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):  # pragma: no cover - schema self-check owns this
+        raise RuntimeError("manifest recovery schema has no properties")
+    compressed = properties.get("compressed_size_bytes")
+    uncompressed = properties.get("uncompressed_size_bytes")
+    if not isinstance(compressed, Mapping) or not isinstance(uncompressed, Mapping):
+        raise RuntimeError("manifest recovery schema has no byte limits")
+    compressed_maximum = compressed.get("maximum")
+    uncompressed_maximum = uncompressed.get("maximum")
+    if (
+        isinstance(compressed_maximum, bool)
+        or not isinstance(compressed_maximum, int)
+        or isinstance(uncompressed_maximum, bool)
+        or not isinstance(uncompressed_maximum, int)
+        or compressed_maximum < 1
+        or uncompressed_maximum < 1
+    ):
+        raise RuntimeError("manifest recovery schema byte limits are invalid")
+    return compressed_maximum, uncompressed_maximum
+
+
+def _reject_symlink_components(path: Path, *, label: str, final_may_not_exist: bool) -> Path:
+    absolute = path.expanduser().absolute()
+    current = Path(absolute.anchor)
+    for index, component in enumerate(absolute.parts[1:], start=1):
+        current /= component
+        try:
+            opened = current.lstat()
+        except FileNotFoundError:
+            if final_may_not_exist and index == len(absolute.parts) - 1:
+                return absolute
+            if final_may_not_exist:
+                continue
+            raise _publication_error(f"{label} must be a regular file") from None
+        except OSError as error:
+            raise _publication_error(f"cannot inspect {label}") from error
+        if stat.S_ISLNK(opened.st_mode):
+            raise _publication_error(f"{label} must be a regular file")
+    return absolute
+
+
+def _read_regular_nofollow(path: Path, *, label: str, maximum_bytes: int) -> bytes:
+    absolute = _reject_symlink_components(path, label=label, final_may_not_exist=False)
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    close_on_exec = getattr(os, "O_CLOEXEC", 0)
+    if no_follow == 0:
+        raise _publication_error("secure no-follow recovery reads are unavailable")
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(absolute, os.O_RDONLY | no_follow | close_on_exec)
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise _publication_error(f"{label} must be a regular file")
+        if opened.st_size > maximum_bytes:
+            raise _publication_error(f"{label} exceeds its schema-declared maximum")
+        chunks: list[bytes] = []
+        consumed = 0
+        while True:
+            chunk = os.read(descriptor, min(RECOVERY_READ_CHUNK_SIZE, maximum_bytes + 1 - consumed))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            consumed += len(chunk)
+            if consumed > maximum_bytes:
+                raise _publication_error(f"{label} exceeds its schema-declared maximum")
+        if consumed != opened.st_size:
+            raise _publication_error(f"{label} changed while being read")
+        return b"".join(chunks)
+    except ManifestPublicationError:
+        raise
+    except OSError as error:
+        raise _publication_error(f"cannot read {label}") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _deterministic_gzip(payload: bytes) -> bytes:
+    output = io.BytesIO()
+    with gzip.GzipFile(
+        fileobj=output,
+        mode="wb",
+        filename="",
+        compresslevel=9,
+        mtime=0,
+    ) as handle:
+        handle.write(payload)
+    return output.getvalue()
+
+
+def _assert_safe_recovery_content(value: object, *, path: str = "$") -> None:
+    forbidden_keys = {
+        "authorization",
+        "checkpoint",
+        "checkpoints",
+        "content",
+        "credential",
+        "credentials",
+        "data",
+        "image_bytes",
+        "lr",
+        "metric",
+        "metrics",
+        "model",
+        "models",
+        "outcome",
+        "outcomes",
+        "password",
+        "prediction",
+        "predictions",
+        "raw",
+        "secret",
+        "sr",
+        "token",
+        "weight",
+        "weights",
+    }
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if not isinstance(key, str):
+                raise _publication_error(f"recovery content has a non-string key at {path}")
+            if key.casefold() in forbidden_keys:
+                raise _publication_error(f"recovery content contains forbidden field {path}.{key}")
+            _assert_safe_recovery_content(nested, path=f"{path}.{key}")
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for index, nested in enumerate(value):
+            _assert_safe_recovery_content(nested, path=f"{path}[{index}]")
+        return
+    if isinstance(value, (bytes, bytearray)):
+        raise _publication_error(f"recovery content contains binary payload at {path}")
+    if isinstance(value, str):
+        if value.startswith(("/", "\\\\")) or re.match(r"^[A-Za-z]:[\\/]", value):
+            raise _publication_error(
+                f"recovery content contains an absolute machine path at {path}"
+            )
+        if re.search(r"(?:hf_|ghp_|sk-)[A-Za-z0-9_-]{12,}", value) or "PRIVATE KEY" in value:
+            raise _publication_error(f"recovery content contains secret-like material at {path}")
+
+
+def export_manifest_recovery(
+    *,
+    active_path: Path,
+    generation_root: Path,
+    recovery_descriptor_path: Path,
+    recovery_records_path: Path,
+) -> dict[str, object]:
+    """Export the exact active compact generation as one bounded deterministic pair."""
+
+    compressed_maximum, uncompressed_maximum = _manifest_recovery_limits()
+    descriptor, rows = resolve_active_manifest(
+        active_path=active_path, generation_root=generation_root
+    )
+    if descriptor.get("schema_version") != 2:
+        raise _publication_error("manifest recovery requires the active compact v2 generation")
+    records_bytes = _canonical_jsonl(rows)
+    if len(records_bytes) > uncompressed_maximum:
+        raise _publication_error("active records exceed the schema-declared uncompressed maximum")
+    if hashlib.sha256(records_bytes).hexdigest() != descriptor["records_sha256"]:
+        raise _publication_error("active records checksum changed during recovery export")
+    _assert_safe_recovery_content(descriptor)
+    for row in rows:
+        _assert_safe_recovery_content(row)
+
+    active_bytes = _read_regular_nofollow(
+        active_path,
+        label="active pointer",
+        maximum_bytes=compressed_maximum,
+    )
+    try:
+        active_pointer = yaml.safe_load(active_bytes.decode("utf-8"))
+    except (UnicodeError, yaml.YAMLError) as error:
+        raise _publication_error("active pointer is not canonical YAML") from error
+    if not isinstance(active_pointer, dict) or active_bytes != _canonical_descriptor(
+        active_pointer
+    ):
+        raise _publication_error("active pointer is not canonical YAML")
+
+    descriptor_bytes = _canonical_descriptor(descriptor)
+    compressed_bytes = _deterministic_gzip(records_bytes)
+    if len(compressed_bytes) > compressed_maximum:
+        raise _publication_error("recovery gzip exceeds the schema-declared compressed maximum")
+    recovery: dict[str, object] = {
+        "schema_version": 1,
+        "record_type": "manifest-recovery",
+        "manifest_id": descriptor["manifest_id"],
+        "generation_id": descriptor["generation_id"],
+        "active_pointer_path": "data/manifests/smb-evaluation-v1.yaml",
+        "active_pointer_sha256": hashlib.sha256(active_bytes).hexdigest(),
+        "descriptor_path": active_pointer["descriptor_path"],
+        "descriptor_sha256": hashlib.sha256(descriptor_bytes).hexdigest(),
+        "descriptor_yaml": descriptor_bytes.decode("utf-8"),
+        "records_path": active_pointer["records_path"],
+        "row_schema_id": descriptor["row_schema_id"],
+        "row_schema_version": descriptor["row_schema_version"],
+        "row_count": descriptor["row_count"],
+        "records_sha256": descriptor["records_sha256"],
+        "source_revision": descriptor["source_revision"],
+        "source_provenance": descriptor["source_provenance"],
+        "audit_version": descriptor["audit_version"],
+        "benchmark_state": descriptor["benchmark_state"],
+        "recovery_records_path": "data/manifests/smb-evaluation-v1-recovery.jsonl.gz",
+        "compression": {
+            "algorithm": "gzip",
+            "format_version": 1,
+            "compresslevel": 9,
+            "mtime": 0,
+            "filename": "",
+        },
+        "compressed_sha256": hashlib.sha256(compressed_bytes).hexdigest(),
+        "compressed_size_bytes": len(compressed_bytes),
+        "uncompressed_size_bytes": len(records_bytes),
+        "recovery_command": RECOVERY_COMMAND,
+        "metadata_sha256": "",
+    }
+    recovery["metadata_sha256"] = recovery_metadata_sha256(recovery)
+    validate_instance("manifest-recovery", recovery, version=1)
+    recovery_bytes = _canonical_descriptor(recovery)
+    _durable_replace(recovery_records_path, compressed_bytes)
+    _durable_replace(recovery_descriptor_path, recovery_bytes)
+    return recovery
+
+
+def _validated_recovery_mapping(
+    recovery_descriptor_path: Path, *, maximum_bytes: int
+) -> tuple[dict[str, object], bytes]:
+    descriptor_bytes = _read_regular_nofollow(
+        recovery_descriptor_path,
+        label="recovery descriptor",
+        maximum_bytes=maximum_bytes,
+    )
+    try:
+        recovery = yaml.safe_load(descriptor_bytes.decode("utf-8"))
+    except (UnicodeError, yaml.YAMLError) as error:
+        raise _publication_error("recovery descriptor is not valid YAML") from error
+    if not isinstance(recovery, dict):
+        raise _publication_error("recovery descriptor must be a mapping")
+    try:
+        validate_instance("manifest-recovery", recovery, version=1)
+    except ContractValidationError as error:
+        raise _publication_error(f"recovery descriptor failed validation: {error}") from error
+    if descriptor_bytes != _canonical_descriptor(recovery):
+        raise _publication_error("recovery descriptor is not canonical YAML")
+    return recovery, descriptor_bytes
+
+
+def _stream_recovery_records(
+    compressed_bytes: bytes,
+    *,
+    declared_size: int,
+    hard_maximum: int,
+) -> bytes:
+    output = bytearray()
+    compressed_stream = io.BytesIO(compressed_bytes)
+    try:
+        with gzip.GzipFile(fileobj=compressed_stream, mode="rb") as handle:
+            while True:
+                remaining_declared = declared_size - len(output)
+                remaining_hard = hard_maximum - len(output)
+                request_size = min(
+                    RECOVERY_READ_CHUNK_SIZE,
+                    remaining_declared + 1,
+                    remaining_hard + 1,
+                )
+                chunk = handle.read(max(1, request_size))
+                if not chunk:
+                    break
+                output.extend(chunk)
+                if len(output) > hard_maximum:
+                    raise _publication_error(
+                        "recovery records exceed the schema-declared uncompressed maximum"
+                    )
+                if len(output) > declared_size:
+                    if declared_size == hard_maximum:
+                        raise _publication_error(
+                            "recovery records exceed the schema-declared uncompressed maximum"
+                        )
+                    raise _publication_error("recovery records exceed their declared size")
+    except ManifestPublicationError:
+        raise
+    except (EOFError, gzip.BadGzipFile, OSError) as error:
+        raise _publication_error("recovery gzip is malformed or truncated") from error
+    if len(output) != declared_size:
+        raise _publication_error("recovery records do not match their declared size")
+    return bytes(output)
+
+
+def recover_active_manifest(
+    *,
+    active_path: Path,
+    recovery_descriptor_path: Path,
+    recovery_records_path: Path,
+    generation_root: Path,
+) -> dict[str, object]:
+    """Verify and durably restore exactly the generation named by the active pointer."""
+
+    compressed_maximum, uncompressed_maximum = _manifest_recovery_limits()
+    recovery, _ = _validated_recovery_mapping(
+        recovery_descriptor_path, maximum_bytes=compressed_maximum
+    )
+    active_bytes = _read_regular_nofollow(
+        active_path,
+        label="active pointer",
+        maximum_bytes=compressed_maximum,
+    )
+    if hashlib.sha256(active_bytes).hexdigest() != recovery["active_pointer_sha256"]:
+        raise _publication_error("active pointer checksum does not match recovery metadata")
+
+    compressed_bytes = _read_regular_nofollow(
+        recovery_records_path,
+        label="compressed recovery records",
+        maximum_bytes=compressed_maximum,
+    )
+    if len(compressed_bytes) != recovery["compressed_size_bytes"]:
+        raise _publication_error("compressed recovery size does not match metadata")
+    if hashlib.sha256(compressed_bytes).hexdigest() != recovery["compressed_sha256"]:
+        raise _publication_error("compressed checksum does not match recovery metadata")
+    records_bytes = _stream_recovery_records(
+        compressed_bytes,
+        declared_size=int(recovery["uncompressed_size_bytes"]),
+        hard_maximum=uncompressed_maximum,
+    )
+    if hashlib.sha256(records_bytes).hexdigest() != recovery["records_sha256"]:
+        raise _publication_error("uncompressed recovery records checksum mismatch")
+
+    rows: list[dict[str, object]] = []
+    try:
+        text = records_bytes.decode("utf-8")
+        if not text.endswith("\n"):
+            raise ValueError("records JSONL lacks final newline")
+        for index, line in enumerate(text.splitlines()):
+            loaded = json.loads(line)
+            if not isinstance(loaded, dict):
+                raise ValueError(f"row {index} is not an object")
+            validate_instance("manifest-row", loaded, version=2)
+            rows.append(loaded)
+    except (UnicodeError, json.JSONDecodeError, ContractValidationError, ValueError) as error:
+        raise _publication_error(f"recovery records failed validation: {error}") from error
+    if len(rows) != recovery["row_count"] or _canonical_jsonl(rows) != records_bytes:
+        raise _publication_error("recovery records are non-canonical or have the wrong row count")
+
+    try:
+        descriptor = yaml.safe_load(str(recovery["descriptor_yaml"]))
+    except yaml.YAMLError as error:  # pragma: no cover - shared contract already proves this
+        raise _publication_error("embedded recovery descriptor is invalid") from error
+    if not isinstance(descriptor, dict):  # pragma: no cover - shared contract already proves this
+        raise _publication_error("embedded recovery descriptor is invalid")
+    completed, pointer, descriptor_bytes, validated_records = _validate_generation_inputs(
+        descriptor, rows
+    )
+    expected_pointer_bytes = _canonical_descriptor(pointer)
+    if (
+        completed["generation_id"] != recovery["generation_id"]
+        or hashlib.sha256(descriptor_bytes).hexdigest() != recovery["descriptor_sha256"]
+        or validated_records != records_bytes
+        or hashlib.sha256(expected_pointer_bytes).hexdigest() != recovery["active_pointer_sha256"]
+        or active_bytes != expected_pointer_bytes
+    ):
+        raise _publication_error("reconstructed recovery identity does not match metadata")
+
+    root = _reject_symlink_components(
+        generation_root, label="generation root", final_may_not_exist=True
+    )
+    if root.exists() and not root.is_dir():
+        raise _publication_error("generation root must be a directory")
+    publish_manifest_generation(
+        active_path=active_path,
+        generation_root=root,
+        descriptor=completed,
+        rows=rows,
+    )
+    resolved_descriptor, resolved_rows = resolve_active_manifest(
+        active_path=active_path, generation_root=root
+    )
+    return {
+        "generation_id": resolved_descriptor["generation_id"],
+        "row_count": len(resolved_rows),
+        "records_sha256": resolved_descriptor["records_sha256"],
+        "row_schema_id": resolved_descriptor["row_schema_id"],
+        "row_schema_version": resolved_descriptor["row_schema_version"],
+        "source_revision": resolved_descriptor["source_revision"],
+        "source_provenance": resolved_descriptor["source_provenance"],
+        "benchmark_state": resolved_descriptor["benchmark_state"],
+    }
+
+
 def _neutralize_display(value: object) -> str:
     text = "" if value is None else str(value)
     return f"'{text}" if text.startswith(_FORMULA_PREFIXES) else text
@@ -3110,6 +3512,16 @@ class _SafeArgumentParser(argparse.ArgumentParser):
 def _parser() -> argparse.ArgumentParser:
     parser = _SafeArgumentParser(description="Validate and reconcile an active SMB manifest")
     commands = parser.add_subparsers(dest="command", required=True)
+    export_recovery = commands.add_parser("export-recovery")
+    export_recovery.add_argument("--manifest-active", type=Path, required=True)
+    export_recovery.add_argument("--manifest-generation-root", type=Path, required=True)
+    export_recovery.add_argument("--recovery-descriptor", type=Path, required=True)
+    export_recovery.add_argument("--recovery-records", type=Path, required=True)
+    recover_active = commands.add_parser("recover-active")
+    recover_active.add_argument("--manifest-active", type=Path, required=True)
+    recover_active.add_argument("--recovery-descriptor", type=Path, required=True)
+    recover_active.add_argument("--recovery-records", type=Path, required=True)
+    recover_active.add_argument("--manifest-generation-root", type=Path, required=True)
     migrate = commands.add_parser("migrate-authoritative")
     migration_commands = migrate.add_subparsers(dest="migration_command", required=True)
     migrate_audit = migration_commands.add_parser("audit")
@@ -3157,6 +3569,36 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
+    if arguments.command == "export-recovery":
+        recovery = export_manifest_recovery(
+            active_path=arguments.manifest_active,
+            generation_root=arguments.manifest_generation_root,
+            recovery_descriptor_path=arguments.recovery_descriptor,
+            recovery_records_path=arguments.recovery_records,
+        )
+        print(
+            json.dumps(
+                {
+                    "generation_id": recovery["generation_id"],
+                    "row_count": recovery["row_count"],
+                    "records_sha256": recovery["records_sha256"],
+                    "compressed_size_bytes": recovery["compressed_size_bytes"],
+                    "uncompressed_size_bytes": recovery["uncompressed_size_bytes"],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+    if arguments.command == "recover-active":
+        report = recover_active_manifest(
+            active_path=arguments.manifest_active,
+            recovery_descriptor_path=arguments.recovery_descriptor,
+            recovery_records_path=arguments.recovery_records,
+            generation_root=arguments.manifest_generation_root,
+        )
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
     if arguments.command == "migrate-authoritative":
         if arguments.migration_command == "audit":
             report = migrate_authoritative_audit(

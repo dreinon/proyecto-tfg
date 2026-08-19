@@ -1154,6 +1154,58 @@ def test_recover_active_rejects_one_bit_compressed_corruption_before_visibility(
     assert not generation_root.exists()
 
 
+def test_recover_active_rejects_recovery_yaml_bit_change_before_decompression(
+    tmp_path: Path,
+) -> None:
+    active_path, _, recovery_descriptor, recovery_records = _export_recovery_bundle(tmp_path)
+    recovery = yaml.safe_load(recovery_descriptor.read_text(encoding="utf-8"))
+    recovery["recovery_command"] = recovery["recovery_command"].replace(
+        "recover-active", "recover-activa"
+    )
+    recovery_descriptor.write_bytes(smb_audit._canonical_descriptor(recovery))
+    generation_root = tmp_path / "restored-generations"
+
+    with pytest.raises(smb_audit.ManifestPublicationError, match="failed validation"):
+        smb_audit.recover_active_manifest(
+            active_path=active_path,
+            recovery_descriptor_path=recovery_descriptor,
+            recovery_records_path=recovery_records,
+            generation_root=generation_root,
+        )
+
+    assert not generation_root.exists()
+
+
+def test_recover_active_rejects_changed_uncompressed_rows_before_visibility(
+    tmp_path: Path,
+) -> None:
+    active_path, _, recovery_descriptor, recovery_records = _export_recovery_bundle(tmp_path)
+    recovery = yaml.safe_load(recovery_descriptor.read_text(encoding="utf-8"))
+    chunks: list[bytes] = []
+    with gzip.GzipFile(fileobj=io.BytesIO(recovery_records.read_bytes()), mode="rb") as handle:
+        while chunk := handle.read(64 * 1024):
+            chunks.append(chunk)
+    records_bytes = b"".join(chunks)
+    changed = records_bytes.replace(b"smb-test-000000", b"smb-test-000009", 1)
+    assert len(changed) == len(records_bytes) and changed != records_bytes
+    compressed = smb_audit._deterministic_gzip(changed)
+    recovery_records.write_bytes(compressed)
+    recovery["compressed_sha256"] = hashlib.sha256(compressed).hexdigest()
+    recovery["compressed_size_bytes"] = len(compressed)
+    _rewrite_recovery_descriptor(recovery_descriptor, recovery)
+    generation_root = tmp_path / "restored-generations"
+
+    with pytest.raises(smb_audit.ManifestPublicationError, match="records checksum"):
+        smb_audit.recover_active_manifest(
+            active_path=active_path,
+            recovery_descriptor_path=recovery_descriptor,
+            recovery_records_path=recovery_records,
+            generation_root=generation_root,
+        )
+
+    assert not generation_root.exists()
+
+
 def test_high_ratio_gzip_aborts_at_schema_uncompressed_limit_before_materialization(
     tmp_path: Path,
 ) -> None:
