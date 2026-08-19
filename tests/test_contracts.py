@@ -321,10 +321,7 @@ def _fixture(name: str) -> dict[str, dict[str, Any]]:
 
 def _tracked_v2_manifest_rows() -> list[dict[str, Any]]:
     recovery_records = (
-        Path(__file__).parents[1]
-        / "data"
-        / "manifests"
-        / "smb-evaluation-v1-recovery.jsonl.gz"
+        Path(__file__).parents[1] / "data" / "manifests" / "smb-evaluation-v1-recovery.jsonl.gz"
     )
     payload = gzip.decompress(recovery_records.read_bytes()).decode("utf-8")
     return [json.loads(line) for line in payload.splitlines()]
@@ -576,6 +573,11 @@ def test_manifest_nested_review_date_accepts_valid_leap_day(evidence_branch: str
         relation["reviewed_at"] = "2024-02-29"
 
     validate_instance("manifest-row", row, version=2)
+
+
+def test_tracked_manifest_nested_review_dates_validate_unchanged() -> None:
+    for row in _tracked_v2_manifest_rows():
+        validate_instance("manifest-row", row, version=2)
 
 
 def test_run_timestamp_rejects_hour_77() -> None:

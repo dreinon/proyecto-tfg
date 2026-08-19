@@ -214,6 +214,34 @@ def _manifest_row_semantic_errors(instance: Mapping[str, Any]) -> list[str]:
         errors.append(
             "instance $.near_duplicate_candidate_ids: must be unique and in canonical order"
         )
+
+    if instance["schema_version"] == 2:
+        visual_review = instance["visual_review"]
+        if visual_review["status"] in {
+            "sampled_human_reviewed",
+            "targeted_human_reviewed",
+        }:
+            try:
+                date.fromisoformat(visual_review["reviewed_at"])
+            except ValueError:
+                errors.append(
+                    "instance $.visual_review.reviewed_at: must be a real ISO calendar date"
+                )
+
+        for index, relation in enumerate(instance["duplicate_relations"]):
+            if relation["candidate_type"] == "perceptual" and relation["disposition"] in {
+                "distinct",
+                "duplicate",
+                "related",
+            }:
+                try:
+                    date.fromisoformat(relation["reviewed_at"])
+                except ValueError:
+                    errors.append(
+                        "instance "
+                        f"$.duplicate_relations[{index}].reviewed_at: "
+                        "must be a real ISO calendar date"
+                    )
     return errors
 
 
