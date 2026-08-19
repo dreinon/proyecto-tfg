@@ -1851,6 +1851,78 @@ def test_recover_active_rejects_symlink_inputs_before_materialization(
     assert not generation_root.exists()
 
 
+@pytest.mark.parametrize(
+    ("name", "label"),
+    (
+        ("manifest-recovery.yaml", "recovery descriptor"),
+        ("manifest-records.jsonl.gz", "compressed recovery records"),
+    ),
+)
+def test_recovery_parent_swap_after_anchor_never_reads_outside_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    label: str,
+) -> None:
+    safe_parent = tmp_path / "checked" / "bundle"
+    safe_parent.mkdir(parents=True)
+    safe_bytes = b"safe recovery bytes"
+    target = safe_parent / name
+    target.write_bytes(safe_bytes)
+    outside_parent = tmp_path / "outside"
+    outside_parent.mkdir()
+    outside_bytes = b"OUTSIDE-SENTINEL-MUST-NOT-BE-READ"
+    (outside_parent / name).write_bytes(outside_bytes)
+    parked_parent = safe_parent.with_name("retained-bundle")
+    original_open = os.open
+    swapped = False
+
+    def swap_before_final_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        whole_path_open = dir_fd is None and Path(path) == target.absolute()
+        anchored_final_open = dir_fd is not None and os.fsdecode(path) == name
+        if not swapped and (whole_path_open or anchored_final_open):
+            safe_parent.rename(parked_parent)
+            safe_parent.symlink_to(outside_parent, target_is_directory=True)
+            swapped = True
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", swap_before_final_open)
+
+    result = smb_audit._read_regular_nofollow(
+        target,
+        label=label,
+        maximum_bytes=1024,
+    )
+
+    assert swapped is True
+    assert result == safe_bytes
+    assert outside_bytes not in result
+
+
+def test_recovery_confinement_fails_closed_without_directory_nofollow_support(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recovery = tmp_path / "recovery.yaml"
+    recovery.write_bytes(b"safe")
+    monkeypatch.setattr(os, "O_DIRECTORY", 0)
+
+    with pytest.raises(smb_audit.ManifestPublicationError, match="unavailable") as caught:
+        smb_audit._read_regular_nofollow(
+            recovery,
+            label="recovery descriptor",
+            maximum_bytes=1024,
+        )
+
+    assert str(tmp_path) not in str(caught.value)
+
+
 def test_recover_active_rejects_one_bit_compressed_corruption_before_visibility(
     tmp_path: Path,
 ) -> None:
