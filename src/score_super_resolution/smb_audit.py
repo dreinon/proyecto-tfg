@@ -4328,7 +4328,9 @@ def prepare_v2_review_rows(
                 "review_key": pair_id,
                 "item_id": str(item_ids[0]),
                 "candidate_item_id": str(item_ids[1]),
-                "review_status": "reviewed" if reviewed or unavailable else "pending",
+                "review_status": (
+                    "unavailable" if unavailable else "reviewed" if reviewed else "pending"
+                ),
                 "reviewer": str(relation.get("reviewer") or "") if reviewed else "",
                 "reviewed_at": str(relation.get("reviewed_at") or "") if reviewed else "",
                 "rationale": str(relation.get("rationale") or ""),
@@ -4582,16 +4584,33 @@ def _validated_v2_review_rows(
         for field in ("review_kind", "item_id", "candidate_item_id"):
             if row[field] != emitted[field]:
                 raise _review_error(f"{key}: {field} does not match the emitted key")
-        if row["review_status"] != "reviewed":
-            raise _review_error(f"{key}: review_status must be reviewed")
-        for field in ("reviewer", "rationale"):
-            if not row[field].strip():
-                raise _review_error(f"{key}: {field} is required")
-        try:
-            if date.fromisoformat(row["reviewed_at"]).isoformat() != row["reviewed_at"]:
-                raise ValueError
-        except ValueError:
-            raise _review_error(f"{key}: reviewed_at must be an ISO date") from None
+        unavailable_pair = (
+            row["review_kind"] == "duplicate_pair" and row["review_status"] == "unavailable"
+        )
+        if unavailable_pair:
+            if row["duplicate_disposition"] != "unavailable":
+                raise _review_error(f"{key}: unavailable pair must use unavailable disposition")
+            if row["reviewer"] or row["reviewed_at"]:
+                raise _review_error(f"{key}: unavailable pair cannot have reviewer or reviewed_at")
+            if not row["rationale"].strip():
+                raise _review_error(f"{key}: unavailable pair rationale is required")
+            if row["rationale"] != emitted["rationale"]:
+                raise _review_error(f"{key}: unavailable pair rationale changed")
+        else:
+            if row["review_status"] == "unavailable":
+                raise _review_error(
+                    f"{key}: unavailable review_status is allowed only for duplicate_pair rows"
+                )
+            if row["review_status"] != "reviewed":
+                raise _review_error(f"{key}: review_status must be reviewed")
+            for field in ("reviewer", "rationale"):
+                if not row[field].strip():
+                    raise _review_error(f"{key}: {field} is required")
+            try:
+                if date.fromisoformat(row["reviewed_at"]).isoformat() != row["reviewed_at"]:
+                    raise ValueError
+            except ValueError:
+                raise _review_error(f"{key}: reviewed_at must be an ISO date") from None
 
         if row["review_kind"] == "item_policy":
             if row["source_group_id"] != emitted["source_group_id"]:
@@ -4634,7 +4653,18 @@ def _validated_v2_review_rows(
             if any(row[field] for field in irrelevant):
                 raise _review_error(f"{key}: visual row contains policy or pair claims")
         elif row["review_kind"] == "duplicate_pair":
-            _require_enum(row, "duplicate_disposition", _DUPLICATE_DISPOSITIONS)
+            if unavailable_pair:
+                assert row["duplicate_disposition"] == "unavailable"
+            else:
+                if row["duplicate_disposition"] == "unavailable":
+                    raise _review_error(
+                        f"{key}: human-reviewed pair cannot use unavailable disposition"
+                    )
+                _require_enum(
+                    row,
+                    "duplicate_disposition",
+                    {"distinct", "duplicate", "related"},
+                )
             irrelevant = (
                 "source_group_id",
                 "quality_disposition",
