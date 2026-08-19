@@ -2183,6 +2183,8 @@ def _read_regular_at(parent_fd: int, basename: str, *, label: str) -> bytes:
     except ManifestPublicationError:
         raise
     except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise _publication_error(f"{label} must be a regular file") from error
         raise _publication_error(f"cannot read {label}") from error
     finally:
         if descriptor is not None:
@@ -3050,6 +3052,8 @@ def _read_regular_nofollow(path: Path, *, label: str, maximum_bytes: int) -> byt
     except ManifestPublicationError:
         raise
     except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise _publication_error(f"{label} must be a regular file") from error
         raise _publication_error(f"cannot read {label}") from error
     finally:
         if descriptor is not None:
