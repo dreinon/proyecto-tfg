@@ -1,0 +1,324 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v1:smb-freeze-control",
+  "title": "Typed SMB freeze prerequisite control v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "status",
+    "artifact_kind",
+    "control_id",
+    "content"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_type": {"const": "smb-freeze-control"},
+    "status": {"const": "frozen"},
+    "artifact_kind": {
+      "enum": [
+        "smb_audit_control",
+        "methods_control",
+        "checkpoints_control",
+        "controlled_conditions_control",
+        "metrics_control",
+        "independent_units_control",
+        "exclusions_control",
+        "seeds_control",
+        "qualitative_samples_control",
+        "interpretation_rules_control",
+        "human_unlock_approval"
+      ]
+    },
+    "control_id": {
+      "enum": [
+        "smb_audit_complete",
+        "methods_frozen",
+        "checkpoints_frozen",
+        "controlled_conditions_frozen",
+        "metrics_frozen",
+        "independent_units_frozen",
+        "exclusions_frozen",
+        "seeds_frozen",
+        "qualitative_samples_frozen",
+        "interpretation_rules_frozen",
+        "human_unlock_recorded"
+      ]
+    },
+    "content": {"type": "object"}
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "artifact_kind": {"const": "smb_audit_control"},
+        "control_id": {"const": "smb_audit_complete"},
+        "content": {"$ref": "#/$defs/smb_audit_complete"}
+      }
+    },
+    {
+      "properties": {
+        "artifact_kind": {"const": "methods_control"},
+        "control_id": {"const": "methods_frozen"},
+        "content": {"$ref": "#/$defs/methods_frozen"}
+      }
+    },
+    {
+      "properties": {
+        "artifact_kind": {"const": "checkpoints_control"},
+        "control_id": {"const": "checkpoints_frozen"},
+        "content": {"$ref": "#/$defs/checkpoints_frozen"}
+      }
+    },
+    {
+      "properties": {
+        "artifact_kind": {"const": "controlled_conditions_control"},
+        "control_id": {"const": "controlled_conditions_frozen"},
+        "content": {"$ref": "#/$defs/controlled_conditions_frozen"}
+      }
+    },
+    {
+      "properties": {
+        "artifact_kind": {"const": "metrics_control"},
+        "control_id": {"const": "metrics_frozen"},
+        "content": {"$ref": "#/$defs/metrics_frozen"}
+      }
+    },
+    {
+      "properties": {
+        "artifact_kind": {"const": "independent_units_control"},
+        "control_id": {"const": "independent_units_frozen"},
+        "content": {"$ref": "#/$defs/independent_units_frozen"}
+      }
+    },
+    {
+      "properties": {
+        "artifact_kind": {"const": "exclusions_control"},
+        "control_id": {"const": "exclusions_frozen"},
+        "content": {"$ref": "#/$defs/exclusions_frozen"}
+      }
+    },
+    {
+      "properties": {
+        "artifact_kind": {"const": "seeds_control"},
+        "control_id": {"const": "seeds_frozen"},
+        "content": {"$ref": "#/$defs/seeds_frozen"}
+      }
+    },
+    {
+      "properties": {
+        "artifact_kind": {"const": "qualitative_samples_control"},
+        "control_id": {"const": "qualitative_samples_frozen"},
+        "content": {"$ref": "#/$defs/qualitative_samples_frozen"}
+      }
+    },
+    {
+      "properties": {
+        "artifact_kind": {"const": "interpretation_rules_control"},
+        "control_id": {"const": "interpretation_rules_frozen"},
+        "content": {"$ref": "#/$defs/interpretation_rules_frozen"}
+      }
+    },
+    {
+      "properties": {
+        "artifact_kind": {"const": "human_unlock_approval"},
+        "control_id": {"const": "human_unlock_recorded"},
+        "content": {"$ref": "#/$defs/human_unlock_recorded"}
+      }
+    }
+  ],
+  "$defs": {
+    "stable_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "artifact_path": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*$"
+    },
+    "nonempty_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/stable_id"}
+    },
+    "smb_audit_complete": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_revision",
+        "active_generation_id",
+        "row_count",
+        "records_sha256",
+        "benchmark_state",
+        "grouping_evidence_sha256",
+        "review_evidence_sha256",
+        "sample_evidence_sha256",
+        "rights_evidence_sha256"
+      ],
+      "properties": {
+        "source_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "active_generation_id": {"$ref": "#/$defs/sha256"},
+        "row_count": {"type": "integer", "minimum": 1},
+        "records_sha256": {"$ref": "#/$defs/sha256"},
+        "benchmark_state": {"const": "AUDITED_LOCKED"},
+        "grouping_evidence_sha256": {"$ref": "#/$defs/sha256"},
+        "review_evidence_sha256": {"$ref": "#/$defs/sha256"},
+        "sample_evidence_sha256": {"$ref": "#/$defs/sha256"},
+        "rights_evidence_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "methods_frozen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["methods"],
+      "properties": {
+        "methods": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["role", "implementation_id"],
+            "properties": {
+              "role": {"$ref": "#/$defs/stable_id"},
+              "implementation_id": {"$ref": "#/$defs/stable_id"}
+            }
+          }
+        }
+      }
+    },
+    "checkpoints_frozen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["methods"],
+      "properties": {
+        "methods": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["method_id", "status"],
+            "properties": {
+              "method_id": {"$ref": "#/$defs/stable_id"},
+              "status": {"enum": ["checkpoint", "not_applicable"]},
+              "checkpoint_id": {"$ref": "#/$defs/stable_id"},
+              "sha256": {"$ref": "#/$defs/sha256"}
+            },
+            "oneOf": [
+              {
+                "properties": {"status": {"const": "checkpoint"}},
+                "required": ["checkpoint_id", "sha256"]
+              },
+              {
+                "properties": {"status": {"const": "not_applicable"}},
+                "not": {"anyOf": [{"required": ["checkpoint_id"]}, {"required": ["sha256"]}]}
+              }
+            ]
+          }
+        }
+      }
+    },
+    "controlled_conditions_frozen": {
+      "type": "object", "additionalProperties": false,
+      "required": ["degradation_control_ids", "execution_control_ids"],
+      "properties": {
+        "degradation_control_ids": {"$ref": "#/$defs/nonempty_ids"},
+        "execution_control_ids": {"$ref": "#/$defs/nonempty_ids"}
+      }
+    },
+    "metrics_frozen": {
+      "type": "object", "additionalProperties": false,
+      "required": ["quantitative_definition_ids", "qualitative_definition_ids"],
+      "properties": {
+        "quantitative_definition_ids": {"$ref": "#/$defs/nonempty_ids"},
+        "qualitative_definition_ids": {"$ref": "#/$defs/nonempty_ids"}
+      }
+    },
+    "independent_units_frozen": {
+      "type": "object", "additionalProperties": false,
+      "required": ["grouping_rule_id", "pairing_rule_id", "aggregation_rule_id", "uncertainty_rule_id"],
+      "properties": {
+        "grouping_rule_id": {"$ref": "#/$defs/stable_id"},
+        "pairing_rule_id": {"$ref": "#/$defs/stable_id"},
+        "aggregation_rule_id": {"$ref": "#/$defs/stable_id"},
+        "uncertainty_rule_id": {"$ref": "#/$defs/stable_id"}
+      }
+    },
+    "exclusions_frozen": {
+      "type": "object", "additionalProperties": false,
+      "required": ["excluded_states", "failure_handling_rule_id"],
+      "properties": {
+        "excluded_states": {"$ref": "#/$defs/nonempty_ids"},
+        "failure_handling_rule_id": {"$ref": "#/$defs/stable_id"}
+      }
+    },
+    "seeds_frozen": {
+      "type": "object", "additionalProperties": false,
+      "required": ["generation_policy_id", "execution_policy_id", "sampling_policy_id"],
+      "properties": {
+        "generation_policy_id": {"$ref": "#/$defs/stable_id"},
+        "execution_policy_id": {"$ref": "#/$defs/stable_id"},
+        "sampling_policy_id": {"$ref": "#/$defs/stable_id"}
+      }
+    },
+    "qualitative_samples_frozen": {
+      "type": "object", "additionalProperties": false,
+      "required": ["outcome_independent", "sampling_rule_id", "sampling_rule_version", "item_set_sha256", "item_count"],
+      "properties": {
+        "outcome_independent": {"const": true},
+        "sampling_rule_id": {"$ref": "#/$defs/stable_id"},
+        "sampling_rule_version": {"type": "integer", "minimum": 1},
+        "item_set_sha256": {"$ref": "#/$defs/sha256"},
+        "item_count": {"type": "integer", "minimum": 1}
+      }
+    },
+    "interpretation_rules_frozen": {
+      "type": "object", "additionalProperties": false,
+      "required": ["success_rules", "stop_rules", "contradiction_rules", "claim_rules"],
+      "properties": {
+        "success_rules": {"$ref": "#/$defs/nonempty_ids"},
+        "stop_rules": {"$ref": "#/$defs/nonempty_ids"},
+        "contradiction_rules": {"$ref": "#/$defs/nonempty_ids"},
+        "claim_rules": {"$ref": "#/$defs/nonempty_ids"}
+      }
+    },
+    "human_unlock_recorded": {
+      "type": "object", "additionalProperties": false,
+      "required": ["reviewer", "reviewed_at", "decision", "approval_evidence", "prerequisite_digests"],
+      "properties": {
+        "reviewer": {"type": "string", "pattern": "^(?=.*\\S).+$"},
+        "reviewed_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+        "decision": {"const": "approved"},
+        "approval_evidence": {
+          "type": "object", "additionalProperties": false,
+          "required": ["evidence_type", "evidence_id", "artifact_path", "artifact_sha256"],
+          "properties": {
+            "evidence_type": {"const": "human-review"},
+            "evidence_id": {"$ref": "#/$defs/stable_id"},
+            "artifact_path": {"$ref": "#/$defs/artifact_path"},
+            "artifact_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "prerequisite_digests": {
+          "type": "object", "additionalProperties": false,
+          "required": ["smb_audit_complete", "evaluation_manifest_frozen", "methods_frozen", "checkpoints_frozen", "controlled_conditions_frozen", "metrics_frozen", "independent_units_frozen", "exclusions_frozen", "seeds_frozen", "qualitative_samples_frozen", "interpretation_rules_frozen"],
+          "properties": {
+            "smb_audit_complete": {"$ref": "#/$defs/sha256"},
+            "evaluation_manifest_frozen": {"$ref": "#/$defs/sha256"},
+            "methods_frozen": {"$ref": "#/$defs/sha256"},
+            "checkpoints_frozen": {"$ref": "#/$defs/sha256"},
+            "controlled_conditions_frozen": {"$ref": "#/$defs/sha256"},
+            "metrics_frozen": {"$ref": "#/$defs/sha256"},
+            "independent_units_frozen": {"$ref": "#/$defs/sha256"},
+            "exclusions_frozen": {"$ref": "#/$defs/sha256"},
+            "seeds_frozen": {"$ref": "#/$defs/sha256"},
+            "qualitative_samples_frozen": {"$ref": "#/$defs/sha256"},
+            "interpretation_rules_frozen": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      }
+    }
+  }
+}

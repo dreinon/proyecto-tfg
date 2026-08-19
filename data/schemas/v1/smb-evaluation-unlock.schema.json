@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v1:smb-evaluation-unlock",
+  "title": "Artifact-backed SMB final-evaluation unlock v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "review_status",
+    "reviewer",
+    "reviewed_at",
+    "prerequisites"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_type": {"const": "smb-evaluation-unlock"},
+    "review_status": {"const": "reviewed"},
+    "reviewer": {"type": "string", "pattern": "^(?=.*\\S).+$"},
+    "reviewed_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+    "prerequisites": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "smb_audit_complete",
+        "evaluation_manifest_frozen",
+        "methods_frozen",
+        "checkpoints_frozen",
+        "controlled_conditions_frozen",
+        "metrics_frozen",
+        "independent_units_frozen",
+        "exclusions_frozen",
+        "seeds_frozen",
+        "qualitative_samples_frozen",
+        "interpretation_rules_frozen",
+        "human_unlock_recorded"
+      ],
+      "properties": {
+        "smb_audit_complete": {"$ref": "#/$defs/smb_audit_complete"},
+        "evaluation_manifest_frozen": {"$ref": "#/$defs/evaluation_manifest_frozen"},
+        "methods_frozen": {"$ref": "#/$defs/methods_frozen"},
+        "checkpoints_frozen": {"$ref": "#/$defs/checkpoints_frozen"},
+        "controlled_conditions_frozen": {"$ref": "#/$defs/controlled_conditions_frozen"},
+        "metrics_frozen": {"$ref": "#/$defs/metrics_frozen"},
+        "independent_units_frozen": {"$ref": "#/$defs/independent_units_frozen"},
+        "exclusions_frozen": {"$ref": "#/$defs/exclusions_frozen"},
+        "seeds_frozen": {"$ref": "#/$defs/seeds_frozen"},
+        "qualitative_samples_frozen": {"$ref": "#/$defs/qualitative_samples_frozen"},
+        "interpretation_rules_frozen": {"$ref": "#/$defs/interpretation_rules_frozen"},
+        "human_unlock_recorded": {"$ref": "#/$defs/human_unlock_recorded"}
+      }
+    }
+  },
+  "$defs": {
+    "evidence_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "artifact_path": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "smb_audit_complete": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prerequisite_id", "evidence_id", "artifact_path", "artifact_sha256", "artifact_kind", "schema_id", "schema_version"],
+      "properties": {
+        "prerequisite_id": {"const": "smb_audit_complete"},
+        "evidence_id": {"$ref": "#/$defs/evidence_id"},
+        "artifact_path": {"$ref": "#/$defs/artifact_path"},
+        "artifact_sha256": {"$ref": "#/$defs/sha256"},
+        "artifact_kind": {"const": "smb_audit_control"},
+        "schema_id": {"const": "smb-freeze-control"},
+        "schema_version": {"const": 1}
+      }
+    },
+    "evaluation_manifest_frozen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prerequisite_id", "evidence_id", "artifact_path", "artifact_sha256", "artifact_kind", "schema_id", "schema_version", "expected_generation_id", "expected_row_count", "expected_records_sha256", "expected_benchmark_state"],
+      "properties": {
+        "prerequisite_id": {"const": "evaluation_manifest_frozen"},
+        "evidence_id": {"$ref": "#/$defs/evidence_id"},
+        "artifact_path": {"$ref": "#/$defs/artifact_path"},
+        "artifact_sha256": {"$ref": "#/$defs/sha256"},
+        "artifact_kind": {"const": "manifest_active"},
+        "schema_id": {"const": "manifest-active"},
+        "schema_version": {"enum": [1, 2]},
+        "expected_generation_id": {"$ref": "#/$defs/sha256"},
+        "expected_row_count": {"type": "integer", "minimum": 1},
+        "expected_records_sha256": {"$ref": "#/$defs/sha256"},
+        "expected_benchmark_state": {"const": "AUDITED_LOCKED"}
+      }
+    },
+    "methods_frozen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prerequisite_id", "evidence_id", "artifact_path", "artifact_sha256", "artifact_kind", "schema_id", "schema_version"],
+      "properties": {
+        "prerequisite_id": {"const": "methods_frozen"}, "evidence_id": {"$ref": "#/$defs/evidence_id"}, "artifact_path": {"$ref": "#/$defs/artifact_path"}, "artifact_sha256": {"$ref": "#/$defs/sha256"}, "artifact_kind": {"const": "methods_control"}, "schema_id": {"const": "smb-freeze-control"}, "schema_version": {"const": 1}
+      }
+    },
+    "checkpoints_frozen": {
+      "type": "object", "additionalProperties": false,
+      "required": ["prerequisite_id", "evidence_id", "artifact_path", "artifact_sha256", "artifact_kind", "schema_id", "schema_version"],
+      "properties": {
+        "prerequisite_id": {"const": "checkpoints_frozen"}, "evidence_id": {"$ref": "#/$defs/evidence_id"}, "artifact_path": {"$ref": "#/$defs/artifact_path"}, "artifact_sha256": {"$ref": "#/$defs/sha256"}, "artifact_kind": {"const": "checkpoints_control"}, "schema_id": {"const": "smb-freeze-control"}, "schema_version": {"const": 1}
+      }
+    },
+    "controlled_conditions_frozen": {
+      "type": "object", "additionalProperties": false,
+      "required": ["prerequisite_id", "evidence_id", "artifact_path", "artifact_sha256", "artifact_kind", "schema_id", "schema_version"],
+      "properties": {
+        "prerequisite_id": {"const": "controlled_conditions_frozen"}, "evidence_id": {"$ref": "#/$defs/evidence_id"}, "artifact_path": {"$ref": "#/$defs/artifact_path"}, "artifact_sha256": {"$ref": "#/$defs/sha256"}, "artifact_kind": {"const": "controlled_conditions_control"}, "schema_id": {"const": "smb-freeze-control"}, "schema_version": {"const": 1}
+      }
+    },
+    "metrics_frozen": {
+      "type": "object", "additionalProperties": false,
+      "required": ["prerequisite_id", "evidence_id", "artifact_path", "artifact_sha256", "artifact_kind", "schema_id", "schema_version"],
+      "properties": {
+        "prerequisite_id": {"const": "metrics_frozen"}, "evidence_id": {"$ref": "#/$defs/evidence_id"}, "artifact_path": {"$ref": "#/$defs/artifact_path"}, "artifact_sha256": {"$ref": "#/$defs/sha256"}, "artifact_kind": {"const": "metrics_control"}, "schema_id": {"const": "smb-freeze-control"}, "schema_version": {"const": 1}
+      }
+    },
+    "independent_units_frozen": {
+      "type": "object", "additionalProperties": false,
+      "required": ["prerequisite_id", "evidence_id", "artifact_path", "artifact_sha256", "artifact_kind", "schema_id", "schema_version"],
+      "properties": {
+        "prerequisite_id": {"const": "independent_units_frozen"}, "evidence_id": {"$ref": "#/$defs/evidence_id"}, "artifact_path": {"$ref": "#/$defs/artifact_path"}, "artifact_sha256": {"$ref": "#/$defs/sha256"}, "artifact_kind": {"const": "independent_units_control"}, "schema_id": {"const": "smb-freeze-control"}, "schema_version": {"const": 1}
+      }
+    },
+    "exclusions_frozen": {
+      "type": "object", "additionalProperties": false,
+      "required": ["prerequisite_id", "evidence_id", "artifact_path", "artifact_sha256", "artifact_kind", "schema_id", "schema_version"],
+      "properties": {
+        "prerequisite_id": {"const": "exclusions_frozen"}, "evidence_id": {"$ref": "#/$defs/evidence_id"}, "artifact_path": {"$ref": "#/$defs/artifact_path"}, "artifact_sha256": {"$ref": "#/$defs/sha256"}, "artifact_kind": {"const": "exclusions_control"}, "schema_id": {"const": "smb-freeze-control"}, "schema_version": {"const": 1}
+      }
+    },
+    "seeds_frozen": {
+      "type": "object", "additionalProperties": false,
+      "required": ["prerequisite_id", "evidence_id", "artifact_path", "artifact_sha256", "artifact_kind", "schema_id", "schema_version"],
+      "properties": {
+        "prerequisite_id": {"const": "seeds_frozen"}, "evidence_id": {"$ref": "#/$defs/evidence_id"}, "artifact_path": {"$ref": "#/$defs/artifact_path"}, "artifact_sha256": {"$ref": "#/$defs/sha256"}, "artifact_kind": {"const": "seeds_control"}, "schema_id": {"const": "smb-freeze-control"}, "schema_version": {"const": 1}
+      }
+    },
+    "qualitative_samples_frozen": {
+      "type": "object", "additionalProperties": false,
+      "required": ["prerequisite_id", "evidence_id", "artifact_path", "artifact_sha256", "artifact_kind", "schema_id", "schema_version"],
+      "properties": {
+        "prerequisite_id": {"const": "qualitative_samples_frozen"}, "evidence_id": {"$ref": "#/$defs/evidence_id"}, "artifact_path": {"$ref": "#/$defs/artifact_path"}, "artifact_sha256": {"$ref": "#/$defs/sha256"}, "artifact_kind": {"const": "qualitative_samples_control"}, "schema_id": {"const": "smb-freeze-control"}, "schema_version": {"const": 1}
+      }
+    },
+    "interpretation_rules_frozen": {
+      "type": "object", "additionalProperties": false,
+      "required": ["prerequisite_id", "evidence_id", "artifact_path", "artifact_sha256", "artifact_kind", "schema_id", "schema_version"],
+      "properties": {
+        "prerequisite_id": {"const": "interpretation_rules_frozen"}, "evidence_id": {"$ref": "#/$defs/evidence_id"}, "artifact_path": {"$ref": "#/$defs/artifact_path"}, "artifact_sha256": {"$ref": "#/$defs/sha256"}, "artifact_kind": {"const": "interpretation_rules_control"}, "schema_id": {"const": "smb-freeze-control"}, "schema_version": {"const": 1}
+      }
+    },
+    "human_unlock_recorded": {
+      "type": "object", "additionalProperties": false,
+      "required": ["prerequisite_id", "evidence_id", "artifact_path", "artifact_sha256", "artifact_kind", "schema_id", "schema_version"],
+      "properties": {
+        "prerequisite_id": {"const": "human_unlock_recorded"}, "evidence_id": {"$ref": "#/$defs/evidence_id"}, "artifact_path": {"$ref": "#/$defs/artifact_path"}, "artifact_sha256": {"$ref": "#/$defs/sha256"}, "artifact_kind": {"const": "human_unlock_approval"}, "schema_id": {"const": "smb-freeze-control"}, "schema_version": {"const": 1}
+      }
+    }
+  }
+}
