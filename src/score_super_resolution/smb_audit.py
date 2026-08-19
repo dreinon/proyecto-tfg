@@ -16,6 +16,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import uuid
 import warnings
 from collections import Counter, defaultdict
@@ -35,6 +36,7 @@ from score_super_resolution.benchmark_policy import (
 from score_super_resolution.contracts import (
     ContractValidationError,
     load_schema,
+    recovery_bundle_id_v2,
     recovery_metadata_sha256,
     validate_instance,
 )
@@ -2442,6 +2444,7 @@ def publish_manifest_generation(
     rows: Sequence[Mapping[str, object]],
     boundary_hook: Callable[[str], None] | None = None,
     allow_legacy_hash_provenance: bool = False,
+    recovery_binding: Mapping[str, object] | None = None,
 ) -> None:
     """Validate and publish one immutable content-addressed generation through one pointer."""
 
@@ -2450,6 +2453,9 @@ def publish_manifest_generation(
         rows,
         allow_legacy_hash_provenance=allow_legacy_hash_provenance,
     )
+    if recovery_binding is not None:
+        pointer.update(dict(recovery_binding))
+        validate_instance("manifest-active", pointer, version=int(pointer["schema_version"]))
     generation_id = str(pointer["generation_id"])
     root = generation_root.resolve()
     generation_path = (root / generation_id).resolve()
@@ -2675,8 +2681,8 @@ def reconcile_manifest(
     return report
 
 
-def _manifest_recovery_limits() -> tuple[int, int]:
-    schema = load_schema("manifest-recovery", version=1)
+def _manifest_recovery_limits(version: int = 1) -> tuple[int, int]:
+    schema = load_schema("manifest-recovery", version=version)
     properties = schema.get("properties")
     if not isinstance(properties, Mapping):  # pragma: no cover - schema self-check owns this
         raise RuntimeError("manifest recovery schema has no properties")
@@ -2817,6 +2823,371 @@ def _assert_safe_recovery_content(value: object, *, path: str = "$") -> None:
             raise _publication_error(f"recovery content contains secret-like material at {path}")
 
 
+def _build_manifest_recovery_v2(
+    descriptor: Mapping[str, object], rows: Sequence[Mapping[str, object]]
+) -> tuple[
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+    bytes,
+    bytes,
+    bytes,
+    bytes,
+]:
+    """Build non-cyclic recovery metadata and its corrected one-way active pointer."""
+
+    compressed_maximum, uncompressed_maximum = _manifest_recovery_limits(2)
+    completed, pointer, descriptor_bytes, records_bytes = _validate_generation_inputs(
+        descriptor, rows
+    )
+    if len(records_bytes) > uncompressed_maximum:
+        raise _publication_error("active records exceed the recovery-v2 uncompressed maximum")
+    compressed_bytes = _deterministic_gzip(records_bytes)
+    if len(compressed_bytes) > compressed_maximum:
+        raise _publication_error("recovery-v2 gzip exceeds its compressed maximum")
+    recovery: dict[str, object] = {
+        "schema_version": 2,
+        "record_type": "manifest-recovery",
+        "bundle_id": "",
+        "active_pointer_path": "data/manifests/smb-evaluation-v1.yaml",
+        "manifest_id": completed["manifest_id"],
+        "generation_id": completed["generation_id"],
+        "descriptor_path": pointer["descriptor_path"],
+        "descriptor_sha256": hashlib.sha256(descriptor_bytes).hexdigest(),
+        "descriptor_yaml": descriptor_bytes.decode("utf-8"),
+        "records_path": pointer["records_path"],
+        "row_schema_id": completed["row_schema_id"],
+        "row_schema_version": completed["row_schema_version"],
+        "row_count": completed["row_count"],
+        "records_sha256": completed["records_sha256"],
+        "source_revision": completed["source_revision"],
+        "source_provenance": completed["source_provenance"],
+        "audit_version": completed["audit_version"],
+        "benchmark_state": completed["benchmark_state"],
+        "recovery_descriptor_path": "",
+        "recovery_records_path": "",
+        "compression": {
+            "algorithm": "gzip",
+            "format_version": 1,
+            "compresslevel": 9,
+            "mtime": 0,
+            "filename": "",
+        },
+        "compressed_sha256": hashlib.sha256(compressed_bytes).hexdigest(),
+        "compressed_size_bytes": len(compressed_bytes),
+        "uncompressed_size_bytes": len(records_bytes),
+        "metadata_sha256": "",
+    }
+    recovery["bundle_id"] = recovery_bundle_id_v2(recovery)
+    bundle_prefix = f"data/manifests/recovery/canonical-pixel-v2/{recovery['bundle_id']}"
+    recovery["recovery_descriptor_path"] = f"{bundle_prefix}/manifest-recovery.yaml"
+    recovery["recovery_records_path"] = f"{bundle_prefix}/manifest-records.jsonl.gz"
+    recovery["metadata_sha256"] = recovery_metadata_sha256(recovery, version=2)
+    validate_instance("manifest-recovery", recovery, version=2)
+    recovery_bytes = _canonical_descriptor(recovery)
+    pointer.update(
+        {
+            "recovery_descriptor_path": recovery["recovery_descriptor_path"],
+            "recovery_descriptor_sha256": hashlib.sha256(recovery_bytes).hexdigest(),
+            "recovery_records_path": recovery["recovery_records_path"],
+            "recovery_records_sha256": recovery["compressed_sha256"],
+        }
+    )
+    validate_instance("manifest-active", pointer, version=2)
+    return (
+        completed,
+        pointer,
+        recovery,
+        descriptor_bytes,
+        records_bytes,
+        compressed_bytes,
+        recovery_bytes,
+    )
+
+
+def _candidate_benchmark_state(descriptor: Mapping[str, object]) -> str:
+    return str(descriptor.get("benchmark_state", ""))
+
+
+def _perceptual_relation_records(
+    rows: Sequence[Mapping[str, object]],
+) -> dict[str, dict[str, object]]:
+    records: dict[str, dict[str, object]] = {}
+    for row in rows:
+        relations = row.get("duplicate_relations")
+        if not isinstance(relations, Sequence) or isinstance(relations, (str, bytes)):
+            raise ValueError("protected perceptual relations are malformed")
+        for relation in relations:
+            if not isinstance(relation, Mapping) or relation.get("candidate_type") != "perceptual":
+                continue
+            normalized = dict(relation)
+            normalized.pop("counterpart_item_id", None)
+            pair_id = str(normalized.get("pair_id", ""))
+            previous = records.setdefault(pair_id, normalized)
+            if previous != normalized:
+                raise ValueError("protected perceptual relation mirrors disagree")
+    return records
+
+
+def _join_protected_candidate_evidence(
+    fresh_rows: Sequence[Mapping[str, object]],
+    legacy_rows: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    """Join only reviewed/stable evidence; newly computed hashes remain authoritative."""
+
+    legacy_by_id = {str(row.get("item_id")): row for row in legacy_rows}
+    fresh_by_id = {str(row.get("item_id")): row for row in fresh_rows}
+    if len(legacy_by_id) != len(legacy_rows) or set(fresh_by_id) != set(legacy_by_id):
+        raise ValueError("protected stable item identities changed during canonical rehash")
+
+    stable_fields = ("audit_sample_member", "source_group_id", "source_identity", "rights")
+    for item_id, legacy in legacy_by_id.items():
+        fresh = fresh_by_id[item_id]
+        for field in stable_fields:
+            if fresh.get(field) != legacy.get(field):
+                raise ValueError(f"protected {field} evidence changed during canonical rehash")
+        if fresh.get("paired_eligible") != legacy.get("paired_eligible") or fresh.get(
+            "paired_ineligibility_reason"
+        ) != legacy.get("paired_ineligibility_reason"):
+            raise ValueError("protected eligibility evidence changed during canonical rehash")
+
+        fresh_visual = fresh.get("visual_review")
+        legacy_visual = legacy.get("visual_review")
+        if fresh_visual != legacy_visual:
+            fresh_status = fresh_visual.get("status") if isinstance(fresh_visual, Mapping) else None
+            if fresh_status not in {"not_visually_reviewed", "unavailable"}:
+                raise ValueError("protected visual_review evidence changed during canonical rehash")
+
+    legacy_perceptual = _perceptual_relation_records(legacy_rows)
+    fresh_perceptual = _perceptual_relation_records(fresh_rows)
+    if set(fresh_perceptual) != set(legacy_perceptual):
+        raise ValueError("protected perceptual pair identities changed during canonical rehash")
+    human_fields = ("disposition", "reviewer", "reviewed_at", "rationale")
+    identity_fields = ("pair_id", "candidate_type", "item_ids", "evidence_basis", "evidence")
+    for pair_id, legacy_relation in legacy_perceptual.items():
+        fresh_relation = fresh_perceptual[pair_id]
+        if any(
+            fresh_relation.get(field) != legacy_relation.get(field) for field in identity_fields
+        ):
+            raise ValueError("protected perceptual pair evidence changed during canonical rehash")
+        if fresh_relation.get("disposition") != "pending" and any(
+            fresh_relation.get(field) != legacy_relation.get(field) for field in human_fields
+        ):
+            raise ValueError("protected perceptual review changed during canonical rehash")
+
+    migrated: list[dict[str, object]] = []
+    for fresh in fresh_rows:
+        item_id = str(fresh["item_id"])
+        legacy = legacy_by_id[item_id]
+        row = copy.deepcopy(dict(fresh))
+        row["visual_review"] = copy.deepcopy(legacy["visual_review"])
+        legacy_relations = legacy.get("duplicate_relations")
+        if not isinstance(legacy_relations, Sequence):
+            raise ValueError("protected perceptual relations are malformed")
+        row["duplicate_relations"] = [
+            copy.deepcopy(dict(relation))
+            for relation in legacy_relations
+            if isinstance(relation, Mapping) and relation.get("candidate_type") == "perceptual"
+        ]
+        migrated.append(row)
+    return derive_v2_exact_relations(migrated)
+
+
+def _candidate_tree_bytes(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def build_canonical_pixel_rehash_candidate(
+    *,
+    source_path: Path,
+    trusted_cache_roots: Sequence[Path],
+    legacy_active_path: Path,
+    legacy_recovery_descriptor_path: Path,
+    legacy_recovery_records_path: Path,
+    staging_root: Path,
+    dataset_loader: Callable[..., object] | None = None,
+) -> dict[str, object]:
+    """Build and validate a corrected candidate entirely below ``staging_root``."""
+
+    source_descriptor = _read_descriptor(source_path)
+    original_active_bytes = legacy_active_path.read_bytes()
+    staging_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="smb-canonical-rehash-") as temporary:
+        temporary_root = Path(temporary)
+        local_active = temporary_root / "data/manifests/smb-evaluation-v1.yaml"
+        legacy_generation_root = temporary_root / "generations"
+        _durable_replace(local_active, original_active_bytes)
+        recover_active_manifest(
+            active_path=local_active,
+            recovery_descriptor_path=legacy_recovery_descriptor_path,
+            recovery_records_path=legacy_recovery_records_path,
+            generation_root=legacy_generation_root,
+        )
+        legacy_descriptor, legacy_rows = resolve_active_manifest(
+            active_path=local_active, generation_root=legacy_generation_root
+        )
+
+        if _candidate_benchmark_state(legacy_descriptor) != "AUDITED_LOCKED":
+            raise ValueError("candidate migration requires protected AUDITED_LOCKED state")
+        records = load_smb(
+            purpose=BenchmarkPurpose.CONTENT_AUDIT,
+            loader=dataset_loader,
+            descriptor_path=source_path,
+        )
+        records = _without_automatic_image_decoding(records)
+        if not isinstance(records, Sequence):
+            records = list(records)  # type: ignore[arg-type]
+        if len(records) != EXPECTED_ROW_COUNT:
+            raise ValueError("authenticated canonical rehash must load exactly 685 rows")
+        fresh_rows = audit_dataset_v2(
+            records,
+            source_descriptor=source_descriptor,
+            trusted_cache_roots=trusted_cache_roots,
+            deterministic_seed=int(legacy_descriptor["deterministic_seed"]),
+            sample_size=DEFAULT_SAMPLE_SIZE,
+        )
+        _require_complete_audit_rows(fresh_rows)
+        migrated_rows = _join_protected_candidate_evidence(fresh_rows, legacy_rows)
+        _require_complete_audit_rows(migrated_rows)
+
+        audited_revisions = {str(row["source_revision"]) for row in migrated_rows}
+        if len(audited_revisions) != 1 or audited_revisions != {
+            str(legacy_descriptor["source_revision"])
+        }:
+            raise ValueError("protected source revision changed during canonical rehash")
+        candidate_source_descriptor = dict(source_descriptor)
+        candidate_source_descriptor["revision"] = audited_revisions.pop()
+
+        source_provenance = audit_source_provenance(source_path.resolve().parents[2])
+        descriptor = _manifest_descriptor_v2(
+            source_descriptor=candidate_source_descriptor,
+            rows=migrated_rows,
+            source_provenance=source_provenance,
+            creation_command=(
+                "uv run python -m score_super_resolution.smb_audit "
+                "build-canonical-pixel-rehash-candidate"
+            ),
+            deterministic_seed=int(legacy_descriptor["deterministic_seed"]),
+        )
+        descriptor["benchmark_state"] = _candidate_benchmark_state(legacy_descriptor)
+        (
+            completed,
+            pointer,
+            recovery,
+            descriptor_bytes,
+            records_bytes,
+            compressed_bytes,
+            recovery_bytes,
+        ) = _build_manifest_recovery_v2(descriptor, migrated_rows)
+        _assert_safe_recovery_content(completed)
+        _assert_safe_recovery_content(migrated_rows)
+        _assert_safe_recovery_content(recovery)
+
+        generation_root = staging_root / "artifacts/smb-manifests/generations"
+        generation_path = generation_root / str(completed["generation_id"])
+        active_path = staging_root / str(recovery["active_pointer_path"])
+        recovery_descriptor_path = staging_root / str(recovery["recovery_descriptor_path"])
+        recovery_records_path = staging_root / str(recovery["recovery_records_path"])
+        _durable_replace(generation_path / "manifest-descriptor.yaml", descriptor_bytes)
+        _durable_replace(generation_path / "manifest-records.jsonl", records_bytes)
+        _durable_replace(recovery_records_path, compressed_bytes)
+        _durable_replace(recovery_descriptor_path, recovery_bytes)
+        _durable_replace(active_path, _canonical_descriptor(pointer))
+        install_metadata = {
+            "schema_version": 1,
+            "record_type": "canonical-pixel-candidate-install",
+            "expected_previous_active_sha256": hashlib.sha256(original_active_bytes).hexdigest(),
+            "generation_id": completed["generation_id"],
+            "bundle_id": recovery["bundle_id"],
+            "active_pointer_path": recovery["active_pointer_path"],
+            "recovery_descriptor_path": recovery["recovery_descriptor_path"],
+            "recovery_records_path": recovery["recovery_records_path"],
+        }
+        _assert_safe_recovery_content(install_metadata)
+        _durable_replace(
+            staging_root / "install-metadata.yaml", _canonical_descriptor(install_metadata)
+        )
+
+        resolved_descriptor, resolved_rows = resolve_active_manifest(
+            active_path=active_path, generation_root=generation_root
+        )
+        if resolved_descriptor != completed or resolved_rows != migrated_rows:
+            raise ValueError("staged candidate does not resolve to its canonical generation")
+        validation_active = temporary_root / "validation/data/manifests/smb-evaluation-v1.yaml"
+        _durable_replace(validation_active, _canonical_descriptor(pointer))
+        recover_active_manifest(
+            active_path=validation_active,
+            recovery_descriptor_path=recovery_descriptor_path,
+            recovery_records_path=recovery_records_path,
+            generation_root=temporary_root / "validation-generations",
+        )
+        if legacy_active_path.read_bytes() != original_active_bytes:
+            raise ValueError("candidate construction changed the real active pointer")
+
+    return {
+        "generation_id": completed["generation_id"],
+        "bundle_id": recovery["bundle_id"],
+        "row_count": len(migrated_rows),
+        "sampled_human_review_count": sum(
+            row["audit_sample_member"] is True for row in migrated_rows
+        ),
+        "perceptual_pair_count": len(_perceptual_relation_records(migrated_rows)),
+        "source_group_count": len({row["source_group_id"] for row in migrated_rows}),
+        "benchmark_state": completed["benchmark_state"],
+        "active_pointer_path": recovery["active_pointer_path"],
+        "recovery_descriptor_path": recovery["recovery_descriptor_path"],
+        "recovery_records_path": recovery["recovery_records_path"],
+    }
+
+
+def verify_authoritative_determinism(
+    *,
+    source_path: Path,
+    trusted_cache_roots: Sequence[Path],
+    legacy_active_path: Path,
+    legacy_recovery_descriptor_path: Path,
+    legacy_recovery_records_path: Path,
+    stage_parent: Path,
+    verified_stage: Path,
+    dataset_loader: Callable[..., object] | None = None,
+) -> dict[str, object]:
+    """Require independent and same-root byte identity before materializing a candidate."""
+
+    stage_parent.mkdir(parents=True, exist_ok=True)
+    first = Path(tempfile.mkdtemp(prefix="candidate-a-", dir=stage_parent))
+    second = Path(tempfile.mkdtemp(prefix="candidate-b-", dir=stage_parent))
+    try:
+        arguments = {
+            "source_path": source_path,
+            "trusted_cache_roots": trusted_cache_roots,
+            "legacy_active_path": legacy_active_path,
+            "legacy_recovery_descriptor_path": legacy_recovery_descriptor_path,
+            "legacy_recovery_records_path": legacy_recovery_records_path,
+            "dataset_loader": dataset_loader,
+        }
+        first_report = build_canonical_pixel_rehash_candidate(**arguments, staging_root=first)
+        second_report = build_canonical_pixel_rehash_candidate(**arguments, staging_root=second)
+        first_bytes = _candidate_tree_bytes(first)
+        if first_report != second_report or first_bytes != _candidate_tree_bytes(second):
+            raise ValueError("independent canonical rehash candidates are not byte-identical")
+        retry_report = build_canonical_pixel_rehash_candidate(**arguments, staging_root=first)
+        if retry_report != first_report or _candidate_tree_bytes(first) != first_bytes:
+            raise ValueError("same-root canonical rehash retry is not byte-idempotent")
+        if verified_stage.exists():
+            if _candidate_tree_bytes(verified_stage) != first_bytes:
+                raise ValueError("verified stage already exists with different bytes")
+        else:
+            shutil.copytree(first, verified_stage)
+        return first_report
+    finally:
+        shutil.rmtree(first)
+        shutil.rmtree(second)
+
+
 def export_manifest_recovery(
     *,
     active_path: Path,
@@ -2901,8 +3272,9 @@ def export_manifest_recovery(
 
 
 def _validated_recovery_mapping(
-    recovery_descriptor_path: Path, *, maximum_bytes: int
-) -> tuple[dict[str, object], bytes]:
+    recovery_descriptor_path: Path,
+) -> tuple[dict[str, object], bytes, int]:
+    maximum_bytes = max(_manifest_recovery_limits(version)[0] for version in (1, 2))
     descriptor_bytes = _read_regular_nofollow(
         recovery_descriptor_path,
         label="recovery descriptor",
@@ -2914,13 +3286,17 @@ def _validated_recovery_mapping(
         raise _publication_error("recovery descriptor is not valid YAML") from error
     if not isinstance(recovery, dict):
         raise _publication_error("recovery descriptor must be a mapping")
+    declared_version = recovery.get("schema_version")
+    if isinstance(declared_version, bool) or declared_version not in {1, 2}:
+        raise _publication_error("recovery descriptor names an unsupported schema version")
+    version = int(declared_version)
     try:
-        validate_instance("manifest-recovery", recovery, version=1)
+        validate_instance("manifest-recovery", recovery, version=version)
     except ContractValidationError as error:
         raise _publication_error(f"recovery descriptor failed validation: {error}") from error
     if descriptor_bytes != _canonical_descriptor(recovery):
         raise _publication_error("recovery descriptor is not canonical YAML")
-    return recovery, descriptor_bytes
+    return recovery, descriptor_bytes, version
 
 
 def _stream_recovery_records(
@@ -2973,16 +3349,19 @@ def recover_active_manifest(
 ) -> dict[str, object]:
     """Verify and durably restore exactly the generation named by the active pointer."""
 
-    compressed_maximum, uncompressed_maximum = _manifest_recovery_limits()
-    recovery, _ = _validated_recovery_mapping(
-        recovery_descriptor_path, maximum_bytes=compressed_maximum
+    recovery, recovery_descriptor_bytes, recovery_version = _validated_recovery_mapping(
+        recovery_descriptor_path
     )
+    compressed_maximum, uncompressed_maximum = _manifest_recovery_limits(recovery_version)
     active_bytes = _read_regular_nofollow(
         active_path,
         label="active pointer",
         maximum_bytes=compressed_maximum,
     )
-    if hashlib.sha256(active_bytes).hexdigest() != recovery["active_pointer_sha256"]:
+    if (
+        recovery_version == 1
+        and hashlib.sha256(active_bytes).hexdigest() != recovery["active_pointer_sha256"]
+    ):
         raise _publication_error("active pointer checksum does not match recovery metadata")
 
     compressed_bytes = _read_regular_nofollow(
@@ -3025,16 +3404,40 @@ def recover_active_manifest(
     if not isinstance(descriptor, dict):  # pragma: no cover - shared contract already proves this
         raise _publication_error("embedded recovery descriptor is invalid")
     completed, pointer, descriptor_bytes, validated_records = _validate_generation_inputs(
-        descriptor, rows, allow_legacy_hash_provenance=True
+        descriptor,
+        rows,
+        allow_legacy_hash_provenance=recovery_version == 1,
     )
+    if recovery_version == 2:
+        if not recovery_descriptor_path.absolute().as_posix().endswith(
+            str(recovery["recovery_descriptor_path"])
+        ) or not recovery_records_path.absolute().as_posix().endswith(
+            str(recovery["recovery_records_path"])
+        ):
+            raise _publication_error("supplied recovery files disagree with bundle paths")
+        pointer.update(
+            {
+                "recovery_descriptor_path": recovery["recovery_descriptor_path"],
+                "recovery_descriptor_sha256": hashlib.sha256(recovery_descriptor_bytes).hexdigest(),
+                "recovery_records_path": recovery["recovery_records_path"],
+                "recovery_records_sha256": recovery["compressed_sha256"],
+            }
+        )
+        validate_instance("manifest-active", pointer, version=2)
     expected_pointer_bytes = _canonical_descriptor(pointer)
-    if (
+    identity_mismatch = (
         completed["generation_id"] != recovery["generation_id"]
         or hashlib.sha256(descriptor_bytes).hexdigest() != recovery["descriptor_sha256"]
         or validated_records != records_bytes
-        or hashlib.sha256(expected_pointer_bytes).hexdigest() != recovery["active_pointer_sha256"]
         or active_bytes != expected_pointer_bytes
-    ):
+    )
+    if recovery_version == 1:
+        identity_mismatch = (
+            identity_mismatch
+            or hashlib.sha256(expected_pointer_bytes).hexdigest()
+            != recovery["active_pointer_sha256"]
+        )
+    if identity_mismatch:
         raise _publication_error("reconstructed recovery identity does not match metadata")
 
     root = _reject_symlink_components(
@@ -3047,7 +3450,17 @@ def recover_active_manifest(
         generation_root=root,
         descriptor=completed,
         rows=rows,
-        allow_legacy_hash_provenance=True,
+        allow_legacy_hash_provenance=recovery_version == 1,
+        recovery_binding=(
+            {
+                "recovery_descriptor_path": recovery["recovery_descriptor_path"],
+                "recovery_descriptor_sha256": hashlib.sha256(recovery_descriptor_bytes).hexdigest(),
+                "recovery_records_path": recovery["recovery_records_path"],
+                "recovery_records_sha256": recovery["compressed_sha256"],
+            }
+            if recovery_version == 2
+            else None
+        ),
     )
     resolved_descriptor, resolved_rows = resolve_active_manifest(
         active_path=active_path, generation_root=root
@@ -3800,6 +4213,21 @@ def _parser() -> argparse.ArgumentParser:
     recover_active.add_argument("--recovery-descriptor", type=Path, required=True)
     recover_active.add_argument("--recovery-records", type=Path, required=True)
     recover_active.add_argument("--manifest-generation-root", type=Path, required=True)
+    candidate = commands.add_parser("build-canonical-pixel-rehash-candidate")
+    candidate.add_argument("--source", type=Path, required=True)
+    candidate.add_argument("--trusted-cache-root", type=Path, action="append", required=True)
+    candidate.add_argument("--legacy-manifest-active", type=Path, required=True)
+    candidate.add_argument("--legacy-recovery-descriptor", type=Path, required=True)
+    candidate.add_argument("--legacy-recovery-records", type=Path, required=True)
+    candidate.add_argument("--staging-root", type=Path, required=True)
+    determinism = commands.add_parser("verify-authoritative-determinism")
+    determinism.add_argument("--source", type=Path, required=True)
+    determinism.add_argument("--trusted-cache-root", type=Path, action="append", required=True)
+    determinism.add_argument("--legacy-manifest-active", type=Path, required=True)
+    determinism.add_argument("--legacy-recovery-descriptor", type=Path, required=True)
+    determinism.add_argument("--legacy-recovery-records", type=Path, required=True)
+    determinism.add_argument("--stage-parent", type=Path, required=True)
+    determinism.add_argument("--verified-stage", type=Path, required=True)
     migrate = commands.add_parser("migrate-authoritative")
     migration_commands = migrate.add_subparsers(dest="migration_command", required=True)
     migrate_audit = migration_commands.add_parser("audit")
@@ -3874,6 +4302,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             recovery_descriptor_path=arguments.recovery_descriptor,
             recovery_records_path=arguments.recovery_records,
             generation_root=arguments.manifest_generation_root,
+        )
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+    if arguments.command == "build-canonical-pixel-rehash-candidate":
+        report = build_canonical_pixel_rehash_candidate(
+            source_path=arguments.source,
+            trusted_cache_roots=arguments.trusted_cache_root,
+            legacy_active_path=arguments.legacy_manifest_active,
+            legacy_recovery_descriptor_path=arguments.legacy_recovery_descriptor,
+            legacy_recovery_records_path=arguments.legacy_recovery_records,
+            staging_root=arguments.staging_root,
+        )
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+    if arguments.command == "verify-authoritative-determinism":
+        report = verify_authoritative_determinism(
+            source_path=arguments.source,
+            trusted_cache_roots=arguments.trusted_cache_root,
+            legacy_active_path=arguments.legacy_manifest_active,
+            legacy_recovery_descriptor_path=arguments.legacy_recovery_descriptor,
+            legacy_recovery_records_path=arguments.legacy_recovery_records,
+            stage_parent=arguments.stage_parent,
+            verified_stage=arguments.verified_stage,
         )
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0

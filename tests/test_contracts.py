@@ -597,7 +597,7 @@ def test_semantic_validation_runs_after_structural_validation(
 ) -> None:
     calls: list[str] = []
 
-    def semantic_marker(schema_id: str, _instance: object) -> list[str]:
+    def semantic_marker(schema_id: str, _version: int, _instance: object) -> list[str]:
         calls.append(schema_id)
         return ["instance $: semantic marker"]
 
@@ -800,9 +800,7 @@ def test_manifest_recovery_v2_contract_accepts_non_cyclic_bundle() -> None:
 )
 def test_manifest_recovery_v2_rejects_cyclic_or_mismatched_identity(mutation: str) -> None:
     recovery = _recovery_v2_record()
-    if mutation == "active_pointer_sha256":
-        recovery[mutation] = "f" * 64
-    elif mutation == "bundle_id":
+    if mutation in {"active_pointer_sha256", "bundle_id"}:
         recovery[mutation] = "f" * 64
     elif mutation in {"descriptor_path", "records_path"}:
         recovery[mutation] = recovery[mutation].replace(recovery["generation_id"], "f" * 64)

@@ -1702,7 +1702,7 @@ def test_canonical_rehash_candidate_rejects_protected_evidence_drift(
         lambda _root: copy.deepcopy(_compact_v2_descriptor(corrected)["source_provenance"]),
     )
 
-    with pytest.raises(ValueError, match="protected|AUDITED_LOCKED"):
+    with pytest.raises(ValueError, match=r"protected|AUDITED_LOCKED"):
         smb_audit.build_canonical_pixel_rehash_candidate(
             source_path=Path(__file__).parents[1] / "data" / "sources" / "smb.yaml",
             trusted_cache_roots=(tmp_path,),
@@ -1711,6 +1711,63 @@ def test_canonical_rehash_candidate_rejects_protected_evidence_drift(
             legacy_recovery_records_path=recovery_records,
             staging_root=tmp_path / "candidate",
         )
+
+
+def test_verify_authoritative_determinism_materializes_only_verified_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[Path] = []
+
+    def fake_builder(*, staging_root: Path, **_kwargs: object) -> dict[str, object]:
+        calls.append(staging_root)
+        staging_root.mkdir(parents=True, exist_ok=True)
+        (staging_root / "candidate.yaml").write_bytes(b"candidate: stable\n")
+        return {"generation_id": "a" * 64, "row_count": 685}
+
+    monkeypatch.setattr(smb_audit, "build_canonical_pixel_rehash_candidate", fake_builder)
+    verified = tmp_path / "verified"
+    report = smb_audit.verify_authoritative_determinism(
+        source_path=tmp_path / "source.yaml",
+        trusted_cache_roots=(tmp_path,),
+        legacy_active_path=tmp_path / "active.yaml",
+        legacy_recovery_descriptor_path=tmp_path / "recovery.yaml",
+        legacy_recovery_records_path=tmp_path / "recovery.jsonl.gz",
+        stage_parent=tmp_path / "stages",
+        verified_stage=verified,
+    )
+
+    assert report == {"generation_id": "a" * 64, "row_count": 685}
+    assert (verified / "candidate.yaml").read_bytes() == b"candidate: stable\n"
+    assert len(calls) == 3
+    assert calls[0] == calls[2]
+    assert calls[0] != calls[1]
+
+
+def test_verify_authoritative_determinism_rejects_independent_byte_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    call_count = 0
+
+    def fake_builder(*, staging_root: Path, **_kwargs: object) -> dict[str, object]:
+        nonlocal call_count
+        call_count += 1
+        staging_root.mkdir(parents=True, exist_ok=True)
+        (staging_root / "candidate.yaml").write_bytes(f"call: {call_count}\n".encode())
+        return {"generation_id": "a" * 64}
+
+    monkeypatch.setattr(smb_audit, "build_canonical_pixel_rehash_candidate", fake_builder)
+    verified = tmp_path / "verified"
+    with pytest.raises(ValueError, match="byte-identical"):
+        smb_audit.verify_authoritative_determinism(
+            source_path=tmp_path / "source.yaml",
+            trusted_cache_roots=(tmp_path,),
+            legacy_active_path=tmp_path / "active.yaml",
+            legacy_recovery_descriptor_path=tmp_path / "recovery.yaml",
+            legacy_recovery_records_path=tmp_path / "recovery.jsonl.gz",
+            stage_parent=tmp_path / "stages",
+            verified_stage=verified,
+        )
+    assert not verified.exists()
 
 
 def _rewrite_recovery_descriptor(path: Path, recovery: dict[str, Any]) -> None:
