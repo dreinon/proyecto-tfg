@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 from datetime import date
 from pathlib import Path
@@ -15,8 +14,8 @@ from IPython.display import clear_output
 
 from score_super_resolution.benchmark_policy import BenchmarkPurpose
 from score_super_resolution.review_evidence import (
-    canonical_review_csv,
     read_review,
+    save_review,
     validate_human_cell,
 )
 from score_super_resolution.smb import load_smb
@@ -50,6 +49,7 @@ class SMBReviewSession:
             raise RuntimeError("Could not locate the proyecto/ root")
         self.review_path = self.root / "data/audits/smb-review-v1.csv"
         self.sample_path = self.root / "data/audits/smb-visual-sample-v1.csv"
+        self.reload()
         sample = pd.read_csv(self.sample_path, dtype=str)
         self.sample_ids = sample["item_id"].tolist()
         self.visual_item_ids = self.sample_ids + sorted(EXCEPTION_IDS - set(self.sample_ids))
@@ -65,17 +65,26 @@ class SMBReviewSession:
         )
 
     def read_rows(self) -> list[dict[str, str]]:
-        return list(read_review(self.review_path).rows)
+        return [row.copy() for row in self._rows]
+
+    def reload(self) -> str:
+        """Explicitly refresh this session after a stale-write rejection."""
+
+        document = read_review(self.review_path)
+        self._rows = [row.copy() for row in document.rows]
+        self.expected_sha256 = document.sha256
+        return document.sha256
 
     def write_rows(self, rows: list[dict[str, str]]) -> None:
-        """Atomically save without changing the header or row order."""
-        content = canonical_review_csv(rows)
-        temporary = self.review_path.with_suffix(".csv.tmp")
-        with temporary.open("wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, self.review_path)
+        """Durably compare-and-swap without changing the header or row order."""
+
+        new_sha256 = save_review(
+            self.review_path,
+            rows,
+            expected_sha256=self.expected_sha256,
+        )
+        self._rows = [row.copy() for row in rows]
+        self.expected_sha256 = new_sha256
 
     def summary(self) -> dict[str, int]:
         rows = self.read_rows()

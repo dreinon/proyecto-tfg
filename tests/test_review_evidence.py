@@ -184,6 +184,7 @@ def test_stale_session_can_reload_then_save_without_repeating_review(
         suitability="suitable",
         rationale="edición confirmada",
     )
+    assert first.expected_sha256 == read_review(review_path).sha256
 
     with pytest.raises(StaleReviewError, match="reload"):
         stale.save_item(
@@ -202,6 +203,7 @@ def test_stale_session_can_reload_then_save_without_repeating_review(
         suitability="suitable",
         rationale="edición conservada en sesión",
     )
+    assert stale.expected_sha256 == read_review(review_path).sha256
     rows = read_review(review_path).rows
     assert rows[0]["rationale"] == "edición confirmada"
     assert rows[1]["rationale"] == "edición conservada en sesión"
