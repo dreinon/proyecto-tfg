@@ -5,6 +5,7 @@ import copy
 import csv
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ from score_super_resolution.smb_audit import (
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "smb" / "records.json"
 SOURCE_PATH = Path(__file__).parents[1] / "data" / "sources" / "smb.yaml"
+INLINE_TRUSTED_CACHE_ROOTS = (Path.cwd(),)
 
 
 def _fixtures() -> dict[str, Any]:
@@ -80,7 +82,12 @@ def test_audit_guard_runs_before_decode_and_hash(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(smb_audit.Image, "open", open_after_guard)
 
     record = _audit_records()[0]
-    row = audit_item(record, upstream_index=0, source_descriptor=_source_descriptor())
+    row = audit_item(
+        record,
+        upstream_index=0,
+        source_descriptor=_source_descriptor(),
+        trusted_cache_roots=INLINE_TRUSTED_CACHE_ROOTS,
+    )
 
     assert events[:2] == ["guard", "decode"]
     assert row["processing_status"] == "processed"
@@ -90,7 +97,11 @@ def test_audit_guard_runs_before_decode_and_hash(monkeypatch: pytest.MonkeyPatch
 def test_fixture_audit_preserves_every_input_and_candidate_state() -> None:
     records = _audit_records()
     rows = audit_dataset(
-        records, source_descriptor=_source_descriptor(), sample_size=3, max_pixels=2048
+        records,
+        source_descriptor=_source_descriptor(),
+        trusted_cache_roots=INLINE_TRUSTED_CACHE_ROOTS,
+        sample_size=3,
+        max_pixels=2048,
     )
 
     assert len(rows) == len(records)
@@ -124,12 +135,167 @@ def test_audit_accepts_smb_xywh_region_mapping() -> None:
     record = _audit_records()[0]
     record["regions"] = [{"bbox": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}}]
 
-    row = audit_item(record, upstream_index=0, source_descriptor=_source_descriptor())
+    row = audit_item(
+        record,
+        upstream_index=0,
+        source_descriptor=_source_descriptor(),
+        trusted_cache_roots=INLINE_TRUSTED_CACHE_ROOTS,
+    )
 
     assert row["region_count"] == 1
     assert row["bbox_valid"] is True
     assert row["paired_eligible"] is True
     assert row["paired_ineligibility_reason"] is None
+
+
+def _path_record(path: str | Path) -> dict[str, Any]:
+    record = _audit_records()[0]
+    record["image"] = {"path": str(path)}
+    return record
+
+
+def _audit_path(path: str | Path, *, trusted_cache_root: Path) -> dict[str, object]:
+    return audit_item(
+        _path_record(path),
+        upstream_index=0,
+        source_descriptor=_source_descriptor(),
+        trusted_cache_roots=(trusted_cache_root,),
+    )
+
+
+def test_inline_and_trusted_cache_file_have_identical_encoded_hashes(tmp_path: Path) -> None:
+    encoded = _audit_records()[0]["image"]
+    cache_root = tmp_path / "huggingface" / "datasets"
+    cache_root.mkdir(parents=True)
+    cached_image = cache_root / "dataset" / "image.png"
+    cached_image.parent.mkdir()
+    cached_image.write_bytes(encoded)
+
+    inline = audit_item(
+        _audit_records()[0],
+        upstream_index=0,
+        source_descriptor=_source_descriptor(),
+        trusted_cache_roots=(cache_root,),
+    )
+    path_backed = _audit_path(cached_image, trusted_cache_root=cache_root)
+
+    expected_hash = hashlib.sha256(encoded).hexdigest()
+    assert inline["encoded_sha256"] == path_backed["encoded_sha256"] == expected_hash
+    assert inline["processing_status"] == path_backed["processing_status"] == "processed"
+
+
+def test_remote_path_cannot_disclose_etc_hostname(tmp_path: Path) -> None:
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    hostname_bytes = Path("/etc/hostname").read_bytes()
+
+    row = _audit_path("/etc/hostname", trusted_cache_root=cache_root)
+    persisted = json.dumps(row, sort_keys=True)
+
+    assert row["processing_status"] == "failed"
+    assert row["unprocessable_reason"] == "image_path_outside_trusted_cache"
+    assert row["encoded_sha256"] is None
+    assert "/etc/hostname" not in persisted
+    assert hostname_bytes.decode(errors="ignore").strip() not in persisted
+
+
+def test_remote_paths_reject_traversal_prefix_and_symlink_escapes(tmp_path: Path) -> None:
+    encoded = _audit_records()[0]["image"]
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_image = outside / "outside.png"
+    outside_image.write_bytes(encoded)
+    sibling = tmp_path / "cache-sibling"
+    sibling.mkdir()
+    sibling_image = sibling / "sibling.png"
+    sibling_image.write_bytes(encoded)
+    parent_link = cache_root / "linked-parent"
+    parent_link.symlink_to(outside, target_is_directory=True)
+    final_link = cache_root / "linked-file.png"
+    final_link.symlink_to(outside_image)
+
+    rejected = {
+        "traversal": cache_root / ".." / "outside" / "outside.png",
+        "sibling-prefix": sibling_image,
+        "parent-symlink": parent_link / "outside.png",
+        "final-symlink": final_link,
+        "nul": f"{cache_root}/image.png\0ignored",
+    }
+    allowed_codes = {
+        "image_path_invalid",
+        "image_path_outside_trusted_cache",
+        "image_path_symlink",
+    }
+
+    for label, path in rejected.items():
+        row = _audit_path(path, trusted_cache_root=cache_root)
+        persisted = json.dumps(row, sort_keys=True)
+        assert row["processing_status"] == "failed", label
+        assert row["unprocessable_reason"] in allowed_codes, label
+        assert row["encoded_sha256"] is None, label
+        assert str(path) not in persisted, label
+
+
+def test_non_regular_cache_path_is_rejected_without_blocking(tmp_path: Path) -> None:
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    fifo = cache_root / "image.fifo"
+    os.mkfifo(fifo)
+
+    row = _audit_path(fifo, trusted_cache_root=cache_root)
+
+    assert row["processing_status"] == "failed"
+    assert row["unprocessable_reason"] == "image_path_not_regular"
+    assert row["encoded_sha256"] is None
+    assert str(fifo) not in json.dumps(row, sort_keys=True)
+
+
+def test_path_swap_between_validation_and_open_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    encoded = _audit_records()[0]["image"]
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    candidate = cache_root / "image.png"
+    candidate.write_bytes(encoded)
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(encoded)
+    original_open = os.open
+    swapped = False
+
+    def swap_before_final_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if path == candidate.name and dir_fd is not None and not swapped:
+            candidate.unlink()
+            candidate.symlink_to(outside)
+            swapped = True
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(smb_audit.os, "open", swap_before_final_open)
+    row = _audit_path(candidate, trusted_cache_root=cache_root)
+
+    assert swapped is True
+    assert row["processing_status"] == "failed"
+    assert row["unprocessable_reason"] == "image_path_symlink"
+    assert row["encoded_sha256"] is None
+
+
+def test_audit_requires_an_explicit_non_empty_trusted_cache_root() -> None:
+    with pytest.raises(ValueError, match="trusted_cache_roots"):
+        audit_dataset(
+            _audit_records(),
+            source_descriptor=_source_descriptor(),
+            trusted_cache_roots=(),
+            sample_size=3,
+        )
 
 
 def test_visual_sample_is_exact_deterministic_and_outcome_independent() -> None:
