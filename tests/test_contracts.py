@@ -319,6 +319,17 @@ def _fixture(name: str) -> dict[str, dict[str, Any]]:
     return json.loads((FIXTURE_ROOT / name).read_text(encoding="utf-8"))
 
 
+def _tracked_v2_manifest_rows() -> list[dict[str, Any]]:
+    recovery_records = (
+        Path(__file__).parents[1]
+        / "data"
+        / "manifests"
+        / "smb-evaluation-v1-recovery.jsonl.gz"
+    )
+    payload = gzip.decompress(recovery_records.read_bytes()).decode("utf-8")
+    return [json.loads(line) for line in payload.splitlines()]
+
+
 def test_all_v1_schemas_self_validate() -> None:
     for schema_id in SCHEMA_IDS:
         schema = load_schema(schema_id)
@@ -491,6 +502,80 @@ def test_valid_leap_day_passes() -> None:
     instance = _fixture("valid-records.json")["claim_evidence_reviewed_leap_day"]["instance"]
 
     validate_instance("claim-evidence", instance)
+
+
+@pytest.mark.parametrize("reviewed_at", ("2026-02-29", "2026-02-30"))
+def test_manifest_visual_review_date_rejects_impossible_calendar_day(reviewed_at: str) -> None:
+    row = next(
+        copy.deepcopy(row)
+        for row in _tracked_v2_manifest_rows()
+        if row["visual_review"]["status"] == "sampled_human_reviewed"
+    )
+    row["visual_review"]["reviewed_at"] = reviewed_at
+
+    with pytest.raises(
+        ContractValidationError,
+        match=r"\$\.visual_review\.reviewed_at",
+    ):
+        validate_instance("manifest-row", row, version=2)
+
+
+@pytest.mark.parametrize("reviewed_at", ("2026-02-29", "2026-02-30"))
+def test_manifest_perceptual_review_date_rejects_impossible_calendar_day(
+    reviewed_at: str,
+) -> None:
+    row = next(
+        copy.deepcopy(row)
+        for row in _tracked_v2_manifest_rows()
+        if any(
+            relation["candidate_type"] == "perceptual"
+            and relation["disposition"] in {"distinct", "duplicate", "related"}
+            for relation in row["duplicate_relations"]
+        )
+    )
+    relation_index = next(
+        index
+        for index, relation in enumerate(row["duplicate_relations"])
+        if relation["candidate_type"] == "perceptual"
+        and relation["disposition"] in {"distinct", "duplicate", "related"}
+    )
+    row["duplicate_relations"][relation_index]["reviewed_at"] = reviewed_at
+
+    with pytest.raises(
+        ContractValidationError,
+        match=rf"\$\.duplicate_relations\[{relation_index}\]\.reviewed_at",
+    ):
+        validate_instance("manifest-row", row, version=2)
+
+
+@pytest.mark.parametrize("evidence_branch", ("visual", "perceptual"))
+def test_manifest_nested_review_date_accepts_valid_leap_day(evidence_branch: str) -> None:
+    if evidence_branch == "visual":
+        row = next(
+            copy.deepcopy(row)
+            for row in _tracked_v2_manifest_rows()
+            if row["visual_review"]["status"] == "sampled_human_reviewed"
+        )
+        row["visual_review"]["reviewed_at"] = "2024-02-29"
+    else:
+        row = next(
+            copy.deepcopy(row)
+            for row in _tracked_v2_manifest_rows()
+            if any(
+                relation["candidate_type"] == "perceptual"
+                and relation["disposition"] in {"distinct", "duplicate", "related"}
+                for relation in row["duplicate_relations"]
+            )
+        )
+        relation = next(
+            relation
+            for relation in row["duplicate_relations"]
+            if relation["candidate_type"] == "perceptual"
+            and relation["disposition"] in {"distinct", "duplicate", "related"}
+        )
+        relation["reviewed_at"] = "2024-02-29"
+
+    validate_instance("manifest-row", row, version=2)
 
 
 def test_run_timestamp_rejects_hour_77() -> None:
