@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+import score_super_resolution.smb_audit as smb_audit
 from score_super_resolution.contracts import (
     ContractValidationError,
     load_schema,
@@ -272,3 +274,162 @@ def test_manifest_candidate_ids_must_be_in_canonical_order() -> None:
 
     with pytest.raises(ContractValidationError, match=r"\$\.near_duplicate_candidate_ids"):
         validate_instance("manifest-row", row)
+
+
+def _git(repository: Path, *arguments: str) -> None:
+    subprocess.run(
+        ["git", *arguments],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _provenance_repository(tmp_path: Path) -> Path:
+    repository = tmp_path / "proyecto"
+    (repository / "src" / "score_super_resolution").mkdir(parents=True)
+    (repository / "data" / "schemas" / "v1").mkdir(parents=True)
+    (repository / "artifacts").mkdir()
+    (repository / "src" / "score_super_resolution" / "alpha.py").write_text(
+        "VALUE = 'alpha'\n", encoding="utf-8"
+    )
+    (repository / "src" / "score_super_resolution" / "beta.py").write_text(
+        "VALUE = 'beta'\n", encoding="utf-8"
+    )
+    (repository / "data" / "schemas" / "v1" / "record.schema.json").write_text(
+        '{"type":"object"}\n', encoding="utf-8"
+    )
+    (repository / "pyproject.toml").write_text('[project]\nname = "fixture"\n', encoding="utf-8")
+    (repository / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    (repository / ".gitignore").write_text("artifacts/\n", encoding="utf-8")
+    _git(repository, "init", "-q")
+    _git(repository, "config", "user.name", "SMB provenance test")
+    _git(repository, "config", "user.email", "smb-provenance@example.invalid")
+    _git(repository, "add", ".gitignore", "data", "pyproject.toml", "src", "uv.lock")
+    _git(repository, "commit", "-q", "-m", "fixture")
+    return repository
+
+
+def test_audit_source_provenance_is_explicit_and_path_order_independent(tmp_path: Path) -> None:
+    repository = _provenance_repository(tmp_path)
+    paths = smb_audit._authoritative_audit_source_paths(repository)
+
+    provenance = smb_audit.audit_source_provenance(repository)
+    forward = smb_audit._source_tree_sha256(repository, paths)
+    reverse = smb_audit._source_tree_sha256(repository, reversed(paths))
+
+    assert provenance["source_set_version"] == 1
+    assert provenance["algorithm"] == "sha256"
+    assert (
+        provenance["revision"]
+        == subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    assert provenance["dirty"] is False
+    assert provenance["source_tree_sha256"] == forward == reverse
+    assert set(provenance) == {
+        "algorithm",
+        "dirty",
+        "lock_sha256",
+        "patch_sha256",
+        "revision",
+        "source_set_version",
+        "source_tree_sha256",
+    }
+    assert all(
+        len(provenance[field]) == 64
+        for field in (
+            "source_tree_sha256",
+            "patch_sha256",
+            "lock_sha256",
+        )
+    )
+
+
+def test_tracked_dirty_source_changes_tree_and_patch_without_serializing_content(
+    tmp_path: Path,
+) -> None:
+    repository = _provenance_repository(tmp_path)
+    clean = smb_audit.audit_source_provenance(repository)
+    secret_sentinel = "HF_TOKEN=must-not-appear-in-provenance"
+    source = repository / "src" / "score_super_resolution" / "alpha.py"
+    source.write_text(f"VALUE = {secret_sentinel!r}\n", encoding="utf-8")
+
+    dirty = smb_audit.audit_source_provenance(repository)
+    serialized = json.dumps(dirty, sort_keys=True)
+
+    assert dirty["dirty"] is True
+    assert dirty["revision"] == clean["revision"]
+    assert dirty["source_tree_sha256"] != clean["source_tree_sha256"]
+    assert dirty["patch_sha256"] != clean["patch_sha256"]
+    assert secret_sentinel not in serialized
+    assert str(repository) not in serialized
+
+
+def test_untracked_relevant_source_changes_actual_tree_and_patch_identity(tmp_path: Path) -> None:
+    repository = _provenance_repository(tmp_path)
+    clean = smb_audit.audit_source_provenance(repository)
+    untracked = repository / "src" / "score_super_resolution" / "new_source.py"
+    untracked.write_text("VALUE = 'untracked'\n", encoding="utf-8")
+
+    dirty = smb_audit.audit_source_provenance(repository)
+
+    assert dirty["dirty"] is True
+    assert dirty["source_tree_sha256"] != clean["source_tree_sha256"]
+    assert dirty["patch_sha256"] != clean["patch_sha256"]
+
+
+def test_lock_mutation_changes_lock_and_tree_identity(tmp_path: Path) -> None:
+    repository = _provenance_repository(tmp_path)
+    clean = smb_audit.audit_source_provenance(repository)
+    (repository / "uv.lock").write_text("version = 2\n", encoding="utf-8")
+
+    dirty = smb_audit.audit_source_provenance(repository)
+
+    assert dirty["dirty"] is True
+    assert dirty["lock_sha256"] != clean["lock_sha256"]
+    assert dirty["source_tree_sha256"] != clean["source_tree_sha256"]
+    assert dirty["patch_sha256"] != clean["patch_sha256"]
+
+
+def test_ignored_unrelated_artifact_does_not_change_audit_source_identity(tmp_path: Path) -> None:
+    repository = _provenance_repository(tmp_path)
+    before = smb_audit.audit_source_provenance(repository)
+    (repository / "artifacts" / "runtime-output.bin").write_bytes(b"generated output")
+
+    after = smb_audit.audit_source_provenance(repository)
+
+    assert after == before
+
+
+@pytest.mark.parametrize("missing", ("git", "source", "lock"))
+def test_authoritative_provenance_fails_closed_when_facts_are_missing(
+    tmp_path: Path, missing: str
+) -> None:
+    repository = _provenance_repository(tmp_path)
+    if missing == "git":
+        target = repository.parent / "without-git"
+        target.mkdir()
+        (target / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+        (target / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+        (target / "src" / "score_super_resolution").mkdir(parents=True)
+        (target / "src" / "score_super_resolution" / "source.py").write_text(
+            "VALUE = 1\n", encoding="utf-8"
+        )
+        (target / "data" / "schemas").mkdir(parents=True)
+        (target / "data" / "schemas" / "schema.json").write_text("{}\n", encoding="utf-8")
+        repository = target
+    elif missing == "source":
+        (repository / "src" / "score_super_resolution" / "alpha.py").unlink()
+        (repository / "src" / "score_super_resolution" / "beta.py").unlink()
+    else:
+        (repository / "uv.lock").unlink()
+
+    with pytest.raises(RuntimeError, match="provenance"):
+        smb_audit.audit_source_provenance(repository)
