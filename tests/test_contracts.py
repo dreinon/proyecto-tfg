@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import copy
+import gzip
+import hashlib
+import io
 import json
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 import score_super_resolution.contracts as contracts
 from score_super_resolution.contracts import (
@@ -43,6 +47,164 @@ MODEL_FORBIDDEN_FIELDS = (
     "smb_result",
     "smb_results",
 )
+
+RECOVERY_REQUIRED_FIELDS = (
+    "schema_version",
+    "record_type",
+    "manifest_id",
+    "generation_id",
+    "active_pointer_path",
+    "active_pointer_sha256",
+    "descriptor_path",
+    "descriptor_sha256",
+    "descriptor_yaml",
+    "records_path",
+    "row_schema_id",
+    "row_schema_version",
+    "row_count",
+    "records_sha256",
+    "source_revision",
+    "source_provenance",
+    "audit_version",
+    "benchmark_state",
+    "recovery_records_path",
+    "compression",
+    "compressed_sha256",
+    "compressed_size_bytes",
+    "uncompressed_size_bytes",
+    "recovery_command",
+    "metadata_sha256",
+)
+
+
+def _canonical_yaml(record: dict[str, Any]) -> bytes:
+    return yaml.safe_dump(
+        record, allow_unicode=True, sort_keys=True, default_flow_style=False
+    ).encode("utf-8")
+
+
+def _recovery_metadata_sha256(record: dict[str, Any]) -> str:
+    unsigned = {key: value for key, value in record.items() if key != "metadata_sha256"}
+    payload = json.dumps(
+        unsigned,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(b"manifest-recovery-metadata-v1\0" + payload).hexdigest()
+
+
+def _recovery_record() -> dict[str, Any]:
+    descriptor = copy.deepcopy(_fixtures()["manifest_descriptor"]["instance"])
+    descriptor.update(
+        {
+            "schema_version": 2,
+            "manifest_id": "smb-evaluation-v2",
+            "generation_algorithm": {
+                **descriptor["generation_algorithm"],
+                "version": 2,
+                "domain_separator": "smb-manifest-generation-v2",
+            },
+            "source_provenance": {
+                "source_set_version": 1,
+                "algorithm": "sha256",
+                "revision": "b" * 40,
+                "dirty": True,
+                "source_tree_sha256": "7" * 64,
+                "patch_sha256": "8" * 64,
+                "lock_sha256": "9" * 64,
+            },
+            "row_schema_version": 2,
+            "audit_version": "smb-audit-v2",
+            "review_inference": {
+                "automated_population_audit_count": 685,
+                "sampled_human_review_count": 64,
+                "targeted_human_review_count": 0,
+                "not_visually_reviewed_count": 621,
+                "unavailable_visual_review_count": 0,
+                "not_applicable_visual_review_count": 0,
+                "exact_pair_automated_count": 0,
+                "perceptual_pair_count": 0,
+                "perceptual_pair_human_review_count": 0,
+                "perceptual_pair_pending_count": 0,
+                "inference_scope": "sample_observation_only",
+                "population_prevalence_inference": "not_supported",
+            },
+        }
+    )
+    descriptor.pop("code_revision", None)
+    records_bytes = b"{}\n"
+    descriptor["records_sha256"] = hashlib.sha256(records_bytes).hexdigest()
+    descriptor.pop("generation_id", None)
+    generation_id = hashlib.sha256(
+        b"smb-manifest-generation-v2\0" + _canonical_yaml(descriptor) + b"\0" + records_bytes
+    ).hexdigest()
+    descriptor["generation_id"] = generation_id
+    descriptor_bytes = _canonical_yaml(descriptor)
+    pointer = {
+        "schema_version": 2,
+        "record_type": "manifest-active",
+        "manifest_id": "smb-evaluation-v2",
+        "generation_id": generation_id,
+        "descriptor_path": f"{generation_id}/manifest-descriptor.yaml",
+        "records_path": f"{generation_id}/manifest-records.jsonl",
+        "row_schema_id": "manifest-row",
+        "row_schema_version": 2,
+        "row_count": 685,
+        "records_sha256": descriptor["records_sha256"],
+    }
+    compressed_buffer = io.BytesIO()
+    with gzip.GzipFile(
+        fileobj=compressed_buffer, mode="wb", filename="", compresslevel=9, mtime=0
+    ) as handle:
+        handle.write(records_bytes)
+    compressed = compressed_buffer.getvalue()
+    recovery = {
+        "schema_version": 1,
+        "record_type": "manifest-recovery",
+        "manifest_id": "smb-evaluation-v2",
+        "generation_id": generation_id,
+        "active_pointer_path": "data/manifests/smb-evaluation-v1.yaml",
+        "active_pointer_sha256": hashlib.sha256(_canonical_yaml(pointer)).hexdigest(),
+        "descriptor_path": pointer["descriptor_path"],
+        "descriptor_sha256": hashlib.sha256(descriptor_bytes).hexdigest(),
+        "descriptor_yaml": descriptor_bytes.decode("utf-8"),
+        "records_path": pointer["records_path"],
+        "row_schema_id": "manifest-row",
+        "row_schema_version": 2,
+        "row_count": 685,
+        "records_sha256": descriptor["records_sha256"],
+        "source_revision": descriptor["source_revision"],
+        "source_provenance": descriptor["source_provenance"],
+        "audit_version": "smb-audit-v2",
+        "benchmark_state": "AUDITED_LOCKED",
+        "recovery_records_path": ("data/manifests/smb-evaluation-v1-recovery.jsonl.gz"),
+        "compression": {
+            "algorithm": "gzip",
+            "format_version": 1,
+            "compresslevel": 9,
+            "mtime": 0,
+            "filename": "",
+        },
+        "compressed_sha256": hashlib.sha256(compressed).hexdigest(),
+        "compressed_size_bytes": len(compressed),
+        "uncompressed_size_bytes": len(records_bytes),
+        "recovery_command": (
+            "uv run python -m score_super_resolution.smb_audit recover-active "
+            "--manifest-active data/manifests/smb-evaluation-v1.yaml "
+            "--recovery-descriptor data/manifests/smb-evaluation-v1-recovery.yaml "
+            "--recovery-records data/manifests/smb-evaluation-v1-recovery.jsonl.gz "
+            "--manifest-generation-root artifacts/smb-manifests/generations"
+        ),
+        "metadata_sha256": "",
+    }
+    recovery["metadata_sha256"] = _recovery_metadata_sha256(recovery)
+    return recovery
+
+
+def _resign_recovery(record: dict[str, Any]) -> None:
+    record["metadata_sha256"] = _recovery_metadata_sha256(record)
 
 
 def _fixture(name: str) -> dict[str, dict[str, Any]]:
@@ -394,3 +556,106 @@ def test_registry_rejects_schema_id_mismatch(
 
     with pytest.raises(ContractValidationError, match="unexpected schema id"):
         load_schema("broken")
+
+
+def test_manifest_recovery_contract_accepts_complete_exact_mapping() -> None:
+    recovery = _recovery_record()
+
+    validate_instance("manifest-recovery", recovery, version=1)
+
+
+@pytest.mark.parametrize("field", RECOVERY_REQUIRED_FIELDS)
+def test_manifest_recovery_contract_rejects_every_missing_field(field: str) -> None:
+    recovery = _recovery_record()
+    del recovery[field]
+
+    with pytest.raises(ContractValidationError):
+        validate_instance("manifest-recovery", recovery, version=1)
+
+
+def test_manifest_recovery_contract_rejects_unknown_fields() -> None:
+    recovery = _recovery_record()
+    recovery["unknown_field"] = True
+
+    with pytest.raises(ContractValidationError, match="additional properties"):
+        validate_instance("manifest-recovery", recovery, version=1)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("schema_version", 2),
+        ("record_type", "manifest-active"),
+        ("generation_id", "not-a-digest"),
+        ("active_pointer_path", "/tmp/active.yaml"),
+        ("descriptor_path", "../manifest-descriptor.yaml"),
+        ("recovery_records_path", "../recovery.gz"),
+        ("compressed_sha256", "f" * 63),
+        ("compressed_size_bytes", 2_097_153),
+        ("uncompressed_size_bytes", 16_777_217),
+    ),
+)
+def test_manifest_recovery_contract_rejects_malformed_or_oversized_fields(
+    field: str, value: object
+) -> None:
+    recovery = _recovery_record()
+    recovery[field] = value
+    _resign_recovery(recovery)
+
+    with pytest.raises(ContractValidationError):
+        validate_instance("manifest-recovery", recovery, version=1)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "generation_id",
+        "active_pointer_sha256",
+        "descriptor_sha256",
+        "records_sha256",
+        "row_count",
+        "row_schema_version",
+        "source_revision",
+        "source_tree_sha256",
+        "patch_sha256",
+        "lock_sha256",
+        "audit_version",
+        "benchmark_state",
+    ),
+)
+def test_manifest_recovery_contract_rejects_independent_cross_field_mutations(
+    mutation: str,
+) -> None:
+    recovery = _recovery_record()
+    if mutation in {"source_tree_sha256", "patch_sha256", "lock_sha256"}:
+        recovery["source_provenance"][mutation] = "e" * 64
+    elif mutation == "row_count":
+        recovery[mutation] = 684
+    elif mutation == "row_schema_version":
+        recovery[mutation] = 1
+    elif mutation == "audit_version":
+        recovery[mutation] = "smb-audit-v1"
+    elif mutation == "benchmark_state":
+        recovery[mutation] = "LOCKED"
+    elif mutation == "source_revision":
+        recovery[mutation] = "e" * 40
+    else:
+        recovery[mutation] = "e" * 64
+    _resign_recovery(recovery)
+
+    with pytest.raises(ContractValidationError):
+        validate_instance("manifest-recovery", recovery, version=1)
+
+
+def test_manifest_recovery_contract_rejects_embedded_descriptor_mutation() -> None:
+    recovery = _recovery_record()
+    descriptor = yaml.safe_load(recovery["descriptor_yaml"])
+    descriptor["source_revision"] = "e" * 40
+    recovery["descriptor_yaml"] = _canonical_yaml(descriptor).decode("utf-8")
+    recovery["descriptor_sha256"] = hashlib.sha256(
+        recovery["descriptor_yaml"].encode("utf-8")
+    ).hexdigest()
+    _resign_recovery(recovery)
+
+    with pytest.raises(ContractValidationError):
+        validate_instance("manifest-recovery", recovery, version=1)

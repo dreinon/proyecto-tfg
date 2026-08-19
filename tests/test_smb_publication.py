@@ -3,8 +3,10 @@ from __future__ import annotations
 import ast
 import copy
 import csv
+import gzip
 import hashlib
 import inspect
+import io
 import json
 import os
 import subprocess
@@ -18,6 +20,7 @@ import pytest
 import yaml
 
 import score_super_resolution.smb_audit as smb_audit
+from score_super_resolution.contracts import load_schema, recovery_metadata_sha256
 from score_super_resolution.smb_review_ui import SMBReviewSession
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "smb" / "records.json"
@@ -1025,4 +1028,210 @@ def test_partial_and_unreferenced_generations_are_never_inferred_as_active(tmp_p
     )
 
     assert descriptor["generation_id"] == active["generation_id"]
+    assert len(rows) == 685
+
+
+def _export_recovery_bundle(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    rows = _compact_v2_rows()
+    descriptor = _compact_v2_descriptor(rows)
+    active_path = tmp_path / "data" / "manifests" / "smb-evaluation-v1.yaml"
+    source_root = tmp_path / "source-generations"
+    recovery_descriptor = tmp_path / "data" / "manifests" / "smb-evaluation-v1-recovery.yaml"
+    recovery_records = tmp_path / "data" / "manifests" / "smb-evaluation-v1-recovery.jsonl.gz"
+    smb_audit.publish_manifest_generation(
+        active_path=active_path,
+        generation_root=source_root,
+        descriptor=descriptor,
+        rows=rows,
+    )
+    smb_audit.export_manifest_recovery(
+        active_path=active_path,
+        generation_root=source_root,
+        recovery_descriptor_path=recovery_descriptor,
+        recovery_records_path=recovery_records,
+    )
+    return active_path, source_root, recovery_descriptor, recovery_records
+
+
+def _rewrite_recovery_descriptor(path: Path, recovery: dict[str, Any]) -> None:
+    recovery["metadata_sha256"] = recovery_metadata_sha256(recovery)
+    path.write_bytes(smb_audit._canonical_descriptor(recovery))
+
+
+def test_recovery_export_is_byte_deterministic(tmp_path: Path) -> None:
+    active_path, source_root, recovery_descriptor, recovery_records = _export_recovery_bundle(
+        tmp_path
+    )
+    first = (recovery_descriptor.read_bytes(), recovery_records.read_bytes())
+
+    smb_audit.export_manifest_recovery(
+        active_path=active_path,
+        generation_root=source_root,
+        recovery_descriptor_path=recovery_descriptor,
+        recovery_records_path=recovery_records,
+    )
+
+    assert (recovery_descriptor.read_bytes(), recovery_records.read_bytes()) == first
+    recovery = yaml.safe_load(first[0])
+    assert recovery["compression"] == {
+        "algorithm": "gzip",
+        "format_version": 1,
+        "compresslevel": 9,
+        "mtime": 0,
+        "filename": "",
+    }
+
+
+def test_recover_active_from_empty_generation_root_is_exact_and_idempotent(
+    tmp_path: Path,
+) -> None:
+    active_path, _, recovery_descriptor, recovery_records = _export_recovery_bundle(tmp_path)
+    generation_root = tmp_path / "restored-generations"
+
+    first = smb_audit.recover_active_manifest(
+        active_path=active_path,
+        recovery_descriptor_path=recovery_descriptor,
+        recovery_records_path=recovery_records,
+        generation_root=generation_root,
+    )
+    generation = generation_root / first["generation_id"]
+    before = {
+        path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in generation.iterdir()
+    }
+    second = smb_audit.recover_active_manifest(
+        active_path=active_path,
+        recovery_descriptor_path=recovery_descriptor,
+        recovery_records_path=recovery_records,
+        generation_root=generation_root,
+    )
+
+    assert first == second
+    assert first["row_count"] == 685
+    assert first["benchmark_state"] == "AUDITED_LOCKED"
+    assert {
+        path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in generation.iterdir()
+    } == before
+
+
+@pytest.mark.parametrize("target", ("descriptor", "records"))
+def test_recover_active_rejects_symlink_inputs_before_materialization(
+    tmp_path: Path, target: str
+) -> None:
+    active_path, _, recovery_descriptor, recovery_records = _export_recovery_bundle(tmp_path)
+    original = recovery_descriptor if target == "descriptor" else recovery_records
+    symlink = tmp_path / f"linked-{original.name}"
+    symlink.symlink_to(original)
+    generation_root = tmp_path / "restored-generations"
+
+    with pytest.raises(smb_audit.ManifestPublicationError, match="regular"):
+        smb_audit.recover_active_manifest(
+            active_path=active_path,
+            recovery_descriptor_path=(symlink if target == "descriptor" else recovery_descriptor),
+            recovery_records_path=(symlink if target == "records" else recovery_records),
+            generation_root=generation_root,
+        )
+
+    assert not generation_root.exists()
+
+
+def test_recover_active_rejects_one_bit_compressed_corruption_before_visibility(
+    tmp_path: Path,
+) -> None:
+    active_path, _, recovery_descriptor, recovery_records = _export_recovery_bundle(tmp_path)
+    corrupted = bytearray(recovery_records.read_bytes())
+    corrupted[-1] ^= 1
+    recovery_records.write_bytes(corrupted)
+    generation_root = tmp_path / "restored-generations"
+
+    with pytest.raises(smb_audit.ManifestPublicationError, match="compressed checksum"):
+        smb_audit.recover_active_manifest(
+            active_path=active_path,
+            recovery_descriptor_path=recovery_descriptor,
+            recovery_records_path=recovery_records,
+            generation_root=generation_root,
+        )
+
+    assert not generation_root.exists()
+
+
+def test_high_ratio_gzip_aborts_at_schema_uncompressed_limit_before_materialization(
+    tmp_path: Path,
+) -> None:
+    active_path, _, recovery_descriptor, recovery_records = _export_recovery_bundle(tmp_path)
+    recovery = yaml.safe_load(recovery_descriptor.read_text(encoding="utf-8"))
+    schema = load_schema("manifest-recovery", version=1)
+    hard_limit = schema["properties"]["uncompressed_size_bytes"]["maximum"]
+    buffer = io.BytesIO()
+    with gzip.GzipFile(fileobj=buffer, mode="wb", filename="", compresslevel=9, mtime=0) as handle:
+        handle.write(b"x" * (hard_limit + 65_536))
+    compressed = buffer.getvalue()
+    assert len(compressed) < schema["properties"]["compressed_size_bytes"]["maximum"]
+    recovery_records.write_bytes(compressed)
+    recovery["compressed_sha256"] = hashlib.sha256(compressed).hexdigest()
+    recovery["compressed_size_bytes"] = len(compressed)
+    recovery["uncompressed_size_bytes"] = hard_limit
+    _rewrite_recovery_descriptor(recovery_descriptor, recovery)
+    generation_root = tmp_path / "restored-generations"
+
+    with pytest.raises(smb_audit.ManifestPublicationError, match="uncompressed maximum"):
+        smb_audit.recover_active_manifest(
+            active_path=active_path,
+            recovery_descriptor_path=recovery_descriptor,
+            recovery_records_path=recovery_records,
+            generation_root=generation_root,
+        )
+
+    assert not generation_root.exists()
+
+
+def test_recovery_publication_failure_never_exposes_partial_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    active_path, _, recovery_descriptor, recovery_records = _export_recovery_bundle(tmp_path)
+    recovery = yaml.safe_load(recovery_descriptor.read_text(encoding="utf-8"))
+    generation_root = tmp_path / "restored-generations"
+    monkeypatch.setenv("SCORE_SR_SMB_PUBLICATION_FAILPOINT", "generation_records_fsynced:raise")
+
+    with pytest.raises(smb_audit.ManifestPublicationError):
+        smb_audit.recover_active_manifest(
+            active_path=active_path,
+            recovery_descriptor_path=recovery_descriptor,
+            recovery_records_path=recovery_records,
+            generation_root=generation_root,
+        )
+
+    assert not (generation_root / recovery["generation_id"]).exists()
+
+
+def test_recover_active_from_source_controlled_tree_with_empty_generation_root(
+    tmp_path: Path,
+) -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    active_path = project_root / "data" / "manifests" / "smb-evaluation-v1.yaml"
+    recovery_descriptor = project_root / "data" / "manifests" / "smb-evaluation-v1-recovery.yaml"
+    recovery_records = project_root / "data" / "manifests" / "smb-evaluation-v1-recovery.jsonl.gz"
+    if not recovery_descriptor.is_file() or not recovery_records.is_file():
+        pytest.skip("tracked recovery pair is produced by Plan 01-20 Task 2")
+    recovery = yaml.safe_load(recovery_descriptor.read_text(encoding="utf-8"))
+    generation_root = tmp_path / "empty-generation-root"
+
+    report = smb_audit.recover_active_manifest(
+        active_path=active_path,
+        recovery_descriptor_path=recovery_descriptor,
+        recovery_records_path=recovery_records,
+        generation_root=generation_root,
+    )
+    descriptor, rows = smb_audit.resolve_active_manifest(
+        active_path=active_path, generation_root=generation_root
+    )
+
+    assert report["generation_id"] == recovery["generation_id"]
+    assert report["row_count"] == recovery["row_count"] == 685
+    assert report["records_sha256"] == recovery["records_sha256"]
+    assert report["row_schema_id"] == recovery["row_schema_id"]
+    assert report["row_schema_version"] == recovery["row_schema_version"] == 2
+    assert report["source_revision"] == recovery["source_revision"]
+    assert report["source_provenance"] == recovery["source_provenance"]
+    assert report["benchmark_state"] == recovery["benchmark_state"] == "AUDITED_LOCKED"
+    assert descriptor["generation_id"] == recovery["generation_id"]
     assert len(rows) == 685
