@@ -314,14 +314,18 @@
     "exact_evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["encoded_sha256", "pixel_sha256"],
+      "required": ["pixel_sha256", "encoded_equality", "encoded_sha256"],
       "properties": {
         "encoded_sha256": {"$ref": "#/$defs/nullable_sha256"},
-        "pixel_sha256": {"$ref": "#/$defs/nullable_sha256"}
+        "pixel_sha256": {"$ref": "#/$defs/sha256"},
+        "encoded_equality": {"type": "boolean"}
       },
-      "anyOf": [
-        {"properties": {"encoded_sha256": {"$ref": "#/$defs/sha256"}}},
-        {"properties": {"pixel_sha256": {"$ref": "#/$defs/sha256"}}}
+      "allOf": [
+        {
+          "if": {"properties": {"encoded_equality": {"const": true}}},
+          "then": {"properties": {"encoded_sha256": {"$ref": "#/$defs/sha256"}}},
+          "else": {"properties": {"encoded_sha256": {"type": "null"}}}
+        }
       ]
     },
     "perceptual_evidence": {
@@ -354,7 +358,7 @@
         "candidate_type": {"const": "exact"},
         "item_ids": {"$ref": "#/$defs/pair_items"},
         "counterpart_item_id": {"type": "string", "pattern": "^smb-test-[0-9]{6}$"},
-        "evidence_basis": {"const": "cryptographic_equality"},
+        "evidence_basis": {"const": "canonical_pixel_sha256"},
         "evidence": {"$ref": "#/$defs/exact_evidence"},
         "disposition": {"const": "duplicate"},
         "reviewer": {"type": "null"},

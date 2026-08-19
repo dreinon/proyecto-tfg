@@ -281,12 +281,22 @@ def _compact_v2_descriptor(rows: list[dict[str, Any]]) -> dict[str, Any]:
             },
             "pixels": {
                 "algorithm": "sha256",
-                "version": 1,
-                "canonicalization": "rgba-uint8-row-major-v1",
+                "version": 2,
+                "canonicalization": "canonical-rgba-frame-v2",
+                "domain_separator": "smb-canonical-rgba-frame-v2",
+                "decoder_library": "Pillow",
+                "decoder_version": "12.3.0",
+                "output_mode": "RGBA8",
+                "alpha_policy": "retain-alpha-and-underlying-rgb",
+                "orientation_policy": "stored-raster-ignore-exif",
+                "metadata_policy": "ignore-non-raster-metadata",
+                "max_encoded_bytes": 67_108_864,
+                "max_pixels": 100_000_000,
+                "failure_policy": "safe-explicit-failure-no-digest",
             },
         },
         "duplicate_provenance": {
-            "exact": {"algorithm": "encoded-and-pixel-sha256", "version": 1},
+            "exact": {"algorithm": "canonical-pixel-sha256", "version": 2},
             "near": {
                 "algorithm": "phash",
                 "version": 1,
@@ -415,7 +425,8 @@ def test_v2_exact_equality_generates_automatic_mirrored_duplicate_evidence() -> 
 
     pair = derived[0]["duplicate_relations"][0]
     assert pair["candidate_type"] == "exact"
-    assert pair["evidence_basis"] == "cryptographic_equality"
+    assert pair["evidence_basis"] == "canonical_pixel_sha256"
+    assert pair["evidence"]["encoded_equality"] is True
     assert pair["disposition"] == "duplicate"
     assert pair["reviewer"] is None
     assert derived[1]["duplicate_relations"][0]["pair_id"] == pair["pair_id"]
@@ -510,12 +521,12 @@ def test_canonical_frame_ignores_orientation_metadata_but_not_raster_rotation() 
     (
         ("encoded_limit", "encoded_image_too_large"),
         ("declared_limit", "declared_image_too_large"),
-        ("decoded_limit", "decoded_image_too_large"),
+        ("decoded_limit", "image_too_large"),
         ("bomb_warning", "decompression_bomb"),
         ("bomb_error", "decompression_bomb"),
-        ("truncated", "image_decode_failed"),
-        ("unidentified", "image_decode_failed"),
-        ("allocation", "image_decode_failed"),
+        ("truncated", "decode_failed"),
+        ("unidentified", "decode_failed"),
+        ("allocation", "decode_failed"),
         ("pillow_version", "unsupported_pillow_version"),
     ),
 )
@@ -535,8 +546,8 @@ def test_canonical_decoder_failures_are_safe_and_deterministic(
         record["original_height"] = 10_000
         max_pixels = 4
     elif case == "decoded_limit":
-        record["original_width"] = 2
-        record["original_height"] = 2
+        record["original_width"] = 1
+        record["original_height"] = 1
         max_pixels = 3
     elif case == "bomb_warning":
         monkeypatch.setattr(smb_audit.Image, "MAX_IMAGE_PIXELS", 3)
@@ -619,9 +630,19 @@ def test_v2_collection_rejects_canonical_exact_evidence_mutations(mutation: str)
 
 def test_new_v2_publication_rejects_legacy_unframed_pixel_provenance() -> None:
     rows = _compact_v2_rows()
+    descriptor = _compact_v2_descriptor(rows)
+    descriptor["hash_provenance"]["pixels"] = {
+        "algorithm": "sha256",
+        "version": 1,
+        "canonicalization": "rgba-uint8-row-major-v1",
+    }
+    descriptor["duplicate_provenance"]["exact"] = {
+        "algorithm": "encoded-and-pixel-sha256",
+        "version": 1,
+    }
 
     with pytest.raises(smb_audit.ManifestPublicationError, match="canonical-pixel"):
-        smb_audit.validate_v2_manifest_collection(_compact_v2_descriptor(rows), rows)
+        smb_audit.validate_v2_manifest_collection(descriptor, rows)
 
 
 @pytest.mark.parametrize("mutation", ("missing_mirror", "mismatched_mirror", "bad_summary"))

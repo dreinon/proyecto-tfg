@@ -17,6 +17,7 @@ import stat
 import subprocess
 import sys
 import uuid
+import warnings
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import date
@@ -57,6 +58,10 @@ HASH_SIZE = 8
 HIGHFREQ_FACTOR = 4
 MAXIMUM_HAMMING_DISTANCE = 6
 IMAGEHASH_VERSION = importlib.metadata.version("ImageHash")
+PILLOW_VERSION = importlib.metadata.version("Pillow")
+CANONICAL_PIXEL_DECODER_VERSION = "12.3.0"
+CANONICAL_PIXEL_DOMAIN = b"smb-canonical-rgba-frame-v2\0"
+CANONICAL_PIXEL_MODE = b"RGBA8\0"
 GENERATION_DOMAIN = b"smb-manifest-generation-v1\0"
 GENERATION_DOMAINS = {
     1: GENERATION_DOMAIN,
@@ -448,6 +453,46 @@ def _mark_failure(
     return row
 
 
+def _canonical_rgba_sha256(*, width: int, height: int, pixel_bytes: bytes) -> str:
+    """Hash one geometry-framed stored-raster RGBA8 serialization."""
+
+    if (
+        isinstance(width, bool)
+        or not isinstance(width, int)
+        or isinstance(height, bool)
+        or not isinstance(height, int)
+        or not 0 < width < 2**64
+        or not 0 < height < 2**64
+    ):
+        raise ValueError("canonical RGBA geometry is invalid")
+    expected_length = width * height * 4
+    if len(pixel_bytes) != expected_length:
+        raise ValueError("canonical RGBA byte length disagrees with geometry")
+    framed = (
+        CANONICAL_PIXEL_DOMAIN
+        + width.to_bytes(8, "big")
+        + height.to_bytes(8, "big")
+        + CANONICAL_PIXEL_MODE
+        + pixel_bytes
+    )
+    return hashlib.sha256(framed).hexdigest()
+
+
+def _pixel_limit_exceeded(width: object, height: object, *, max_pixels: int) -> bool:
+    if (
+        isinstance(width, bool)
+        or not isinstance(width, int)
+        or isinstance(height, bool)
+        or not isinstance(height, int)
+        or width < 1
+        or height < 1
+        or width >= 2**64
+        or height >= 2**64
+    ):
+        return True
+    return width * height > max_pixels
+
+
 def _audit_after_guard(
     record: Mapping[str, object],
     *,
@@ -470,23 +515,45 @@ def _audit_after_guard(
         return _mark_failure(row, "encoded_image_too_large", quality_flag="oversized"), None
     row["encoded_sha256"] = hashlib.sha256(encoded).hexdigest()
 
+    if (
+        row["declared_width"] is not None
+        and row["declared_height"] is not None
+        and _pixel_limit_exceeded(
+            row["declared_width"], row["declared_height"], max_pixels=max_pixels
+        )
+    ):
+        return _mark_failure(row, "declared_image_too_large", quality_flag="oversized"), None
+    if PILLOW_VERSION != CANONICAL_PIXEL_DECODER_VERSION:
+        return _mark_failure(row, "unsupported_pillow_version"), None
+
     try:
-        with Image.open(io.BytesIO(encoded)) as opened:
-            width, height = opened.size
-            row["decoded_width"] = width
-            row["decoded_height"] = height
-            row["image_mode"] = opened.mode
-            row["image_format"] = opened.format
-            if width < 1 or height < 1 or width * height > max_pixels:
-                return _mark_failure(row, "image_too_large", quality_flag="oversized"), None
-            opened.load()
-            canonical = opened.convert("RGBA")
-            pixel_bytes = canonical.tobytes()
-            row["pixel_sha256"] = hashlib.sha256(pixel_bytes).hexdigest()
-            perceptual_hash = imagehash.phash(
-                canonical, hash_size=HASH_SIZE, highfreq_factor=HIGHFREQ_FACTOR
-            )
-    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(encoded)) as opened:
+                width, height = opened.size
+                row["decoded_width"] = width
+                row["decoded_height"] = height
+                row["image_mode"] = opened.mode
+                row["image_format"] = opened.format
+                if _pixel_limit_exceeded(width, height, max_pixels=max_pixels):
+                    return (
+                        _mark_failure(row, "image_too_large", quality_flag="oversized"),
+                        None,
+                    )
+                opened.load()
+                canonical = opened.convert("RGBA")
+                pixel_bytes = canonical.tobytes()
+                row["pixel_sha256"] = _canonical_rgba_sha256(
+                    width=width,
+                    height=height,
+                    pixel_bytes=pixel_bytes,
+                )
+                perceptual_hash = imagehash.phash(
+                    canonical, hash_size=HASH_SIZE, highfreq_factor=HIGHFREQ_FACTOR
+                )
+    except (Image.DecompressionBombWarning, Image.DecompressionBombError):
+        return _mark_failure(row, "decompression_bomb"), None
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError, MemoryError):
         return _mark_failure(row, "decode_failed"), None
 
     region_count, bbox_valid, region_failures = _regions_valid(record.get("regions"), width, height)
@@ -666,7 +733,7 @@ def derive_v2_exact_relations(
     """Derive exact pair records and all item summaries from immutable audit facts."""
 
     updated = copy.deepcopy(list(rows))
-    by_exact: dict[tuple[object, object], list[dict[str, object]]] = defaultdict(list)
+    by_exact: dict[str, list[dict[str, object]]] = defaultdict(list)
     for row in updated:
         relations = row.get("duplicate_relations")
         if not isinstance(relations, list):
@@ -679,26 +746,34 @@ def derive_v2_exact_relations(
         image = row.get("image")
         if row.get("processing_status") != "processed" or not isinstance(image, Mapping):
             continue
-        key = (image.get("encoded_sha256"), image.get("pixel_sha256"))
-        if key != (None, None):
-            by_exact[key].append(row)
-    for (encoded_sha256, pixel_sha256), members in by_exact.items():
+        pixel_sha256 = image.get("pixel_sha256")
+        if isinstance(pixel_sha256, str):
+            by_exact[pixel_sha256].append(row)
+    for pixel_sha256, members in by_exact.items():
         for first, second in combinations(sorted(members, key=lambda row: str(row["item_id"])), 2):
             item_ids = sorted((str(first["item_id"]), str(second["item_id"])))
             pair_id = _pair_id("exact", *item_ids)
+            first_image = first["image"]
+            second_image = second["image"]
+            assert isinstance(first_image, Mapping) and isinstance(second_image, Mapping)
+            encoded_sha256 = first_image.get("encoded_sha256")
+            encoded_equality = isinstance(
+                encoded_sha256, str
+            ) and encoded_sha256 == second_image.get("encoded_sha256")
             shared = {
                 "pair_id": pair_id,
                 "candidate_type": "exact",
                 "item_ids": item_ids,
-                "evidence_basis": "cryptographic_equality",
+                "evidence_basis": "canonical_pixel_sha256",
                 "evidence": {
-                    "encoded_sha256": encoded_sha256,
                     "pixel_sha256": pixel_sha256,
+                    "encoded_equality": encoded_equality,
+                    "encoded_sha256": encoded_sha256 if encoded_equality else None,
                 },
                 "disposition": "duplicate",
                 "reviewer": None,
                 "reviewed_at": None,
-                "rationale": ("Derived from matching encoded and canonical pixel SHA-256 values."),
+                "rationale": "Derived from matching canonical framed RGBA pixel SHA-256 values.",
             }
             for row, counterpart in ((first, second), (second, first)):
                 relation = {**shared, "counterpart_item_id": counterpart["item_id"]}
@@ -1571,12 +1646,22 @@ def _manifest_descriptor_v2(
             },
             "pixels": {
                 "algorithm": "sha256",
-                "version": 1,
-                "canonicalization": "rgba-uint8-row-major-v1",
+                "version": 2,
+                "canonicalization": "canonical-rgba-frame-v2",
+                "domain_separator": "smb-canonical-rgba-frame-v2",
+                "decoder_library": "Pillow",
+                "decoder_version": CANONICAL_PIXEL_DECODER_VERSION,
+                "output_mode": "RGBA8",
+                "alpha_policy": "retain-alpha-and-underlying-rgb",
+                "orientation_policy": "stored-raster-ignore-exif",
+                "metadata_policy": "ignore-non-raster-metadata",
+                "max_encoded_bytes": DEFAULT_MAX_ENCODED_BYTES,
+                "max_pixels": DEFAULT_MAX_PIXELS,
+                "failure_policy": "safe-explicit-failure-no-digest",
             },
         },
         "duplicate_provenance": {
-            "exact": {"algorithm": "encoded-and-pixel-sha256", "version": 1},
+            "exact": {"algorithm": "canonical-pixel-sha256", "version": 2},
             "near": {
                 "algorithm": "phash",
                 "version": 1,
@@ -2014,8 +2099,39 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _uses_canonical_pixel_v2(descriptor: Mapping[str, object]) -> bool:
+    hash_provenance = descriptor.get("hash_provenance")
+    duplicate_provenance = descriptor.get("duplicate_provenance")
+    pixels = hash_provenance.get("pixels") if isinstance(hash_provenance, Mapping) else None
+    exact = duplicate_provenance.get("exact") if isinstance(duplicate_provenance, Mapping) else None
+    return (
+        isinstance(pixels, Mapping)
+        and isinstance(exact, Mapping)
+        and dict(pixels)
+        == {
+            "algorithm": "sha256",
+            "version": 2,
+            "canonicalization": "canonical-rgba-frame-v2",
+            "domain_separator": "smb-canonical-rgba-frame-v2",
+            "decoder_library": "Pillow",
+            "decoder_version": CANONICAL_PIXEL_DECODER_VERSION,
+            "output_mode": "RGBA8",
+            "alpha_policy": "retain-alpha-and-underlying-rgb",
+            "orientation_policy": "stored-raster-ignore-exif",
+            "metadata_policy": "ignore-non-raster-metadata",
+            "max_encoded_bytes": DEFAULT_MAX_ENCODED_BYTES,
+            "max_pixels": DEFAULT_MAX_PIXELS,
+            "failure_policy": "safe-explicit-failure-no-digest",
+        }
+        and dict(exact) == {"algorithm": "canonical-pixel-sha256", "version": 2}
+    )
+
+
 def validate_v2_manifest_collection(
-    descriptor: Mapping[str, object], rows: Sequence[Mapping[str, object]]
+    descriptor: Mapping[str, object],
+    rows: Sequence[Mapping[str, object]],
+    *,
+    allow_legacy_hash_provenance: bool = False,
 ) -> None:
     """Enforce v2 invariants that cannot be expressed by one row's JSON Schema."""
 
@@ -2023,6 +2139,8 @@ def validate_v2_manifest_collection(
         descriptor_contract = dict(descriptor)
         descriptor_contract.setdefault("generation_id", "0" * 64)
         validate_instance("manifest-descriptor", descriptor_contract, version=2)
+        if not _uses_canonical_pixel_v2(descriptor) and not allow_legacy_hash_provenance:
+            raise ValueError("new v2 evidence requires canonical-pixel-sha256 version 2")
         _require_complete_audit_rows(rows)
         by_id = {str(row["item_id"]): row for row in rows}
         if any(row.get("item_id") != _safe_item_id(int(row["upstream_index"])) for row in rows):
@@ -2157,13 +2275,26 @@ def validate_v2_manifest_collection(
                     exact_pairs.add(pair_id)
                     evidence = relation["evidence"]
                     assert isinstance(evidence, Mapping)
+                    member_images = []
                     for member_id in canonical_items:
                         image = by_id[member_id]["image"]
                         assert isinstance(image, Mapping)
-                        if image.get("encoded_sha256") != evidence.get(
-                            "encoded_sha256"
-                        ) or image.get("pixel_sha256") != evidence.get("pixel_sha256"):
-                            raise ValueError(f"{pair_id}: exact evidence does not match both rows")
+                        member_images.append(image)
+                        if image.get("pixel_sha256") != evidence.get("pixel_sha256"):
+                            raise ValueError(
+                                f"{pair_id}: canonical pixel evidence does not match both rows"
+                            )
+                    encoded_values = [image.get("encoded_sha256") for image in member_images]
+                    encoded_equality = (
+                        isinstance(encoded_values[0], str)
+                        and encoded_values[0] == encoded_values[1]
+                    )
+                    expected_encoded = encoded_values[0] if encoded_equality else None
+                    if (
+                        evidence.get("encoded_equality") is not encoded_equality
+                        or evidence.get("encoded_sha256") != expected_encoded
+                    ):
+                        raise ValueError(f"{pair_id}: encoded equality evidence is untruthful")
                 else:
                     perceptual_ids.append(pair_id)
                     perceptual_pairs[pair_id] = relation
@@ -2184,15 +2315,15 @@ def validate_v2_manifest_collection(
                 raise ValueError(f"{pair_id}: mirrored relations disagree")
 
         expected_exact_pairs: set[str] = set()
-        exact_groups: dict[tuple[object, object], list[str]] = defaultdict(list)
+        exact_groups: dict[str, list[str]] = defaultdict(list)
         for row in rows:
             if row["processing_status"] != "processed":
                 continue
             image = row["image"]
             assert isinstance(image, Mapping)
-            exact_key = (image.get("encoded_sha256"), image.get("pixel_sha256"))
-            if exact_key != (None, None):
-                exact_groups[exact_key].append(str(row["item_id"]))
+            pixel_sha256 = image.get("pixel_sha256")
+            if isinstance(pixel_sha256, str):
+                exact_groups[pixel_sha256].append(str(row["item_id"]))
         for members in exact_groups.values():
             expected_exact_pairs.update(
                 _pair_id("exact", first, second)
@@ -2239,7 +2370,10 @@ def validate_v2_manifest_collection(
 
 
 def _validate_generation_inputs(
-    descriptor: Mapping[str, object], rows: Sequence[Mapping[str, object]]
+    descriptor: Mapping[str, object],
+    rows: Sequence[Mapping[str, object]],
+    *,
+    allow_legacy_hash_provenance: bool = False,
 ) -> tuple[dict[str, object], dict[str, object], bytes, bytes]:
     try:
         schema_version = descriptor.get("schema_version")
@@ -2271,7 +2405,11 @@ def _validate_generation_inputs(
                 "manifest ImageHash provenance does not match the installed audit library"
             )
         if version == 2:
-            validate_v2_manifest_collection(completed_descriptor, rows)
+            validate_v2_manifest_collection(
+                completed_descriptor,
+                rows,
+                allow_legacy_hash_provenance=allow_legacy_hash_provenance,
+            )
         generation_id = _generation_id(completed_descriptor, records_bytes)
         completed_descriptor["generation_id"] = generation_id
         validate_instance("manifest-descriptor", completed_descriptor, version=version)
@@ -2303,10 +2441,15 @@ def publish_manifest_generation(
     descriptor: Mapping[str, object],
     rows: Sequence[Mapping[str, object]],
     boundary_hook: Callable[[str], None] | None = None,
+    allow_legacy_hash_provenance: bool = False,
 ) -> None:
     """Validate and publish one immutable content-addressed generation through one pointer."""
 
-    _, pointer, descriptor_bytes, records_bytes = _validate_generation_inputs(descriptor, rows)
+    _, pointer, descriptor_bytes, records_bytes = _validate_generation_inputs(
+        descriptor,
+        rows,
+        allow_legacy_hash_provenance=allow_legacy_hash_provenance,
+    )
     generation_id = str(pointer["generation_id"])
     root = generation_root.resolve()
     generation_path = (root / generation_id).resolve()
@@ -2476,7 +2619,7 @@ def resolve_active_manifest(
         raise _publication_error("generation row count mismatch", committed=True)
     if version == 2:
         try:
-            validate_v2_manifest_collection(descriptor, rows)
+            validate_v2_manifest_collection(descriptor, rows, allow_legacy_hash_provenance=True)
         except ManifestPublicationError as error:
             raise _publication_error(str(error), committed=True) from error
     return descriptor, rows
@@ -2882,7 +3025,7 @@ def recover_active_manifest(
     if not isinstance(descriptor, dict):  # pragma: no cover - shared contract already proves this
         raise _publication_error("embedded recovery descriptor is invalid")
     completed, pointer, descriptor_bytes, validated_records = _validate_generation_inputs(
-        descriptor, rows
+        descriptor, rows, allow_legacy_hash_provenance=True
     )
     expected_pointer_bytes = _canonical_descriptor(pointer)
     if (
@@ -2904,6 +3047,7 @@ def recover_active_manifest(
         generation_root=root,
         descriptor=completed,
         rows=rows,
+        allow_legacy_hash_provenance=True,
     )
     resolved_descriptor, resolved_rows = resolve_active_manifest(
         active_path=active_path, generation_root=root
