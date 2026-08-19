@@ -74,7 +74,7 @@ def test_complete_control_character_table_is_rejected(control: str) -> None:
 def test_existing_accented_review_round_trips_to_identical_canonical_bytes() -> None:
     document = read_review(TRACKED_REVIEW)
 
-    assert len(document.rows) == 699
+    assert len(document.rows) == 763
     assert any(row["reviewer"] == "Daniel Reinón García" for row in document.rows)
     assert canonical_review_csv(document.rows) == TRACKED_REVIEW.read_bytes()
     assert document.canonical_bytes == TRACKED_REVIEW.read_bytes()
@@ -143,7 +143,7 @@ def test_two_synchronized_sessions_yield_one_commit_and_one_stale_error(
         barrier.wait(timeout=10)
         try:
             session.save_item(
-                item_id="smb-test-000000",
+                item_id="smb-test-000006",
                 reviewer="Daniel Reinón García",
                 quality_flags=(),
                 suitability="suitable",
@@ -167,7 +167,12 @@ def test_two_synchronized_sessions_yield_one_commit_and_one_stale_error(
     assert len(stale) == 1
     assert len(committed) == 1
     assert "reload" in str(stale[0]).casefold()
-    assert read_review(review_path).rows[0]["rationale"] == committed[0]
+    committed_row = next(
+        row
+        for row in read_review(review_path).rows
+        if row["review_key"] == "visual:smb-test-000006"
+    )
+    assert committed_row["rationale"] == committed[0]
 
 
 def test_stale_session_can_reload_then_save_without_repeating_review(
@@ -178,7 +183,7 @@ def test_stale_session_can_reload_then_save_without_repeating_review(
     first = _session(review_path)
     stale = _session(review_path)
     first.save_item(
-        item_id="smb-test-000000",
+        item_id="smb-test-000006",
         reviewer="Daniel Reinón García",
         quality_flags=(),
         suitability="suitable",
@@ -188,7 +193,7 @@ def test_stale_session_can_reload_then_save_without_repeating_review(
 
     with pytest.raises(StaleReviewError, match="reload"):
         stale.save_item(
-            item_id="smb-test-000001",
+            item_id="smb-test-000007",
             reviewer="Daniel Reinón García",
             quality_flags=(),
             suitability="suitable",
@@ -197,7 +202,7 @@ def test_stale_session_can_reload_then_save_without_repeating_review(
 
     stale.reload()
     stale.save_item(
-        item_id="smb-test-000001",
+        item_id="smb-test-000007",
         reviewer="Daniel Reinón García",
         quality_flags=(),
         suitability="suitable",
@@ -205,8 +210,9 @@ def test_stale_session_can_reload_then_save_without_repeating_review(
     )
     assert stale.expected_sha256 == read_review(review_path).sha256
     rows = read_review(review_path).rows
-    assert rows[0]["rationale"] == "edición confirmada"
-    assert rows[1]["rationale"] == "edición conservada en sesión"
+    by_key = {row["review_key"]: row for row in rows}
+    assert by_key["visual:smb-test-000006"]["rationale"] == "edición confirmada"
+    assert by_key["visual:smb-test-000007"]["rationale"] == "edición conservada en sesión"
 
 
 def test_unique_same_directory_temps_do_not_reuse_fixed_collision(tmp_path: Path) -> None:
