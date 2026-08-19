@@ -610,6 +610,7 @@ def audit_item(
             trusted_cache_roots=normalized_roots,
             max_encoded_bytes=max_encoded_bytes,
             max_pixels=max_pixels,
+            detailed_limit_failures=True,
         ),
     )
     if not isinstance(result, tuple):
