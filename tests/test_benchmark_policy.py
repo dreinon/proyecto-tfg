@@ -211,16 +211,26 @@ def _write_control(path: Path, control: dict[str, Any]) -> str:
 
 
 def _synthetic_evaluation_gate(
-    tmp_path: Path,
+    tmp_path: Path, *, manifest_schema_version: int = 1
 ) -> tuple[dict[str, Any], Path, Path]:
     project_root = tmp_path / "project"
-    active_path = project_root / "data" / "manifests" / "smb-evaluation-v1.yaml"
+    active_path = (
+        project_root / "data" / "manifests" / f"smb-evaluation-v{manifest_schema_version}.yaml"
+    )
     generation_root = project_root / "artifacts" / "smb-manifests" / "generations"
+    if manifest_schema_version == 2:
+        from test_smb_publication import _compact_v2_descriptor, _compact_v2_rows
+
+        manifest_rows = _compact_v2_rows()
+        manifest_descriptor = _compact_v2_descriptor(manifest_rows)
+    else:
+        manifest_rows = _manifest_rows()
+        manifest_descriptor = _manifest_descriptor()
     smb_audit.publish_manifest_generation(
         active_path=active_path,
         generation_root=generation_root,
-        descriptor=_manifest_descriptor(),
-        rows=_manifest_rows(),
+        descriptor=manifest_descriptor,
+        rows=manifest_rows,
     )
     pointer = yaml.safe_load(active_path.read_text(encoding="utf-8"))
     record = _artifact_backed_unlock()
@@ -280,6 +290,69 @@ def _synthetic_evaluation_gate(
     human_reference["artifact_path"] = human_relative.as_posix()
     human_reference["artifact_sha256"] = human_digest
     return record, project_root, generation_root
+
+
+def test_complete_v2_manifest_unlock_resolves_before_one_callback(tmp_path: Path) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(
+        tmp_path, manifest_schema_version=2
+    )
+    calls: list[str] = []
+
+    result = assert_smb_purpose_allowed(
+        source_descriptor=_smb_descriptor(),
+        purpose=BenchmarkPurpose.METRIC,
+        state=BenchmarkState.EVALUATION_UNLOCKED,
+        unlock_record=record,
+        project_root=project_root,
+        manifest_generation_root=generation_root,
+        callback=lambda: calls.append("called") or "executed",
+    )
+
+    assert result == "executed"
+    assert calls == ["called"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "wrong_contract_version",
+        "wrong_generation_id",
+        "wrong_row_count",
+        "wrong_records_checksum",
+        "wrong_descriptor_state",
+        "semantic_row_failure",
+    ),
+)
+def test_v2_manifest_identity_mutations_fail_before_callback(mutation: str, tmp_path: Path) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(
+        tmp_path, manifest_schema_version=2
+    )
+    reference = record["prerequisites"]["evaluation_manifest_frozen"]
+    active_path = project_root / reference["artifact_path"]
+    pointer = yaml.safe_load(active_path.read_text(encoding="utf-8"))
+    generation = generation_root / pointer["generation_id"]
+    if mutation == "wrong_contract_version":
+        reference["schema_version"] = 1
+    elif mutation == "wrong_generation_id":
+        reference["expected_generation_id"] = "0" * 64
+    elif mutation == "wrong_row_count":
+        reference["expected_row_count"] = 684
+    elif mutation == "wrong_records_checksum":
+        reference["expected_records_sha256"] = "0" * 64
+    elif mutation == "wrong_descriptor_state":
+        descriptor_path = generation / "manifest-descriptor.yaml"
+        descriptor = yaml.safe_load(descriptor_path.read_text(encoding="utf-8"))
+        descriptor["benchmark_state"] = "EVALUATION_UNLOCKED"
+        descriptor_path.write_text(yaml.safe_dump(descriptor, sort_keys=True), encoding="utf-8")
+    else:
+        records_path = generation / "manifest-records.jsonl"
+        lines = records_path.read_text(encoding="utf-8").splitlines()
+        first = json.loads(lines[0])
+        first["visual_review"] = {"status": "not_visually_reviewed"}
+        lines[0] = json.dumps(first, sort_keys=True, separators=(",", ":"))
+        records_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
 
 
 def _assert_gate_rejected(

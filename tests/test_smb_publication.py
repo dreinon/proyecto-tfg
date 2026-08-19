@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import threading
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ import pytest
 import yaml
 
 import score_super_resolution.smb_audit as smb_audit
+from score_super_resolution.smb_review_ui import SMBReviewSession
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "smb" / "records.json"
 PUBLICATION_BOUNDARIES = (
@@ -62,6 +64,375 @@ def _full_rows(*, with_candidate: bool = True) -> list[dict[str, Any]]:
         rows[0]["near_duplicate_candidate_ids"] = [candidate_id]
         rows[1]["near_duplicate_candidate_ids"] = [candidate_id]
     return rows
+
+
+def _compact_v2_rows() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for index in range(685):
+        item_id = f"smb-test-{index:06d}"
+        encoded = hashlib.sha256(f"encoded-{index}".encode()).hexdigest()
+        pixels = hashlib.sha256(f"pixels-{index}".encode()).hexdigest()
+        sampled = index < 64
+        rows.append(
+            {
+                "schema_version": 2,
+                "record_type": "manifest-row",
+                "manifest_version": 2,
+                "source_key": "smb",
+                "source_revision": "a" * 40,
+                "split": "test",
+                "upstream_index": index,
+                "item_id": item_id,
+                "source_identity": {
+                    "original_score_normalized": f"score-{index:03d}",
+                    "original_score_raw_sha256": hashlib.sha256(
+                        f"score-{index:03d}".encode()
+                    ).hexdigest(),
+                    "page_normalized": str(index),
+                    "page_raw_sha256": hashlib.sha256(str(index).encode()).hexdigest(),
+                    "page_texture_normalized": "clean",
+                    "page_texture_raw_sha256": hashlib.sha256(b"clean").hexdigest(),
+                },
+                "source_group_id": f"score-{index:03d}",
+                "image": {
+                    "encoded_sha256": encoded,
+                    "pixel_sha256": pixels,
+                    "declared_width": 32,
+                    "declared_height": 24,
+                    "decoded_width": 32,
+                    "decoded_height": 24,
+                    "mode": "RGB",
+                    "format": "PNG",
+                    "byte_count": 128,
+                },
+                "annotations": {
+                    "region_count": 1,
+                    "bbox_valid": True,
+                    "required_text_present": True,
+                    "failures": [],
+                },
+                "automated_audit": {
+                    "status": "automated",
+                    "algorithm_version": "smb-audit-v2",
+                    "quality_flags": [],
+                },
+                "visual_review": (
+                    {
+                        "status": "sampled_human_reviewed",
+                        "reviewer": "reviewer-1",
+                        "reviewed_at": "2026-08-18",
+                        "rationale": "Reviewed in the frozen sample.",
+                        "quality_flags": [],
+                        "suitability": "suitable",
+                    }
+                    if sampled
+                    else {"status": "not_visually_reviewed"}
+                ),
+                "audit_sample_member": sampled,
+                "duplicate_relations": [],
+                "near_duplicate_candidate_ids": [],
+                "duplicate_summary": {
+                    "exact_relation_count": 0,
+                    "perceptual_relation_count": 0,
+                    "pending_relation_count": 0,
+                    "duplicate_relation_count": 0,
+                    "related_relation_count": 0,
+                    "distinct_relation_count": 0,
+                    "unavailable_relation_count": 0,
+                    "group_ids": [],
+                },
+                "expected_status": "processable",
+                "processing_status": "processed",
+                "unprocessable_reason": None,
+                "rights": {
+                    "dataset_licence": {
+                        "status": "confirmed",
+                        "identifier": "CC-BY-NC-4.0",
+                        "reference": "https://creativecommons.org/licenses/by-nc/4.0/",
+                    },
+                    "item_provenance": {
+                        "status": "unavailable",
+                        "reason": "No per-item source chain is available.",
+                    },
+                    "access_status": "confirmed",
+                    "redistribution": {
+                        "status": "not_established",
+                        "reviewed_basis_ref": None,
+                    },
+                    "figure_reproduction": {
+                        "status": "prohibited",
+                        "reviewed_basis_ref": None,
+                    },
+                },
+                "paired_eligible": True,
+                "paired_ineligibility_reason": None,
+            }
+        )
+    return rows
+
+
+def _compact_v2_descriptor(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    pair_records = {
+        relation["pair_id"]: relation for row in rows for relation in row["duplicate_relations"]
+    }
+    exact_count = sum(r["candidate_type"] == "exact" for r in pair_records.values())
+    perceptual = [r for r in pair_records.values() if r["candidate_type"] == "perceptual"]
+    return {
+        "schema_version": 2,
+        "record_type": "manifest-descriptor",
+        "manifest_id": "smb-evaluation-v2",
+        "generation_algorithm": {
+            "algorithm": "sha256",
+            "version": 2,
+            "domain_separator": "smb-manifest-generation-v2",
+            "descriptor_canonicalization": "yaml-safe-sort-keys-utf8-v1",
+            "records_canonicalization": "jsonl-utf8-sorted-keys-v1",
+        },
+        "source_key": "smb",
+        "source_revision": "a" * 40,
+        "creation_command": "uv run python -m score_super_resolution.smb_audit audit",
+        "source_provenance": {
+            "source_set_version": 1,
+            "algorithm": "sha256",
+            "revision": "b" * 40,
+            "dirty": False,
+            "source_tree_sha256": "7" * 64,
+            "patch_sha256": "8" * 64,
+            "lock_sha256": "9" * 64,
+        },
+        "grouping_unit": "source_score",
+        "upstream_split": "test",
+        "project_split": "evaluation",
+        "deterministic_seed": 17,
+        "exclusions": [],
+        "row_schema_id": "manifest-row",
+        "row_schema_version": 2,
+        "row_count": 685,
+        "records_sha256": "0" * 64,
+        "audit_version": "smb-audit-v2",
+        "benchmark_state": "AUDITED_LOCKED",
+        "hash_provenance": {
+            "encoded": {
+                "algorithm": "sha256",
+                "version": 1,
+                "canonicalization": "encoded-bytes-v1",
+            },
+            "pixels": {
+                "algorithm": "sha256",
+                "version": 1,
+                "canonicalization": "rgba-uint8-row-major-v1",
+            },
+        },
+        "duplicate_provenance": {
+            "exact": {"algorithm": "encoded-and-pixel-sha256", "version": 1},
+            "near": {
+                "algorithm": "phash",
+                "version": 1,
+                "library": "ImageHash",
+                "library_version": smb_audit.IMAGEHASH_VERSION,
+                "hash_size": 8,
+                "highfreq_factor": 4,
+                "maximum_hamming_distance": 6,
+            },
+        },
+        "sample_selection": {
+            "algorithm": "sha256-rank",
+            "version": 1,
+            "seed": 17,
+            "population_size": 685,
+            "sample_size": 64,
+            "identity_fields": ["upstream_index", "item_id"],
+            "selection_state": "pre-review",
+        },
+        "review_inference": {
+            "automated_population_audit_count": 685,
+            "sampled_human_review_count": 64,
+            "targeted_human_review_count": 0,
+            "not_visually_reviewed_count": 621,
+            "unavailable_visual_review_count": 0,
+            "not_applicable_visual_review_count": 0,
+            "exact_pair_automated_count": exact_count,
+            "perceptual_pair_count": len(perceptual),
+            "perceptual_pair_human_review_count": sum(
+                r["disposition"] not in {"pending", "unavailable"} for r in perceptual
+            ),
+            "perceptual_pair_pending_count": sum(r["disposition"] == "pending" for r in perceptual),
+            "inference_scope": "sample_observation_only",
+            "population_prevalence_inference": "not_supported",
+        },
+    }
+
+
+def _perceptual_relation(
+    first: str, second: str, *, disposition: str, distance: int = 3
+) -> dict[str, Any]:
+    pair_id = smb_audit._pair_id("perceptual", first, second)
+    reviewed = disposition not in {"pending", "unavailable"}
+    return {
+        "pair_id": pair_id,
+        "candidate_type": "perceptual",
+        "item_ids": sorted((first, second)),
+        "counterpart_item_id": second,
+        "evidence_basis": (
+            "perceptual_hash_plus_human_review" if reviewed else "perceptual_hash_candidate"
+        ),
+        "evidence": {"algorithm": "phash", "version": 1, "distance": distance},
+        "disposition": disposition,
+        "reviewer": "reviewer-1" if reviewed else None,
+        "reviewed_at": "2026-08-18" if reviewed else None,
+        "rationale": "Independent pair adjudication." if reviewed else "",
+    }
+
+
+def _attach_relation(
+    rows: list[dict[str, Any]], first_index: int, second_index: int, *, disposition: str
+) -> None:
+    first = rows[first_index]
+    second = rows[second_index]
+    relation = _perceptual_relation(
+        str(first["item_id"]), str(second["item_id"]), disposition=disposition
+    )
+    mirrored = copy.deepcopy(relation)
+    mirrored["counterpart_item_id"] = first["item_id"]
+    first["duplicate_relations"].append(relation)
+    second["duplicate_relations"].append(mirrored)
+    for row in (first, second):
+        row["near_duplicate_candidate_ids"].append(relation["pair_id"])
+        summary = row["duplicate_summary"]
+        summary["perceptual_relation_count"] += 1
+        summary[f"{disposition}_relation_count"] += 1
+
+
+def test_v2_review_preparation_separates_population_sample_and_pair_evidence() -> None:
+    rows = _compact_v2_rows()
+    _attach_relation(rows, 0, 64, disposition="pending")
+
+    prepared = smb_audit.prepare_v2_review_rows(rows)
+
+    kinds = Counter(row["review_kind"] for row in prepared)
+    assert kinds == {"item_policy": 685, "visual_item": 64, "duplicate_pair": 1}
+    assert {row["item_id"] for row in prepared if row["review_kind"] == "visual_item"} == {
+        f"smb-test-{index:06d}" for index in range(64)
+    }
+    assert not any(
+        row["review_kind"] == "visual_item" and row["item_id"] == "smb-test-000064"
+        for row in prepared
+    )
+
+
+def test_v2_exact_equality_generates_automatic_mirrored_duplicate_evidence() -> None:
+    rows = _compact_v2_rows()
+    rows[1]["image"]["encoded_sha256"] = rows[0]["image"]["encoded_sha256"]
+    rows[1]["image"]["pixel_sha256"] = rows[0]["image"]["pixel_sha256"]
+
+    derived = smb_audit.derive_v2_exact_relations(rows)
+
+    pair = derived[0]["duplicate_relations"][0]
+    assert pair["candidate_type"] == "exact"
+    assert pair["evidence_basis"] == "cryptographic_equality"
+    assert pair["disposition"] == "duplicate"
+    assert pair["reviewer"] is None
+    assert derived[1]["duplicate_relations"][0]["pair_id"] == pair["pair_id"]
+    smb_audit.validate_v2_manifest_collection(_compact_v2_descriptor(derived), derived)
+
+
+@pytest.mark.parametrize("mutation", ("missing_mirror", "mismatched_mirror", "bad_summary"))
+def test_v2_collection_rejects_pair_or_summary_contradictions(mutation: str) -> None:
+    rows = _compact_v2_rows()
+    _attach_relation(rows, 0, 1, disposition="related")
+    descriptor = _compact_v2_descriptor(rows)
+    if mutation == "missing_mirror":
+        rows[1]["duplicate_relations"] = []
+        rows[1]["near_duplicate_candidate_ids"] = []
+        rows[1]["duplicate_summary"]["perceptual_relation_count"] = 0
+        rows[1]["duplicate_summary"]["related_relation_count"] = 0
+    elif mutation == "mismatched_mirror":
+        rows[1]["duplicate_relations"][0]["disposition"] = "distinct"
+        rows[1]["duplicate_summary"]["related_relation_count"] = 0
+        rows[1]["duplicate_summary"]["distinct_relation_count"] = 1
+    else:
+        rows[0]["duplicate_summary"]["related_relation_count"] = 0
+
+    with pytest.raises(smb_audit.ManifestPublicationError):
+        smb_audit.validate_v2_manifest_collection(descriptor, rows)
+
+
+def test_v2_collection_retains_different_relations_sharing_one_item() -> None:
+    rows = _compact_v2_rows()
+    _attach_relation(rows, 0, 1, disposition="distinct")
+    _attach_relation(rows, 0, 2, disposition="related")
+
+    smb_audit.validate_v2_manifest_collection(_compact_v2_descriptor(rows), rows)
+
+    relations = {r["counterpart_item_id"]: r["disposition"] for r in rows[0]["duplicate_relations"]}
+    assert relations == {"smb-test-000001": "distinct", "smb-test-000002": "related"}
+
+
+def test_v2_policy_and_candidate_saves_do_not_create_visual_or_item_pair_claims(
+    tmp_path: Path,
+) -> None:
+    rows = _compact_v2_rows()
+    _attach_relation(rows, 0, 1, disposition="pending")
+    _attach_relation(rows, 0, 2, disposition="pending")
+    review_rows = smb_audit.prepare_v2_review_rows(rows)
+    review_path = tmp_path / "review.csv"
+    review_path.write_bytes(smb_audit.canonical_review_csv(review_rows))
+    session = object.__new__(SMBReviewSession)
+    session.review_path = review_path
+    session.sample_ids = [f"smb-test-{index:06d}" for index in range(64)]
+    session.visual_item_ids = list(session.sample_ids)
+    session.candidate_keys = [
+        row["review_key"] for row in review_rows if row["review_kind"] == "duplicate_pair"
+    ]
+    session.reload()
+
+    session.apply_policy("reviewer-1")
+    after_policy = session.read_rows()
+    policies = [row for row in after_policy if row["review_kind"] == "item_policy"]
+    assert all(row["item_provenance_status"] == "unavailable" for row in policies)
+    assert all(row["redistribution_status"] == "not_established" for row in policies)
+    assert all(row["figure_reproduction_status"] == "prohibited" for row in policies)
+    assert all(not row["quality_disposition"] for row in policies)
+    assert all(not row["suitability_disposition"] for row in policies)
+
+    first, second = session.candidate_keys
+    session.save_candidate(
+        review_key=first,
+        reviewer="reviewer-1",
+        disposition="distinct",
+        rationale="The first pair is distinct.",
+    )
+    session.save_candidate(
+        review_key=second,
+        reviewer="reviewer-1",
+        disposition="related",
+        rationale="The second pair is related.",
+    )
+    by_key = {row["review_key"]: row for row in session.read_rows()}
+    assert by_key[first]["duplicate_disposition"] == "distinct"
+    assert by_key[second]["duplicate_disposition"] == "related"
+    assert all(not row["duplicate_disposition"] for row in policies)
+
+
+def test_v2_publication_round_trip_dispatches_contract_version(tmp_path: Path) -> None:
+    rows = _compact_v2_rows()
+    descriptor = _compact_v2_descriptor(rows)
+    active_path = tmp_path / "data" / "manifests" / "smb-evaluation-v2.yaml"
+    generation_root = tmp_path / "artifacts" / "smb-manifests" / "generations"
+
+    smb_audit.publish_manifest_generation(
+        active_path=active_path,
+        generation_root=generation_root,
+        descriptor=descriptor,
+        rows=rows,
+    )
+    resolved_descriptor, resolved_rows = smb_audit.resolve_active_manifest(
+        active_path=active_path, generation_root=generation_root
+    )
+
+    assert resolved_descriptor["schema_version"] == 2
+    assert resolved_descriptor["row_schema_version"] == 2
+    assert len(resolved_rows) == 685
 
 
 def _publish(tmp_path: Path, rows: list[dict[str, Any]] | None = None) -> tuple[Path, Path]:
