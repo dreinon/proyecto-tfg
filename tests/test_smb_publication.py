@@ -21,7 +21,6 @@ import yaml
 
 import score_super_resolution.smb_audit as smb_audit
 from score_super_resolution.contracts import load_schema, recovery_metadata_sha256
-from score_super_resolution.smb_review_ui import SMBReviewSession
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "smb" / "records.json"
 PUBLICATION_BOUNDARIES = (
@@ -376,6 +375,8 @@ def test_v2_collection_retains_different_relations_sharing_one_item() -> None:
 def test_v2_policy_and_candidate_saves_do_not_create_visual_or_item_pair_claims(
     tmp_path: Path,
 ) -> None:
+    from score_super_resolution.smb_review_ui import SMBReviewSession
+
     rows = _compact_v2_rows()
     _attach_relation(rows, 0, 1, disposition="pending")
     _attach_relation(rows, 0, 2, disposition="pending")
