@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 import yaml
+from PIL import Image, PngImagePlugin
 
 import score_super_resolution.smb_audit as smb_audit
 from score_super_resolution.contracts import load_schema, recovery_metadata_sha256
@@ -41,6 +42,63 @@ COMMITTED_BOUNDARIES = {"pointer_replaced", "active_parent_fsynced"}
 
 def _fixtures() -> dict[str, Any]:
     return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+def _png_bytes(
+    image: Image.Image,
+    *,
+    compress_level: int = 6,
+    comment: str | None = None,
+    exif_orientation: int | None = None,
+) -> bytes:
+    output = io.BytesIO()
+    pnginfo = None
+    if comment is not None:
+        pnginfo = PngImagePlugin.PngInfo()
+        pnginfo.add_text("Comment", comment)
+    exif = None
+    if exif_orientation is not None:
+        exif = image.getexif()
+        exif[274] = exif_orientation
+    image.save(
+        output,
+        format="PNG",
+        compress_level=compress_level,
+        pnginfo=pnginfo,
+        exif=exif,
+    )
+    return output.getvalue()
+
+
+def _audit_record(encoded: bytes, *, index: int = 0) -> dict[str, Any]:
+    return {
+        "id": f"upstream-{index}",
+        "image": encoded,
+        "original_width": 2,
+        "original_height": 2,
+        "regions": [{"bbox": {"x": 0, "y": 0, "width": 1, "height": 1}}],
+        "original_score": f"score-{index}_p0",
+        "page": str(index),
+        "page_texture": "clean",
+    }
+
+
+def _audit_v2_images(
+    *encoded_images: bytes,
+    max_encoded_bytes: int = smb_audit.DEFAULT_MAX_ENCODED_BYTES,
+    max_pixels: int = smb_audit.DEFAULT_MAX_PIXELS,
+) -> list[dict[str, Any]]:
+    descriptor = yaml.safe_load(
+        (Path(__file__).parents[1] / "data" / "sources" / "smb.yaml").read_text(encoding="utf-8")
+    )
+    return smb_audit.audit_dataset_v2(
+        [_audit_record(encoded, index=index) for index, encoded in enumerate(encoded_images)],
+        source_descriptor=descriptor,
+        trusted_cache_roots=(Path.cwd(),),
+        sample_size=0,
+        max_encoded_bytes=max_encoded_bytes,
+        max_pixels=max_pixels,
+    )
 
 
 def _descriptor() -> dict[str, Any]:
@@ -362,6 +420,208 @@ def test_v2_exact_equality_generates_automatic_mirrored_duplicate_evidence() -> 
     assert pair["reviewer"] is None
     assert derived[1]["duplicate_relations"][0]["pair_id"] == pair["pair_id"]
     smb_audit.validate_v2_manifest_collection(_compact_v2_descriptor(derived), derived)
+
+
+def test_v2_exact_relation_uses_canonical_pixels_across_png_reencoding() -> None:
+    image = Image.new("RGBA", (2, 2), (12, 34, 56, 255))
+    first = _png_bytes(image, compress_level=0, comment="first encoding")
+    second = _png_bytes(image, compress_level=9, comment="second encoding")
+    assert first != second
+    assert hashlib.sha256(first).hexdigest() != hashlib.sha256(second).hexdigest()
+
+    rows = _audit_v2_images(first, second)
+
+    assert rows[0]["image"]["pixel_sha256"] == rows[1]["image"]["pixel_sha256"]
+    for row, counterpart in ((rows[0], rows[1]), (rows[1], rows[0])):
+        assert len(row["duplicate_relations"]) == 1
+        relation = row["duplicate_relations"][0]
+        assert relation["candidate_type"] == "exact"
+        assert relation["counterpart_item_id"] == counterpart["item_id"]
+        assert relation["evidence_basis"] == "canonical_pixel_sha256"
+        assert relation["evidence"] == {
+            "pixel_sha256": row["image"]["pixel_sha256"],
+            "encoded_equality": False,
+            "encoded_sha256": None,
+        }
+        assert row["near_duplicate_candidate_ids"] == []
+
+
+def test_canonical_frame_binds_geometry_and_normalizes_declared_rgba_modes() -> None:
+    rgba_stream = bytes(
+        (
+            10,
+            20,
+            30,
+            255,
+            40,
+            50,
+            60,
+            255,
+            70,
+            80,
+            90,
+            255,
+            100,
+            110,
+            120,
+            255,
+        )
+    )
+    one_by_four = _png_bytes(Image.frombytes("RGBA", (1, 4), rgba_stream))
+    two_by_two = _png_bytes(Image.frombytes("RGBA", (2, 2), rgba_stream))
+    geometry_rows = _audit_v2_images(one_by_four, two_by_two)
+    assert geometry_rows[0]["image"]["pixel_sha256"] != geometry_rows[1]["image"]["pixel_sha256"]
+
+    rgb = Image.new("RGB", (2, 2), (10, 20, 30))
+    opaque_rgba = Image.new("RGBA", (2, 2), (10, 20, 30, 255))
+    palette = Image.new("P", (2, 2), 0)
+    palette.putpalette([10, 20, 30] + [0, 0, 0] * 255)
+    palette.info["transparency"] = bytes([255] + [0] * 255)
+    normalized = _audit_v2_images(
+        _png_bytes(rgb),
+        _png_bytes(opaque_rgba),
+        _png_bytes(palette),
+    )
+    assert len({row["image"]["pixel_sha256"] for row in normalized}) == 1
+
+    alpha_changed = _audit_v2_images(
+        _png_bytes(opaque_rgba),
+        _png_bytes(Image.new("RGBA", (2, 2), (10, 20, 30, 254))),
+    )
+    assert alpha_changed[0]["image"]["pixel_sha256"] != alpha_changed[1]["image"]["pixel_sha256"]
+
+
+def test_canonical_frame_ignores_orientation_metadata_but_not_raster_rotation() -> None:
+    image = Image.new("RGB", (2, 1))
+    image.putdata([(1, 2, 3), (200, 201, 202)])
+    plain = _png_bytes(image)
+    orientation_tagged = _png_bytes(image, exif_orientation=6)
+    physically_rotated = _png_bytes(image.transpose(Image.Transpose.ROTATE_270))
+    assert plain != orientation_tagged
+
+    rows = _audit_v2_images(plain, orientation_tagged, physically_rotated)
+
+    assert rows[0]["image"]["pixel_sha256"] == rows[1]["image"]["pixel_sha256"]
+    assert rows[0]["image"]["pixel_sha256"] != rows[2]["image"]["pixel_sha256"]
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_reason"),
+    (
+        ("encoded_limit", "encoded_image_too_large"),
+        ("declared_limit", "declared_image_too_large"),
+        ("decoded_limit", "decoded_image_too_large"),
+        ("bomb_warning", "decompression_bomb"),
+        ("bomb_error", "decompression_bomb"),
+        ("truncated", "image_decode_failed"),
+        ("unidentified", "image_decode_failed"),
+        ("allocation", "image_decode_failed"),
+        ("pillow_version", "unsupported_pillow_version"),
+    ),
+)
+def test_canonical_decoder_failures_are_safe_and_deterministic(
+    case: str,
+    expected_reason: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    encoded = _png_bytes(Image.new("RGBA", (2, 2), (1, 2, 3, 4)))
+    record = _audit_record(encoded)
+    max_encoded_bytes = smb_audit.DEFAULT_MAX_ENCODED_BYTES
+    max_pixels = smb_audit.DEFAULT_MAX_PIXELS
+    if case == "encoded_limit":
+        max_encoded_bytes = len(encoded) - 1
+    elif case == "declared_limit":
+        record["original_width"] = 10_000
+        record["original_height"] = 10_000
+        max_pixels = 4
+    elif case == "decoded_limit":
+        record["original_width"] = 2
+        record["original_height"] = 2
+        max_pixels = 3
+    elif case == "bomb_warning":
+        monkeypatch.setattr(smb_audit.Image, "MAX_IMAGE_PIXELS", 3)
+    elif case == "bomb_error":
+        monkeypatch.setattr(smb_audit.Image, "MAX_IMAGE_PIXELS", 1)
+    elif case == "truncated":
+        record["image"] = encoded[: len(encoded) // 2]
+    elif case == "unidentified":
+        record["image"] = b"not-an-image-and-not-a-secret"
+    elif case == "allocation":
+        monkeypatch.setattr(
+            smb_audit.Image,
+            "open",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(MemoryError("private payload")),
+        )
+    else:
+        monkeypatch.setattr(smb_audit, "PILLOW_VERSION", "0.0.0", raising=False)
+
+    descriptor = yaml.safe_load(
+        (Path(__file__).parents[1] / "data" / "sources" / "smb.yaml").read_text(encoding="utf-8")
+    )
+    row = smb_audit.audit_item(
+        record,
+        upstream_index=0,
+        source_descriptor=descriptor,
+        trusted_cache_roots=(Path.cwd(),),
+        max_encoded_bytes=max_encoded_bytes,
+        max_pixels=max_pixels,
+    )
+
+    assert row["processing_status"] == "failed"
+    assert row["unprocessable_reason"] == expected_reason
+    assert row["pixel_sha256"] is None
+    assert "private payload" not in json.dumps(row, sort_keys=True)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("missing_mirror", "pixel_digest", "encoded_equality", "encoded_digest"),
+)
+def test_v2_collection_rejects_canonical_exact_evidence_mutations(mutation: str) -> None:
+    rows = _compact_v2_rows()
+    rows[1]["image"]["pixel_sha256"] = rows[0]["image"]["pixel_sha256"]
+    derived = smb_audit.derive_v2_exact_relations(rows)
+    descriptor = _compact_v2_descriptor(derived)
+    descriptor["hash_provenance"]["pixels"] = {
+        "algorithm": "sha256",
+        "version": 2,
+        "canonicalization": "canonical-rgba-frame-v2",
+        "domain_separator": "smb-canonical-rgba-frame-v2",
+        "decoder_library": "Pillow",
+        "decoder_version": "12.3.0",
+        "output_mode": "RGBA8",
+        "alpha_policy": "retain-alpha-and-underlying-rgb",
+        "orientation_policy": "stored-raster-ignore-exif",
+        "metadata_policy": "ignore-non-raster-metadata",
+        "max_encoded_bytes": 67_108_864,
+        "max_pixels": 100_000_000,
+        "failure_policy": "safe-explicit-failure-no-digest",
+    }
+    descriptor["duplicate_provenance"]["exact"] = {
+        "algorithm": "canonical-pixel-sha256",
+        "version": 2,
+    }
+    if mutation == "missing_mirror":
+        derived[1]["duplicate_relations"] = []
+        derived[1]["duplicate_summary"]["exact_relation_count"] = 0
+        derived[1]["duplicate_summary"]["duplicate_relation_count"] = 0
+        derived[1]["duplicate_summary"]["group_ids"] = []
+    elif mutation == "pixel_digest":
+        derived[0]["duplicate_relations"][0]["evidence"]["pixel_sha256"] = "f" * 64
+    elif mutation == "encoded_equality":
+        derived[0]["duplicate_relations"][0]["evidence"]["encoded_equality"] = True
+    else:
+        derived[0]["duplicate_relations"][0]["evidence"]["encoded_sha256"] = "e" * 64
+
+    with pytest.raises(smb_audit.ManifestPublicationError):
+        smb_audit.validate_v2_manifest_collection(descriptor, derived)
+
+
+def test_new_v2_publication_rejects_legacy_unframed_pixel_provenance() -> None:
+    rows = _compact_v2_rows()
+
+    with pytest.raises(smb_audit.ManifestPublicationError, match="canonical-pixel"):
+        smb_audit.validate_v2_manifest_collection(_compact_v2_descriptor(rows), rows)
 
 
 @pytest.mark.parametrize("mutation", ("missing_mirror", "mismatched_mirror", "bad_summary"))
