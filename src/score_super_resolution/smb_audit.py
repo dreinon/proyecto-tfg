@@ -19,6 +19,7 @@ import uuid
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import date
+from itertools import combinations
 from pathlib import Path, PurePosixPath
 
 import imagehash
@@ -50,6 +51,10 @@ HIGHFREQ_FACTOR = 4
 MAXIMUM_HAMMING_DISTANCE = 6
 IMAGEHASH_VERSION = importlib.metadata.version("ImageHash")
 GENERATION_DOMAIN = b"smb-manifest-generation-v1\0"
+GENERATION_DOMAINS = {
+    1: GENERATION_DOMAIN,
+    2: b"smb-manifest-generation-v2\0",
+}
 AUDIT_SOURCE_SET_VERSION = 1
 AUDIT_SOURCE_TREE_DOMAIN = b"smb-audit-source-tree-v1\0"
 AUDIT_PATCH_DOMAIN = b"smb-audit-patch-state-v1\0"
@@ -137,7 +142,15 @@ def _canonical_descriptor(descriptor: Mapping[str, object]) -> bytes:
 def _generation_id(descriptor: Mapping[str, object], records_bytes: bytes) -> str:
     identity_descriptor = dict(descriptor)
     identity_descriptor.pop("generation_id", None)
-    payload = GENERATION_DOMAIN + _canonical_descriptor(identity_descriptor) + b"\0" + records_bytes
+    version = identity_descriptor.get("schema_version")
+    if isinstance(version, bool) or version not in GENERATION_DOMAINS:
+        raise ValueError("unsupported manifest schema version")
+    payload = (
+        GENERATION_DOMAINS[int(version)]
+        + _canonical_descriptor(identity_descriptor)
+        + b"\0"
+        + records_bytes
+    )
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -549,6 +562,141 @@ def _candidate_id(first_item_id: str, second_item_id: str) -> str:
     first, second = sorted((first_item_id, second_item_id))
     digest = hashlib.sha256(f"near-duplicate-v1\0{first}\0{second}".encode()).hexdigest()
     return f"candidate-{digest[:16]}"
+
+
+def _pair_id(candidate_type: str, first_item_id: str, second_item_id: str) -> str:
+    """Return a stable, type-separated identifier for one canonical item pair."""
+
+    if candidate_type not in {"exact", "perceptual"}:
+        raise ValueError("candidate_type must be exact or perceptual")
+    first, second = sorted((first_item_id, second_item_id))
+    if first == second:
+        raise ValueError("a duplicate pair requires two different items")
+    digest = hashlib.sha256(
+        f"smb-duplicate-pair-v2\0{candidate_type}\0{first}\0{second}".encode()
+    ).hexdigest()
+    return f"pair-{digest[:16]}"
+
+
+def _duplicate_group_id(item_ids: Iterable[str]) -> str:
+    members = sorted(set(item_ids))
+    digest = hashlib.sha256(("smb-duplicate-group-v2\0" + "\0".join(members)).encode()).hexdigest()
+    return f"duplicate-group-{digest[:16]}"
+
+
+def _v2_group_ids_by_item(
+    rows: Sequence[Mapping[str, object]],
+) -> dict[str, list[str]]:
+    adjacency: dict[str, set[str]] = {str(row["item_id"]): set() for row in rows}
+    for row in rows:
+        item_id = str(row["item_id"])
+        relations = row.get("duplicate_relations")
+        if not isinstance(relations, Sequence):
+            continue
+        for relation in relations:
+            if not isinstance(relation, Mapping) or relation.get("disposition") != "duplicate":
+                continue
+            counterpart = relation.get("counterpart_item_id")
+            if isinstance(counterpart, str) and counterpart in adjacency:
+                adjacency[item_id].add(counterpart)
+                adjacency[counterpart].add(item_id)
+    assigned: set[str] = set()
+    result = {item_id: [] for item_id in adjacency}
+    for item_id in sorted(adjacency):
+        if item_id in assigned or not adjacency[item_id]:
+            continue
+        component: set[str] = set()
+        pending = [item_id]
+        while pending:
+            member = pending.pop()
+            if member in component:
+                continue
+            component.add(member)
+            pending.extend(adjacency[member] - component)
+        assigned.update(component)
+        group_id = _duplicate_group_id(component)
+        for member in component:
+            result[member].append(group_id)
+    return result
+
+
+def _v2_summary(row: Mapping[str, object], *, group_ids: Sequence[str]) -> dict[str, object]:
+    relations = row.get("duplicate_relations")
+    if not isinstance(relations, Sequence):
+        relations = ()
+    relation_maps = [relation for relation in relations if isinstance(relation, Mapping)]
+    dispositions = Counter(str(relation.get("disposition")) for relation in relation_maps)
+    return {
+        "exact_relation_count": sum(
+            relation.get("candidate_type") == "exact" for relation in relation_maps
+        ),
+        "perceptual_relation_count": sum(
+            relation.get("candidate_type") == "perceptual" for relation in relation_maps
+        ),
+        "pending_relation_count": dispositions["pending"],
+        "duplicate_relation_count": dispositions["duplicate"],
+        "related_relation_count": dispositions["related"],
+        "distinct_relation_count": dispositions["distinct"],
+        "unavailable_relation_count": dispositions["unavailable"],
+        "group_ids": sorted(group_ids),
+    }
+
+
+def derive_v2_exact_relations(
+    rows: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    """Derive exact pair records and all item summaries from immutable audit facts."""
+
+    updated = copy.deepcopy(list(rows))
+    by_exact: dict[tuple[object, object], list[dict[str, object]]] = defaultdict(list)
+    for row in updated:
+        relations = row.get("duplicate_relations")
+        if not isinstance(relations, list):
+            raise _publication_error("v2 duplicate_relations must be an array")
+        row["duplicate_relations"] = [
+            relation
+            for relation in relations
+            if isinstance(relation, Mapping) and relation.get("candidate_type") != "exact"
+        ]
+        image = row.get("image")
+        if row.get("processing_status") != "processed" or not isinstance(image, Mapping):
+            continue
+        key = (image.get("encoded_sha256"), image.get("pixel_sha256"))
+        if key != (None, None):
+            by_exact[key].append(row)
+    for (encoded_sha256, pixel_sha256), members in by_exact.items():
+        for first, second in combinations(sorted(members, key=lambda row: str(row["item_id"])), 2):
+            item_ids = sorted((str(first["item_id"]), str(second["item_id"])))
+            pair_id = _pair_id("exact", *item_ids)
+            shared = {
+                "pair_id": pair_id,
+                "candidate_type": "exact",
+                "item_ids": item_ids,
+                "evidence_basis": "cryptographic_equality",
+                "evidence": {
+                    "encoded_sha256": encoded_sha256,
+                    "pixel_sha256": pixel_sha256,
+                },
+                "disposition": "duplicate",
+                "reviewer": None,
+                "reviewed_at": None,
+                "rationale": ("Derived from matching encoded and canonical pixel SHA-256 values."),
+            }
+            for row, counterpart in ((first, second), (second, first)):
+                relation = {**shared, "counterpart_item_id": counterpart["item_id"]}
+                row["duplicate_relations"].append(relation)  # type: ignore[union-attr]
+    group_ids = _v2_group_ids_by_item(updated)
+    for row in updated:
+        relations = row["duplicate_relations"]
+        assert isinstance(relations, list)
+        relations.sort(key=lambda relation: str(relation["pair_id"]))
+        row["near_duplicate_candidate_ids"] = sorted(
+            str(relation["pair_id"])
+            for relation in relations
+            if relation["candidate_type"] == "perceptual"
+        )
+        row["duplicate_summary"] = _v2_summary(row, group_ids=group_ids[str(row["item_id"])])
+    return updated
 
 
 def audit_dataset(
@@ -1046,13 +1194,160 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def validate_v2_manifest_collection(
+    descriptor: Mapping[str, object], rows: Sequence[Mapping[str, object]]
+) -> None:
+    """Enforce v2 invariants that cannot be expressed by one row's JSON Schema."""
+
+    try:
+        _require_complete_audit_rows(rows)
+        by_id = {str(row["item_id"]): row for row in rows}
+        if any(row.get("item_id") != _safe_item_id(int(row["upstream_index"])) for row in rows):
+            raise ValueError("item identity does not match upstream index")
+
+        sampled_count = 0
+        visual_counts: Counter[str] = Counter()
+        automated_count = 0
+        relation_occurrences: dict[str, list[tuple[str, Mapping[str, object]]]] = defaultdict(list)
+        exact_pairs: set[str] = set()
+        perceptual_pairs: dict[str, Mapping[str, object]] = {}
+        for index, row in enumerate(rows):
+            validate_instance("manifest-row", row, version=2)
+            item_id = str(row["item_id"])
+            sampled = row["audit_sample_member"] is True
+            sampled_count += sampled
+            visual = row["visual_review"]
+            assert isinstance(visual, Mapping)
+            visual_status = str(visual["status"])
+            visual_counts[visual_status] += 1
+            if sampled and visual_status != "sampled_human_reviewed":
+                raise ValueError(f"row {index}: frozen sample lacks sampled human evidence")
+            if not sampled and visual_status == "sampled_human_reviewed":
+                raise ValueError(f"row {index}: unsampled item claims sampled review")
+            automated = row["automated_audit"]
+            assert isinstance(automated, Mapping)
+            automated_count += automated.get("status") == "automated"
+
+            relations = row["duplicate_relations"]
+            assert isinstance(relations, Sequence)
+            pair_ids: list[str] = []
+            perceptual_ids: list[str] = []
+            for relation in relations:
+                assert isinstance(relation, Mapping)
+                pair_id = str(relation["pair_id"])
+                pair_ids.append(pair_id)
+                candidate_type = str(relation["candidate_type"])
+                item_ids = relation["item_ids"]
+                if not isinstance(item_ids, Sequence) or isinstance(item_ids, (str, bytes)):
+                    raise ValueError(f"{pair_id}: invalid pair identities")
+                canonical_items = sorted(str(value) for value in item_ids)
+                counterpart = str(relation["counterpart_item_id"])
+                if (
+                    canonical_items != list(item_ids)
+                    or canonical_items != sorted((item_id, counterpart))
+                    or item_id == counterpart
+                    or counterpart not in by_id
+                ):
+                    raise ValueError(f"{pair_id}: swapped or unknown pair identity")
+                if pair_id != _pair_id(candidate_type, *canonical_items):
+                    raise ValueError(f"{pair_id}: non-canonical pair key")
+                relation_occurrences[pair_id].append((item_id, relation))
+                if candidate_type == "exact":
+                    exact_pairs.add(pair_id)
+                    evidence = relation["evidence"]
+                    assert isinstance(evidence, Mapping)
+                    for member_id in canonical_items:
+                        image = by_id[member_id]["image"]
+                        assert isinstance(image, Mapping)
+                        if image.get("encoded_sha256") != evidence.get(
+                            "encoded_sha256"
+                        ) or image.get("pixel_sha256") != evidence.get("pixel_sha256"):
+                            raise ValueError(f"{pair_id}: exact evidence does not match both rows")
+                else:
+                    perceptual_ids.append(pair_id)
+                    perceptual_pairs[pair_id] = relation
+            if len(pair_ids) != len(set(pair_ids)):
+                raise ValueError(f"{item_id}: duplicate pair relation")
+            if sorted(row["near_duplicate_candidate_ids"]) != sorted(perceptual_ids):
+                raise ValueError(f"{item_id}: perceptual candidate summary disagrees")
+
+        for pair_id, occurrences in relation_occurrences.items():
+            if len(occurrences) != 2 or len({item_id for item_id, _ in occurrences}) != 2:
+                raise ValueError(f"{pair_id}: missing mirrored relation")
+            normalized = []
+            for _item_id, relation in occurrences:
+                value = dict(relation)
+                value.pop("counterpart_item_id", None)
+                normalized.append(value)
+            if normalized[0] != normalized[1]:
+                raise ValueError(f"{pair_id}: mirrored relations disagree")
+
+        expected_exact_pairs: set[str] = set()
+        exact_groups: dict[tuple[object, object], list[str]] = defaultdict(list)
+        for row in rows:
+            if row["processing_status"] != "processed":
+                continue
+            image = row["image"]
+            assert isinstance(image, Mapping)
+            exact_key = (image.get("encoded_sha256"), image.get("pixel_sha256"))
+            if exact_key != (None, None):
+                exact_groups[exact_key].append(str(row["item_id"]))
+        for members in exact_groups.values():
+            expected_exact_pairs.update(
+                _pair_id("exact", first, second)
+                for first, second in combinations(sorted(members), 2)
+            )
+        if exact_pairs != expected_exact_pairs:
+            raise ValueError("exact cryptographic pairs are missing or spurious")
+
+        group_ids = _v2_group_ids_by_item(rows)
+        for row in rows:
+            expected_summary = _v2_summary(row, group_ids=group_ids[str(row["item_id"])])
+            if row["duplicate_summary"] != expected_summary:
+                raise ValueError(f"{row['item_id']}: derived duplicate summary disagrees")
+
+        inference = descriptor.get("review_inference")
+        if not isinstance(inference, Mapping):
+            raise ValueError("descriptor lacks review inference")
+        expected_inference = {
+            "automated_population_audit_count": automated_count,
+            "sampled_human_review_count": visual_counts["sampled_human_reviewed"],
+            "targeted_human_review_count": visual_counts["targeted_human_reviewed"],
+            "not_visually_reviewed_count": visual_counts["not_visually_reviewed"],
+            "unavailable_visual_review_count": visual_counts["unavailable"],
+            "not_applicable_visual_review_count": visual_counts["not_applicable"],
+            "exact_pair_automated_count": len(exact_pairs),
+            "perceptual_pair_count": len(perceptual_pairs),
+            "perceptual_pair_human_review_count": sum(
+                relation["disposition"] in {"distinct", "duplicate", "related"}
+                for relation in perceptual_pairs.values()
+            ),
+            "perceptual_pair_pending_count": sum(
+                relation["disposition"] == "pending" for relation in perceptual_pairs.values()
+            ),
+        }
+        if sampled_count != DEFAULT_SAMPLE_SIZE:
+            raise ValueError("frozen visual sample must contain exactly 64 identities")
+        for field, expected in expected_inference.items():
+            if inference.get(field) != expected:
+                raise ValueError(f"descriptor review inference disagrees for {field}")
+    except ManifestPublicationError:
+        raise
+    except (AssertionError, ContractValidationError, KeyError, TypeError, ValueError) as error:
+        raise _publication_error(f"v2 collection validation failed: {error}") from error
+
+
 def _validate_generation_inputs(
     descriptor: Mapping[str, object], rows: Sequence[Mapping[str, object]]
 ) -> tuple[dict[str, object], dict[str, object], bytes, bytes]:
     try:
+        schema_version = descriptor.get("schema_version")
+        if isinstance(schema_version, bool) or schema_version not in {1, 2}:
+            raise _publication_error("unsupported manifest schema version")
+        version = int(schema_version)
         for index, row in enumerate(rows):
             try:
-                validate_instance("manifest-row", row)
+                validate_instance("manifest-row", row, version=version)
             except ContractValidationError as error:
                 raise _publication_error(
                     f"manifest-row[{index}] failed validation: {error}"
@@ -1074,12 +1369,14 @@ def _validate_generation_inputs(
             raise _publication_error(
                 "manifest ImageHash provenance does not match the installed audit library"
             )
+        if version == 2:
+            validate_v2_manifest_collection(completed_descriptor, rows)
         generation_id = _generation_id(completed_descriptor, records_bytes)
         completed_descriptor["generation_id"] = generation_id
-        validate_instance("manifest-descriptor", completed_descriptor)
+        validate_instance("manifest-descriptor", completed_descriptor, version=version)
         descriptor_bytes = _canonical_descriptor(completed_descriptor)
         pointer = {
-            "schema_version": 1,
+            "schema_version": version,
             "record_type": "manifest-active",
             "manifest_id": completed_descriptor["manifest_id"],
             "generation_id": generation_id,
@@ -1090,7 +1387,7 @@ def _validate_generation_inputs(
             "row_count": completed_descriptor["row_count"],
             "records_sha256": records_sha256,
         }
-        validate_instance("manifest-active", pointer)
+        validate_instance("manifest-active", pointer, version=version)
     except ManifestPublicationError:
         raise
     except (ContractValidationError, TypeError, ValueError) as error:
@@ -1212,7 +1509,13 @@ def resolve_active_manifest(
     """Resolve and validate exactly the generation named by the active pointer."""
 
     pointer = _load_yaml_mapping(active_path, label="active pointer")
-    validate_instance("manifest-active", pointer)
+    pointer_version = pointer.get("schema_version")
+    if isinstance(pointer_version, bool) or pointer_version not in {1, 2}:
+        raise _publication_error(
+            "active pointer names an unsupported schema version", committed=True
+        )
+    version = int(pointer_version)
+    validate_instance("manifest-active", pointer, version=version)
     generation_id = str(pointer["generation_id"])
     descriptor_relative = f"{generation_id}/manifest-descriptor.yaml"
     records_relative = f"{generation_id}/manifest-records.jsonl"
@@ -1223,7 +1526,9 @@ def resolve_active_manifest(
         generation_root, pointer["records_path"], expected=records_relative
     )
     descriptor = _load_yaml_mapping(descriptor_path, label="generation descriptor")
-    validate_instance("manifest-descriptor", descriptor)
+    if descriptor.get("schema_version") != version:
+        raise _publication_error("pointer and descriptor schema versions disagree", committed=True)
+    validate_instance("manifest-descriptor", descriptor, version=version)
     try:
         records_bytes = records_path.read_bytes()
     except OSError as error:
@@ -1249,7 +1554,7 @@ def resolve_active_manifest(
             loaded = json.loads(line)
             if not isinstance(loaded, dict):
                 raise ValueError(f"row {index} is not an object")
-            validate_instance("manifest-row", loaded)
+            validate_instance("manifest-row", loaded, version=version)
             rows.append(loaded)
     except (UnicodeError, json.JSONDecodeError, ValueError, ContractValidationError) as error:
         raise _publication_error(
@@ -1268,6 +1573,11 @@ def resolve_active_manifest(
         raise _publication_error("pointer and descriptor disagree", committed=True)
     if len(rows) != pointer["row_count"]:
         raise _publication_error("generation row count mismatch", committed=True)
+    if version == 2:
+        try:
+            validate_v2_manifest_collection(descriptor, rows)
+        except ManifestPublicationError as error:
+            raise _publication_error(str(error), committed=True) from error
     return descriptor, rows
 
 
@@ -1367,7 +1677,93 @@ def _candidate_review_rows(rows: Sequence[Mapping[str, object]]) -> list[dict[st
     return review_rows
 
 
+def prepare_v2_review_rows(
+    rows: Sequence[Mapping[str, object]],
+) -> list[dict[str, str]]:
+    """Emit disjoint policy, frozen-visual, and perceptual-pair evidence rows."""
+
+    item_rows: list[dict[str, str]] = []
+    visual_rows: list[dict[str, str]] = []
+    pair_relations: dict[str, Mapping[str, object]] = {}
+    for row in rows:
+        validate_instance("manifest-row", row, version=2)
+        item_id = str(row["item_id"])
+        source_group_id = row.get("source_group_id")
+        policy = {
+            **{field: "" for field in REVIEW_CSV_FIELDS},
+            "review_kind": "item_policy",
+            "review_key": f"policy:{item_id}",
+            "item_id": item_id,
+            "source_group_id": str(source_group_id or ""),
+            "review_status": "pending",
+            "dataset_licence_status": "pending",
+            "item_provenance_status": "pending",
+            "access_status": "pending",
+            "redistribution_status": "pending",
+            "figure_reproduction_status": "pending",
+        }
+        item_rows.append(policy)
+
+        if row["audit_sample_member"] is True:
+            visual = row["visual_review"]
+            assert isinstance(visual, Mapping)
+            reviewed = visual.get("status") == "sampled_human_reviewed"
+            visual_rows.append(
+                {
+                    **{field: "" for field in REVIEW_CSV_FIELDS},
+                    "review_kind": "visual_item",
+                    "review_key": f"visual:{item_id}",
+                    "item_id": item_id,
+                    "review_status": "reviewed" if reviewed else "pending",
+                    "reviewer": str(visual.get("reviewer", "")) if reviewed else "",
+                    "reviewed_at": str(visual.get("reviewed_at", "")) if reviewed else "",
+                    "rationale": str(visual.get("rationale", "")) if reviewed else "",
+                    "quality_disposition": (
+                        ";".join(str(flag) for flag in visual.get("quality_flags", ()))
+                        or "acceptable"
+                        if reviewed
+                        else ""
+                    ),
+                    "suitability_disposition": (
+                        str(visual.get("suitability", "")) if reviewed else ""
+                    ),
+                }
+            )
+        relations = row["duplicate_relations"]
+        assert isinstance(relations, Sequence)
+        for relation in relations:
+            assert isinstance(relation, Mapping)
+            if relation.get("candidate_type") == "perceptual":
+                pair_relations[str(relation["pair_id"])] = relation
+
+    if len(item_rows) != EXPECTED_ROW_COUNT or len(visual_rows) != DEFAULT_SAMPLE_SIZE:
+        raise _review_error("v2 review preparation requires 685 policies and 64 sample rows")
+    pair_rows: list[dict[str, str]] = []
+    for pair_id, relation in sorted(pair_relations.items()):
+        item_ids = relation["item_ids"]
+        assert isinstance(item_ids, Sequence)
+        reviewed = relation["disposition"] in {"distinct", "duplicate", "related"}
+        unavailable = relation["disposition"] == "unavailable"
+        pair_rows.append(
+            {
+                **{field: "" for field in REVIEW_CSV_FIELDS},
+                "review_kind": "duplicate_pair",
+                "review_key": pair_id,
+                "item_id": str(item_ids[0]),
+                "candidate_item_id": str(item_ids[1]),
+                "review_status": "reviewed" if reviewed or unavailable else "pending",
+                "reviewer": str(relation.get("reviewer") or "") if reviewed else "",
+                "reviewed_at": str(relation.get("reviewed_at") or "") if reviewed else "",
+                "rationale": str(relation.get("rationale") or ""),
+                "duplicate_disposition": str(relation["disposition"]),
+            }
+        )
+    return [*item_rows, *visual_rows, *pair_rows]
+
+
 def _expected_review_rows(rows: Sequence[Mapping[str, object]]) -> list[dict[str, str]]:
+    if rows and rows[0].get("schema_version") == 2:
+        return prepare_v2_review_rows(rows)
     return [*(_review_row(row) for row in rows), *_candidate_review_rows(rows)]
 
 
@@ -1471,6 +1867,7 @@ _ITEM_PROVENANCE_STATUSES = {"confirmed", "unavailable"}
 _ACCESS_STATUSES = {"confirmed", "restricted"}
 _REDISTRIBUTION_STATUSES = {"permitted", "prohibited"}
 _FIGURE_REPRODUCTION_STATUSES = {"permitted", "prohibited"}
+_V2_REUSE_STATUSES = {"not_established", "permitted", "prohibited"}
 
 
 def _quality_flags(value: str, *, review_key: str) -> list[str]:
@@ -1585,11 +1982,193 @@ def _validated_review_rows(
     return [seen[row["review_key"]] for row in expected_rows]
 
 
+def _validated_v2_review_rows(
+    rows: Sequence[Mapping[str, object]], review_rows: Sequence[Mapping[str, str]]
+) -> list[dict[str, str]]:
+    try:
+        review_rows = validate_review_rows(review_rows)
+    except ReviewEvidenceError as error:
+        raise _review_error(str(error)) from error
+    expected_rows = prepare_v2_review_rows(rows)
+    expected = {row["review_key"]: row for row in expected_rows}
+    seen: dict[str, dict[str, str]] = {}
+    for untrusted in review_rows:
+        if set(untrusted) != set(REVIEW_CSV_FIELDS):
+            raise _review_error("review row does not match the exact header")
+        row = {field: str(untrusted[field]) for field in REVIEW_CSV_FIELDS}
+        key = row["review_key"]
+        if key in seen:
+            raise _review_error(f"duplicate review key: {key}")
+        emitted = expected.get(key)
+        if emitted is None:
+            raise _review_error(f"unknown review key: {key}")
+        for field in ("review_kind", "item_id", "candidate_item_id"):
+            if row[field] != emitted[field]:
+                raise _review_error(f"{key}: {field} does not match the emitted key")
+        if row["review_status"] != "reviewed":
+            raise _review_error(f"{key}: review_status must be reviewed")
+        for field in ("reviewer", "rationale"):
+            if not row[field].strip():
+                raise _review_error(f"{key}: {field} is required")
+        try:
+            if date.fromisoformat(row["reviewed_at"]).isoformat() != row["reviewed_at"]:
+                raise ValueError
+        except ValueError:
+            raise _review_error(f"{key}: reviewed_at must be an ISO date") from None
+
+        if row["review_kind"] == "item_policy":
+            _require_enum(row, "dataset_licence_status", {"confirmed"})
+            _require_enum(row, "item_provenance_status", _ITEM_PROVENANCE_STATUSES)
+            _require_enum(row, "access_status", _ACCESS_STATUSES)
+            _require_enum(row, "redistribution_status", _V2_REUSE_STATUSES)
+            _require_enum(row, "figure_reproduction_status", _V2_REUSE_STATUSES)
+            if row["item_provenance_status"] == "unavailable" and (
+                row["redistribution_status"] == "permitted"
+                or row["figure_reproduction_status"] == "permitted"
+            ):
+                raise _review_error(f"{key}: unavailable item provenance cannot infer permission")
+            if any(
+                row[field]
+                for field in (
+                    "quality_disposition",
+                    "suitability_disposition",
+                    "duplicate_disposition",
+                )
+            ):
+                raise _review_error(f"{key}: policy row contains visual or pair claims")
+        elif row["review_kind"] == "visual_item":
+            _quality_flags(row["quality_disposition"], review_key=key)
+            _require_enum(
+                row,
+                "suitability_disposition",
+                {"suitable", "unsuitable", "uncertain", "not_assessed"},
+            )
+            irrelevant = (
+                "source_group_id",
+                "duplicate_disposition",
+                "dataset_licence_status",
+                "item_provenance_status",
+                "access_status",
+                "redistribution_status",
+                "figure_reproduction_status",
+            )
+            if any(row[field] for field in irrelevant):
+                raise _review_error(f"{key}: visual row contains policy or pair claims")
+        elif row["review_kind"] == "duplicate_pair":
+            _require_enum(row, "duplicate_disposition", _DUPLICATE_DISPOSITIONS)
+            irrelevant = (
+                "source_group_id",
+                "quality_disposition",
+                "suitability_disposition",
+                "dataset_licence_status",
+                "item_provenance_status",
+                "access_status",
+                "redistribution_status",
+                "figure_reproduction_status",
+            )
+            if any(row[field] for field in irrelevant):
+                raise _review_error(f"{key}: pair row contains item-only claims")
+        else:  # pragma: no cover - expected-row join already prevents this
+            raise _review_error(f"{key}: unsupported review kind")
+        seen[key] = row
+    missing = sorted(set(expected) - set(seen))
+    if missing:
+        raise _review_error(f"missing review key: {missing[0]}")
+    return [seen[row["review_key"]] for row in expected_rows]
+
+
+def _apply_v2_review_dispositions(
+    rows: Sequence[Mapping[str, object]], review_rows: Sequence[Mapping[str, str]]
+) -> list[dict[str, object]]:
+    validated = _validated_v2_review_rows(rows, review_rows)
+    updated = copy.deepcopy(list(rows))
+    by_id = {str(row["item_id"]): row for row in updated}
+    for review in validated:
+        item = by_id[review["item_id"]]
+        if review["review_kind"] == "item_policy":
+            item["source_group_id"] = review["source_group_id"] or None
+            item_provenance = (
+                {
+                    "status": "confirmed",
+                    "evidence_ref": f"review:{review['review_key']}",
+                }
+                if review["item_provenance_status"] == "confirmed"
+                else {
+                    "status": "unavailable",
+                    "reason": "The dataset does not expose a per-item source chain.",
+                }
+            )
+            item["rights"] = {
+                "dataset_licence": {
+                    "status": "confirmed",
+                    "identifier": "CC-BY-NC-4.0",
+                    "reference": "https://creativecommons.org/licenses/by-nc/4.0/",
+                },
+                "item_provenance": item_provenance,
+                "access_status": review["access_status"],
+                "redistribution": {
+                    "status": review["redistribution_status"],
+                    "reviewed_basis_ref": (
+                        f"review:{review['review_key']}"
+                        if review["redistribution_status"] == "permitted"
+                        else None
+                    ),
+                },
+                "figure_reproduction": {
+                    "status": review["figure_reproduction_status"],
+                    "reviewed_basis_ref": (
+                        f"review:{review['review_key']}"
+                        if review["figure_reproduction_status"] == "permitted"
+                        else None
+                    ),
+                },
+            }
+        elif review["review_kind"] == "visual_item":
+            item["visual_review"] = {
+                "status": "sampled_human_reviewed",
+                "reviewer": review["reviewer"],
+                "reviewed_at": review["reviewed_at"],
+                "rationale": review["rationale"],
+                "quality_flags": _quality_flags(
+                    review["quality_disposition"], review_key=review["review_key"]
+                ),
+                "suitability": review["suitability_disposition"],
+            }
+        else:
+            for member_id in (review["item_id"], review["candidate_item_id"]):
+                relations = by_id[member_id]["duplicate_relations"]
+                assert isinstance(relations, list)
+                relation = next(
+                    relation
+                    for relation in relations
+                    if relation["pair_id"] == review["review_key"]
+                )
+                disposition = review["duplicate_disposition"]
+                relation.update(
+                    {
+                        "evidence_basis": (
+                            "perceptual_hash_plus_human_review"
+                            if disposition != "unavailable"
+                            else "perceptual_hash_candidate"
+                        ),
+                        "disposition": disposition,
+                        "reviewer": review["reviewer"] if disposition != "unavailable" else None,
+                        "reviewed_at": (
+                            review["reviewed_at"] if disposition != "unavailable" else None
+                        ),
+                        "rationale": review["rationale"],
+                    }
+                )
+    return derive_v2_exact_relations(updated)
+
+
 def apply_review_dispositions(
     rows: Sequence[Mapping[str, object]], review_rows: Sequence[Mapping[str, str]]
 ) -> list[dict[str, object]]:
     """Apply one complete stable-key review to copied manifest rows."""
 
+    if rows and rows[0].get("schema_version") == 2:
+        return _apply_v2_review_dispositions(rows, review_rows)
     validated = _validated_review_rows(rows, review_rows)
     updated = copy.deepcopy(list(rows))
     by_id = {str(row["item_id"]): row for row in updated}
@@ -1679,6 +2258,46 @@ def _require_complete_denominator(rows: Sequence[Mapping[str, object]]) -> None:
         raise _review_error("finalized manifest does not preserve all 685 identities")
 
 
+def _v2_review_inference(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    visual_counts: Counter[str] = Counter()
+    automated_count = 0
+    pairs: dict[str, Mapping[str, object]] = {}
+    for row in rows:
+        visual = row["visual_review"]
+        automated = row["automated_audit"]
+        assert isinstance(visual, Mapping) and isinstance(automated, Mapping)
+        visual_counts[str(visual["status"])] += 1
+        automated_count += automated["status"] == "automated"
+        relations = row["duplicate_relations"]
+        assert isinstance(relations, Sequence)
+        for relation in relations:
+            assert isinstance(relation, Mapping)
+            pairs[str(relation["pair_id"])] = relation
+    exact = [relation for relation in pairs.values() if relation["candidate_type"] == "exact"]
+    perceptual = [
+        relation for relation in pairs.values() if relation["candidate_type"] == "perceptual"
+    ]
+    return {
+        "automated_population_audit_count": automated_count,
+        "sampled_human_review_count": visual_counts["sampled_human_reviewed"],
+        "targeted_human_review_count": visual_counts["targeted_human_reviewed"],
+        "not_visually_reviewed_count": visual_counts["not_visually_reviewed"],
+        "unavailable_visual_review_count": visual_counts["unavailable"],
+        "not_applicable_visual_review_count": visual_counts["not_applicable"],
+        "exact_pair_automated_count": len(exact),
+        "perceptual_pair_count": len(perceptual),
+        "perceptual_pair_human_review_count": sum(
+            relation["disposition"] in {"distinct", "duplicate", "related"}
+            for relation in perceptual
+        ),
+        "perceptual_pair_pending_count": sum(
+            relation["disposition"] == "pending" for relation in perceptual
+        ),
+        "inference_scope": "sample_observation_only",
+        "population_prevalence_inference": "not_supported",
+    }
+
+
 def finalize_reviewed_manifest(
     *, review_path: Path, active_path: Path, generation_root: Path
 ) -> None:
@@ -1691,6 +2310,8 @@ def finalize_reviewed_manifest(
     _require_complete_denominator(updated)
     if descriptor["benchmark_state"] != "AUDITED_LOCKED":
         raise _review_error("finalization cannot change a non-locked benchmark")
+    if descriptor.get("schema_version") == 2:
+        descriptor = {**descriptor, "review_inference": _v2_review_inference(updated)}
     publish_manifest_generation(
         active_path=active_path,
         generation_root=generation_root,

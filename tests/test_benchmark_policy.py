@@ -237,6 +237,7 @@ def _synthetic_evaluation_gate(
     manifest_reference = record["prerequisites"]["evaluation_manifest_frozen"]
     manifest_reference.update(
         {
+            "schema_version": manifest_schema_version,
             "artifact_path": active_path.relative_to(project_root).as_posix(),
             "artifact_sha256": hashlib.sha256(active_path.read_bytes()).hexdigest(),
             "expected_generation_id": pointer["generation_id"],

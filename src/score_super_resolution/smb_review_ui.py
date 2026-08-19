@@ -52,9 +52,16 @@ class SMBReviewSession:
         self.reload()
         sample = pd.read_csv(self.sample_path, dtype=str)
         self.sample_ids = sample["item_id"].tolist()
-        self.visual_item_ids = self.sample_ids + sorted(EXCEPTION_IDS - set(self.sample_ids))
+        kinds = {row["review_kind"] for row in self.read_rows()}
+        self.visual_item_ids = (
+            [row["item_id"] for row in self.read_rows() if row["review_kind"] == "visual_item"]
+            if "visual_item" in kinds
+            else self.sample_ids + sorted(EXCEPTION_IDS - set(self.sample_ids))
+        )
         self.candidate_keys = [
-            row["review_key"] for row in self.read_rows() if row["review_kind"] == "candidate"
+            row["review_key"]
+            for row in self.read_rows()
+            if row["review_kind"] in {"candidate", "duplicate_pair"}
         ]
         self.dataset = dataset or load_smb(purpose=BenchmarkPurpose.FIXED_VISUAL_AUDIT)
         if len(self.dataset) != 685:
@@ -88,7 +95,9 @@ class SMBReviewSession:
 
     def summary(self) -> dict[str, int]:
         rows = self.read_rows()
-        groups = {row["source_group_id"] for row in rows if row["review_kind"] == "item"}
+        groups = {
+            row["source_group_id"] for row in rows if row["review_kind"] in {"item", "item_policy"}
+        }
         return {
             "rows": len(rows),
             "reviewed": sum(row["review_status"] == "reviewed" for row in rows),
@@ -106,10 +115,25 @@ class SMBReviewSession:
             raise ValueError("Indica el nombre del revisor")
         validate_human_cell(reviewer, field="reviewer", review_key="session-policy")
         rows = self.read_rows()
-        visual_set = set(self.visual_item_ids)
         today = date.today().isoformat()
         changed = 0
         for row in rows:
+            if row["review_kind"] == "item_policy" and row["review_status"] != "reviewed":
+                row["source_group_id"] = PAGE_SUFFIX.sub("", row["source_group_id"])
+                row["review_status"] = "reviewed"
+                row["reviewer"] = reviewer
+                row["reviewed_at"] = today
+                row["rationale"] = (
+                    "Política general confirmada: agrupación por obra, licencia del conjunto "
+                    "CC BY-NC 4.0 y ausencia de procedencia individual verificable."
+                )
+                row["dataset_licence_status"] = "confirmed"
+                row["item_provenance_status"] = "unavailable"
+                row["access_status"] = "confirmed"
+                row["redistribution_status"] = "not_established"
+                row["figure_reproduction_status"] = "prohibited"
+                changed += 1
+                continue
             if row["review_kind"] != "item" or row["review_status"] == "reviewed":
                 continue
             row["source_group_id"] = PAGE_SUFFIX.sub("", row["source_group_id"])
@@ -121,15 +145,6 @@ class SMBReviewSession:
             row["access_status"] = "confirmed"
             row["redistribution_status"] = "permitted"
             row["figure_reproduction_status"] = "permitted"
-            if row["item_id"] not in visual_set:
-                row["review_status"] = "reviewed"
-                row["reviewer"] = reviewer
-                row["reviewed_at"] = today
-                row["rationale"] = (
-                    "Revisión mediante auditoría automática completa y política muestral fijada; "
-                    "página procesada sin incidencia técnica y fuera de la muestra visual. Uso no "
-                    "comercial sujeto a CC BY-NC 4.0 y atribución."
-                )
             changed += 1
         self.write_rows(rows)
         result = self.summary()
@@ -152,7 +167,14 @@ class SMBReviewSession:
         validate_human_cell(reviewer, field="reviewer", review_key=item_id)
         validate_human_cell(rationale, field="rationale", review_key=item_id)
         rows = self.read_rows()
-        row = next(row for row in rows if row["review_key"] == item_id)
+        visual_key = f"visual:{item_id}"
+        row = next(row for row in rows if row["review_key"] in {item_id, visual_key})
+        if row["review_kind"] == "visual_item":
+            policy = next(policy for policy in rows if policy["review_key"] == f"policy:{item_id}")
+            if policy["review_status"] != "reviewed":
+                raise ValueError("Aplica primero la política general")
+        else:
+            policy = row
         policy_fields = (
             "source_group_id",
             "dataset_licence_status",
@@ -161,7 +183,7 @@ class SMBReviewSession:
             "redistribution_status",
             "figure_reproduction_status",
         )
-        if any(not row[field] or row[field] == "pending" for field in policy_fields):
+        if any(not policy[field] or policy[field] == "pending" for field in policy_fields):
             raise ValueError("Aplica primero la política general")
         row["quality_disposition"] = (
             ";".join(sorted(set(quality_flags))) if quality_flags else "acceptable"
@@ -189,28 +211,16 @@ class SMBReviewSession:
         validate_human_cell(rationale, field="rationale", review_key=review_key)
         rows = self.read_rows()
         row = next(row for row in rows if row["review_key"] == review_key)
-        involved = {row["item_id"], row["candidate_item_id"]}
-        conflicts = [
-            other["review_key"]
-            for other in rows
-            if other["review_kind"] == "candidate"
-            and other["review_status"] == "reviewed"
-            and other["review_key"] != review_key
-            and involved.intersection({other["item_id"], other["candidate_item_id"]})
-            and other["duplicate_disposition"] != disposition
-        ]
-        if conflicts:
-            raise ValueError(
-                "Una página tiene relaciones incompatibles; informa a Codex: " + str(conflicts)
-            )
         row["review_status"] = "reviewed"
         row["reviewer"] = reviewer
         row["reviewed_at"] = date.today().isoformat()
         row["rationale"] = rationale
         row["duplicate_disposition"] = disposition
-        for item_id in involved:
-            item = next(item for item in rows if item["review_key"] == item_id)
-            item["duplicate_disposition"] = disposition
+        if row["review_kind"] == "candidate":
+            involved = {row["item_id"], row["candidate_item_id"]}
+            for item_id in involved:
+                item = next(item for item in rows if item["review_key"] == item_id)
+                item["duplicate_disposition"] = disposition
         self.write_rows(rows)
 
     def save_item_batch(
@@ -235,7 +245,7 @@ class SMBReviewSession:
         already_reviewed = 0
         flagged = 0
         for item_id in item_ids:
-            row = next(row for row in rows if row["review_key"] == item_id)
+            row = next(row for row in rows if row["review_key"] in {item_id, f"visual:{item_id}"})
             if item_id in excluded_ids:
                 if row["review_status"] != "reviewed":
                     row["reviewer"] = reviewer
@@ -248,6 +258,11 @@ class SMBReviewSession:
             if row["review_status"] == "reviewed":
                 already_reviewed += 1
                 continue
+            policy = (
+                next(policy for policy in rows if policy["review_key"] == f"policy:{item_id}")
+                if row["review_kind"] == "visual_item"
+                else row
+            )
             policy_fields = (
                 "source_group_id",
                 "dataset_licence_status",
@@ -256,7 +271,7 @@ class SMBReviewSession:
                 "redistribution_status",
                 "figure_reproduction_status",
             )
-            if any(not row[field] or row[field] == "pending" for field in policy_fields):
+            if any(not policy[field] or policy[field] == "pending" for field in policy_fields):
                 raise ValueError("Aplica primero la política general")
             row["quality_disposition"] = "acceptable"
             row["suitability_disposition"] = "suitable"
@@ -282,8 +297,13 @@ class SMBReviewSession:
         return [
             item_id
             for item_id in self.visual_item_ids
-            if rows_by_key[item_id]["review_status"] != "reviewed"
-            and rows_by_key[item_id]["rationale"].startswith(INDIVIDUAL_REVIEW_MARKER)
+            if rows_by_key.get(f"visual:{item_id}", rows_by_key.get(item_id, {})).get(
+                "review_status"
+            )
+            != "reviewed"
+            and rows_by_key.get(f"visual:{item_id}", rows_by_key.get(item_id, {}))
+            .get("rationale", "")
+            .startswith(INDIVIDUAL_REVIEW_MARKER)
         ]
 
     def related_candidate_rows(self, review_key: str) -> list[dict[str, str]]:
@@ -294,7 +314,7 @@ class SMBReviewSession:
         return [
             row
             for row in rows
-            if row["review_kind"] == "candidate"
+            if row["review_kind"] in {"candidate", "duplicate_pair"}
             and row["review_key"] != review_key
             and involved.intersection({row["item_id"], row["candidate_item_id"]})
         ]
@@ -397,7 +417,9 @@ class SMBReviewSession:
                     image = self._image(item_id)
                     axis.imshow(image)
                     axis.axis("off")
-                    status = rows_by_key[item_id]["review_status"]
+                    status = rows_by_key.get(f"visual:{item_id}", rows_by_key.get(item_id, {}))[
+                        "review_status"
+                    ]
                     exception = " · EXCEPCIÓN" if item_id in EXCEPTION_IDS else ""
                     axis.set_title(f"{item_id}{exception}\n{status}", fontsize=9)
                 for axis in flat_axes[len(item_ids) :]:
@@ -511,7 +533,11 @@ class SMBReviewSession:
                     clear_output()
                     print(error)
                 return
-            row = next(row for row in self.read_rows() if row["review_key"] == item_id)
+            row = next(
+                row
+                for row in self.read_rows()
+                if row["review_key"] in {item_id, f"visual:{item_id}"}
+            )
             image = self._image(item_id)
             with image_output:
                 clear_output(wait=True)
@@ -519,10 +545,7 @@ class SMBReviewSession:
                 axis.imshow(image)
                 axis.axis("off")
                 exception = " · excepción" if item_id in EXCEPTION_IDS else ""
-                axis.set_title(
-                    f"{item_id}{exception}\n"
-                    f"{PAGE_SUFFIX.sub('', row['source_group_id'])} · {image.width}x{image.height}"
-                )
+                axis.set_title(f"{item_id}{exception}\n{item_id} · {image.width}x{image.height}")
                 plt.show()
             flags = row["quality_disposition"].split(";")
             for flag, checkbox in quality.items():

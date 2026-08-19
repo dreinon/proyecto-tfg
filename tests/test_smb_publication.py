@@ -298,6 +298,8 @@ def _attach_relation(
     second["duplicate_relations"].append(mirrored)
     for row in (first, second):
         row["near_duplicate_candidate_ids"].append(relation["pair_id"])
+        row["near_duplicate_candidate_ids"].sort()
+        row["duplicate_relations"].sort(key=lambda value: value["pair_id"])
         summary = row["duplicate_summary"]
         summary["perceptual_relation_count"] += 1
         summary[f"{disposition}_relation_count"] += 1
