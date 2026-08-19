@@ -165,6 +165,51 @@ def _parse_utc_timestamp_field(
     return parsed, []
 
 
+def _manifest_row_semantic_errors(instance: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    expected_item_id = f"smb-test-{instance['upstream_index']:06d}"
+    if instance["item_id"] != expected_item_id:
+        errors.append(f"instance $.item_id: must equal {expected_item_id} for $.upstream_index")
+
+    processing_status = instance["processing_status"]
+    expected_status = "processable" if processing_status == "processed" else "unprocessable"
+    if instance["expected_status"] != expected_status:
+        errors.append(
+            f"instance $.expected_status: must be {expected_status} when "
+            f"$.processing_status is {processing_status}"
+        )
+
+    unprocessable_reason = instance["unprocessable_reason"]
+    if processing_status == "processed" and unprocessable_reason is not None:
+        errors.append(
+            "instance $.unprocessable_reason: must be null when $.processing_status is processed"
+        )
+    elif processing_status == "failed" and unprocessable_reason is None:
+        errors.append(
+            "instance $.unprocessable_reason: must name the failure when "
+            "$.processing_status is failed"
+        )
+
+    paired_eligible = instance["paired_eligible"]
+    paired_reason = instance["paired_ineligibility_reason"]
+    if paired_eligible and paired_reason is not None:
+        errors.append(
+            "instance $.paired_ineligibility_reason: must be null when $.paired_eligible is true"
+        )
+    elif not paired_eligible and paired_reason is None:
+        errors.append(
+            "instance $.paired_ineligibility_reason: must name the exclusion when "
+            "$.paired_eligible is false"
+        )
+
+    candidate_ids = instance["near_duplicate_candidate_ids"]
+    if candidate_ids != sorted(set(candidate_ids)):
+        errors.append(
+            "instance $.near_duplicate_candidate_ids: must be unique and in canonical order"
+        )
+    return errors
+
+
 def _semantic_validation_errors(schema_id: str, instance: Mapping[str, Any]) -> list[str]:
     if schema_id == "claim-evidence":
         _, errors = _parse_date_field(instance, "review_date", allow_empty=True)
@@ -172,6 +217,8 @@ def _semantic_validation_errors(schema_id: str, instance: Mapping[str, Any]) -> 
     if schema_id == "model-descriptor":
         _, errors = _parse_date_field(instance, "verification_date")
         return errors
+    if schema_id == "manifest-row":
+        return _manifest_row_semantic_errors(instance)
     if schema_id != "run-record":
         return []
 
