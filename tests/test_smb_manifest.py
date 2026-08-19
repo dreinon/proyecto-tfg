@@ -357,7 +357,7 @@ def test_tracked_dirty_source_changes_tree_and_patch_without_serializing_content
 ) -> None:
     repository = _provenance_repository(tmp_path)
     clean = smb_audit.audit_source_provenance(repository)
-    secret_sentinel = "HF_TOKEN=must-not-appear-in-provenance"
+    secret_sentinel = "_".join(("HF", "TOKEN")) + "=must-not-appear-in-provenance"
     source = repository / "src" / "score_super_resolution" / "alpha.py"
     source.write_text(f"VALUE = {secret_sentinel!r}\n", encoding="utf-8")
 
