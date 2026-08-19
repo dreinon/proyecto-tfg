@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import copy
 import csv
+import fcntl
 import gzip
 import hashlib
 import inspect
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import threading
 from collections import Counter
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -1414,6 +1416,226 @@ def test_install_candidate_surface_and_permanent_lock_ignore_are_declared() -> N
         ]
     )
     assert command.expected_active_sha256_from_stage is True
+    tracked = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", str(lock_path.relative_to(project_root))],
+        cwd=project_root,
+        check=False,
+        capture_output=True,
+    )
+    assert tracked.returncode != 0
+
+
+def _write_install_candidate_stage(
+    stage_root: Path,
+    *,
+    expected_active_bytes: bytes,
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    descriptor = _compact_v2_descriptor(rows)
+    (
+        completed,
+        pointer,
+        recovery,
+        descriptor_bytes,
+        records_bytes,
+        compressed_bytes,
+        recovery_bytes,
+    ) = smb_audit._build_manifest_recovery_v2(descriptor, rows)
+    generation = stage_root / "artifacts/smb-manifests/generations" / completed["generation_id"]
+    generation.mkdir(parents=True)
+    (generation / "manifest-descriptor.yaml").write_bytes(descriptor_bytes)
+    (generation / "manifest-records.jsonl").write_bytes(records_bytes)
+    recovery_descriptor = stage_root / recovery["recovery_descriptor_path"]
+    recovery_descriptor.parent.mkdir(parents=True)
+    recovery_descriptor.write_bytes(recovery_bytes)
+    (stage_root / recovery["recovery_records_path"]).write_bytes(compressed_bytes)
+    active = stage_root / recovery["active_pointer_path"]
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_bytes(smb_audit._canonical_descriptor(pointer))
+    (stage_root / "install-metadata.yaml").write_bytes(
+        smb_audit._canonical_descriptor(
+            {
+                "schema_version": 1,
+                "record_type": "canonical-pixel-candidate-install",
+                "expected_previous_active_sha256": hashlib.sha256(
+                    expected_active_bytes
+                ).hexdigest(),
+                "generation_id": completed["generation_id"],
+                "bundle_id": recovery["bundle_id"],
+                "active_pointer_path": recovery["active_pointer_path"],
+                "recovery_descriptor_path": recovery["recovery_descriptor_path"],
+                "recovery_records_path": recovery["recovery_records_path"],
+            }
+        )
+    )
+    return pointer
+
+
+def test_install_candidate_is_idempotent_and_rejects_third_digest_cas(tmp_path: Path) -> None:
+    active_path, generation_root = _publish(tmp_path, _full_rows())
+    old_active = active_path.read_bytes()
+    first_stage = tmp_path / "stage-a"
+    first_pointer = _write_install_candidate_stage(
+        first_stage,
+        expected_active_bytes=old_active,
+        rows=_compact_v2_rows(),
+    )
+
+    installed = smb_audit.install_candidate(
+        stage_root=first_stage,
+        generation_root=generation_root,
+        active_path=active_path,
+        expected_active_sha256_from_stage=True,
+    )
+    lock_path = active_path.parent / smb_audit.INSTALL_LOCK_BASENAME
+    lock_inode = lock_path.stat().st_ino
+    retry = smb_audit.install_candidate(
+        stage_root=first_stage,
+        generation_root=generation_root,
+        active_path=active_path,
+        expected_active_sha256_from_stage=True,
+    )
+
+    assert installed["status"] == "installed"
+    assert retry["status"] == "idempotent"
+    assert lock_path.stat().st_ino == lock_inode
+    assert yaml.safe_load(active_path.read_text(encoding="utf-8")) == first_pointer
+
+    third_digest_bytes = b"third-party-active-pointer\n"
+    active_path.write_bytes(third_digest_bytes)
+
+    with pytest.raises(smb_audit.ManifestPublicationError, match="compare-and-swap conflict"):
+        smb_audit.install_candidate(
+            stage_root=first_stage,
+            generation_root=generation_root,
+            active_path=active_path,
+            expected_active_sha256_from_stage=True,
+        )
+
+    assert active_path.read_bytes() == third_digest_bytes
+    assert lock_path.stat().st_ino == lock_inode
+
+
+def test_permanent_flock_kernel_release_and_live_waiter_cannot_be_displaced(
+    tmp_path: Path,
+) -> None:
+    lock_path = tmp_path / smb_audit.INSTALL_LOCK_BASENAME
+    code = """
+import fcntl
+import os
+import sys
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+print(os.fstat(fd).st_ino, flush=True)
+os._exit(0)
+"""
+    owner_a = subprocess.Popen(
+        [sys.executable, "-c", code, str(lock_path)],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert owner_a.stdout is not None
+    inode_a = int(owner_a.stdout.readline().strip())
+    assert owner_a.wait(timeout=10) == 0
+
+    waiter_b = os.open(lock_path, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+    fcntl.flock(waiter_b, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    contender_c = os.open(lock_path, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        assert os.fstat(waiter_b).st_ino == inode_a == os.fstat(contender_c).st_ino
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(contender_c, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert lock_path.stat().st_ino == inode_a
+        fcntl.flock(waiter_b, fcntl.LOCK_UN)
+        fcntl.flock(contender_c, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        with suppress(OSError):
+            fcntl.flock(waiter_b, fcntl.LOCK_UN)
+        with suppress(OSError):
+            fcntl.flock(contender_c, fcntl.LOCK_UN)
+        os.close(waiter_b)
+        os.close(contender_c)
+
+
+@pytest.mark.parametrize("same_candidate", (True, False))
+def test_concurrent_candidate_installers_serialize_with_old_or_winner_reads(
+    tmp_path: Path,
+    same_candidate: bool,
+) -> None:
+    active_path, generation_root = _publish(tmp_path, _full_rows())
+    old_pointer = yaml.safe_load(active_path.read_text(encoding="utf-8"))
+    old_active = active_path.read_bytes()
+    stage_a = tmp_path / "concurrent-stage-a"
+    _write_install_candidate_stage(
+        stage_a,
+        expected_active_bytes=old_active,
+        rows=_compact_v2_rows(),
+    )
+    stage_b = stage_a
+    if not same_candidate:
+        changed_rows = _compact_v2_rows()
+        changed_rows[0]["image"]["encoded_sha256"] = "f" * 64
+        stage_b = tmp_path / "concurrent-stage-b"
+        _write_install_candidate_stage(
+            stage_b,
+            expected_active_bytes=old_active,
+            rows=changed_rows,
+        )
+    ready = threading.Barrier(2)
+    stop_reader = threading.Event()
+    outcomes: list[str] = []
+    failures: list[BaseException] = []
+    observations: list[str] = []
+
+    def install(stage: Path) -> None:
+        def hook(boundary: str) -> None:
+            if boundary == "recovery_bundle_installed":
+                ready.wait(timeout=10)
+
+        try:
+            result = smb_audit.install_candidate(
+                stage_root=stage,
+                generation_root=generation_root,
+                active_path=active_path,
+                expected_active_sha256_from_stage=True,
+                boundary_hook=hook,
+            )
+            outcomes.append(str(result["status"]))
+        except smb_audit.ManifestPublicationError as error:
+            if "compare-and-swap conflict" in str(error):
+                outcomes.append("conflict")
+            else:  # pragma: no cover - reported below
+                failures.append(error)
+
+    def read() -> None:
+        try:
+            while not stop_reader.is_set():
+                descriptor, _ = smb_audit.resolve_active_manifest(
+                    active_path=active_path,
+                    generation_root=generation_root,
+                )
+                observations.append(str(descriptor["generation_id"]))
+        except BaseException as error:  # pragma: no cover - reported below
+            failures.append(error)
+
+    reader = threading.Thread(target=read)
+    reader.start()
+    installers = [threading.Thread(target=install, args=(stage,)) for stage in (stage_a, stage_b)]
+    for installer in installers:
+        installer.start()
+    for installer in installers:
+        installer.join(timeout=30)
+    stop_reader.set()
+    reader.join(timeout=10)
+
+    assert all(not installer.is_alive() for installer in installers)
+    assert not failures
+    assert sorted(outcomes) == (
+        ["idempotent", "installed"] if same_candidate else ["conflict", "installed"]
+    )
+    winner = yaml.safe_load(active_path.read_text(encoding="utf-8"))
+    assert observations
+    assert set(observations) <= {old_pointer["generation_id"], winner["generation_id"]}
 
 
 @pytest.mark.parametrize("boundary", PUBLICATION_BOUNDARIES)

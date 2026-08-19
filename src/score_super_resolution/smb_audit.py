@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
+import errno
+import fcntl
 import gzip
 import hashlib
 import importlib.metadata
@@ -17,11 +19,12 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 import warnings
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import date
 from itertools import combinations
 from pathlib import Path, PurePosixPath
@@ -90,6 +93,7 @@ _OS_OPEN_SUPPORTS_DIR_FD = os.open in getattr(os, "supports_dir_fd", set())
 _OS_STAT_SUPPORTS_DIR_FD = os.stat in getattr(os, "supports_dir_fd", set())
 AUTHORITATIVE_MIGRATION_STAGE = ".migrate-authoritative-v2"
 PUBLICATION_BOUNDARIES = (
+    "generation_parent_anchored",
     "generation_records_written",
     "generation_records_fsynced",
     "generation_descriptor_written",
@@ -97,11 +101,23 @@ PUBLICATION_BOUNDARIES = (
     "temporary_generation_directory_fsynced",
     "generation_renamed",
     "generations_parent_fsynced",
+    "active_parent_anchored",
     "pointer_written",
     "pointer_fsynced",
     "pointer_replaced",
     "active_parent_fsynced",
 )
+INSTALL_BOUNDARIES = (
+    "candidate_generation_installed",
+    "recovery_bundle_installed",
+    "install_lock_acquired",
+    "install_cas_read",
+    "install_pointer_replaced",
+    "install_pointer_fsynced",
+    "install_lock_released",
+    "install_lock_closed",
+)
+INSTALL_LOCK_BASENAME = ".smb-evaluation-v1.install.lock"
 
 _SAFE_METADATA_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}\Z")
 _SAFE_UPSTREAM_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
@@ -2087,6 +2103,18 @@ def _publication_boundary(name: str, hook: Callable[[str], None] | None) -> None
         os._exit(91)
 
 
+def _install_boundary(name: str, hook: Callable[[str], None] | None) -> None:
+    if name not in INSTALL_BOUNDARIES:
+        raise ValueError(f"unknown install boundary: {name}")
+    if hook is not None:
+        hook(name)
+    failpoint = os.environ.get("SCORE_SR_SMB_INSTALL_FAILPOINT")
+    if failpoint == f"{name}:raise":
+        raise OSError(f"injected install failure after {name}")
+    if failpoint == f"{name}:exit":
+        os._exit(92)
+
+
 def _write_fsynced(
     path: Path,
     content: bytes,
@@ -2101,6 +2129,139 @@ def _write_fsynced(
         _publication_boundary(written_boundary, boundary_hook)
         os.fsync(handle.fileno())
         _publication_boundary(fsynced_boundary, boundary_hook)
+
+
+def _write_fsynced_at(
+    parent_fd: int,
+    basename: str,
+    content: bytes,
+    *,
+    written_boundary: str,
+    fsynced_boundary: str,
+    boundary_hook: Callable[[str], None] | None,
+) -> None:
+    no_follow, _, close_on_exec = _secure_dirfd_support()
+    descriptor = os.open(
+        basename,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow | close_on_exec,
+        0o600,
+        dir_fd=parent_fd,
+    )
+    try:
+        view = memoryview(content)
+        while view:
+            written = os.write(descriptor, view)
+            if written < 1:
+                raise OSError("short publication write")
+            view = view[written:]
+        _publication_boundary(written_boundary, boundary_hook)
+        os.fsync(descriptor)
+        _publication_boundary(fsynced_boundary, boundary_hook)
+    finally:
+        os.close(descriptor)
+
+
+def _read_regular_at(parent_fd: int, basename: str, *, label: str) -> bytes:
+    no_follow, _, close_on_exec = _secure_dirfd_support()
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            basename,
+            os.O_RDONLY | no_follow | close_on_exec | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=parent_fd,
+        )
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise _publication_error(f"{label} must be a regular file")
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, RECOVERY_READ_CHUNK_SIZE):
+            chunks.append(chunk)
+        result = b"".join(chunks)
+        if len(result) != opened.st_size:
+            raise _publication_error(f"{label} changed while being read")
+        return result
+    except ManifestPublicationError:
+        raise
+    except OSError as error:
+        raise _publication_error(f"cannot read {label}") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+@contextmanager
+def _retained_directory_fd(path: Path, *, label: str, create: bool) -> Iterable[int]:
+    no_follow, directory_only, close_on_exec = _secure_dirfd_support()
+    expanded = path.expanduser()
+    if expanded.is_absolute():
+        anchor = expanded.anchor
+        components = expanded.parts[1:]
+    else:
+        anchor = "."
+        components = expanded.parts
+    if any(component in {"", ".", ".."} for component in components):
+        raise _publication_error(f"invalid {label}")
+    directory_fd: int | None = None
+    try:
+        directory_fd = os.open(
+            anchor,
+            os.O_RDONLY | directory_only | no_follow | close_on_exec,
+        )
+        for component in components:
+            try:
+                next_fd = os.open(
+                    component,
+                    os.O_RDONLY | directory_only | no_follow | close_on_exec,
+                    dir_fd=directory_fd,
+                )
+            except FileNotFoundError:
+                if not create:
+                    raise
+                with suppress(FileExistsError):
+                    os.mkdir(component, mode=0o700, dir_fd=directory_fd)
+                os.fsync(directory_fd)
+                next_fd = os.open(
+                    component,
+                    os.O_RDONLY | directory_only | no_follow | close_on_exec,
+                    dir_fd=directory_fd,
+                )
+            os.close(directory_fd)
+            directory_fd = next_fd
+        opened = os.fstat(directory_fd)
+        if not stat.S_ISDIR(opened.st_mode):
+            raise _publication_error(f"{label} must be a directory")
+    except ManifestPublicationError:
+        if directory_fd is not None:
+            os.close(directory_fd)
+        raise
+    except OSError as error:
+        if directory_fd is not None:
+            os.close(directory_fd)
+        raise _publication_error(f"cannot access {label}") from error
+    try:
+        yield directory_fd
+    finally:
+        os.close(directory_fd)
+
+
+def _remove_temporary_generation(root_fd: int, basename: str) -> None:
+    no_follow, directory_only, close_on_exec = _secure_dirfd_support()
+    try:
+        temporary_fd = os.open(
+            basename,
+            os.O_RDONLY | directory_only | no_follow | close_on_exec,
+            dir_fd=root_fd,
+        )
+    except FileNotFoundError:
+        return
+    try:
+        for filename in (MANIFEST_DESCRIPTOR_FILENAME, MANIFEST_RECORDS_FILENAME):
+            with suppress(FileNotFoundError):
+                os.unlink(filename, dir_fd=temporary_fd)
+    finally:
+        os.close(temporary_fd)
+    with suppress(FileNotFoundError):
+        os.rmdir(basename, dir_fd=root_fd)
 
 
 def _fsync_directory(path: Path) -> None:
@@ -2467,76 +2628,140 @@ def publish_manifest_generation(
         pointer.update(dict(recovery_binding))
         validate_instance("manifest-active", pointer, version=int(pointer["schema_version"]))
     generation_id = str(pointer["generation_id"])
-    root = generation_root.resolve()
-    generation_path = (root / generation_id).resolve()
-    if generation_path.parent != root:
+    if _SAFE_METADATA_PATTERN.fullmatch(generation_id) is None:
         raise _publication_error("generation path escapes generation root")
-    temp_generation = root / f".tmp-{generation_id}-{uuid.uuid4().hex}"
+    temp_generation = f".tmp-{generation_id}-{uuid.uuid4().hex}"
     committed = False
     try:
-        root.mkdir(parents=True, exist_ok=True)
-        if generation_path.exists():
-            descriptor_path = generation_path / "manifest-descriptor.yaml"
-            records_path = generation_path / "manifest-records.jsonl"
-            if (
-                not descriptor_path.is_file()
-                or not records_path.is_file()
-                or descriptor_path.read_bytes() != descriptor_bytes
-                or records_path.read_bytes() != records_bytes
-            ):
-                raise _publication_error("existing generation is not byte-identical")
-        else:
-            temp_generation.mkdir()
-            _write_fsynced(
-                temp_generation / "manifest-records.jsonl",
-                records_bytes,
-                written_boundary="generation_records_written",
-                fsynced_boundary="generation_records_fsynced",
-                boundary_hook=boundary_hook,
-            )
-            _write_fsynced(
-                temp_generation / "manifest-descriptor.yaml",
-                descriptor_bytes,
-                written_boundary="generation_descriptor_written",
-                fsynced_boundary="generation_descriptor_fsynced",
-                boundary_hook=boundary_hook,
-            )
-            _fsync_directory(temp_generation)
-            _publication_boundary("temporary_generation_directory_fsynced", boundary_hook)
-            os.replace(temp_generation, generation_path)
-            _publication_boundary("generation_renamed", boundary_hook)
-            _fsync_directory(root)
-            _publication_boundary("generations_parent_fsynced", boundary_hook)
+        with _retained_directory_fd(
+            generation_root, label="generation root", create=True
+        ) as root_fd:
+            _publication_boundary("generation_parent_anchored", boundary_hook)
+            try:
+                generation_fd = os.open(
+                    generation_id,
+                    os.O_RDONLY
+                    | getattr(os, "O_DIRECTORY", 0)
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_CLOEXEC", 0),
+                    dir_fd=root_fd,
+                )
+            except FileNotFoundError:
+                generation_fd = None
+            if generation_fd is not None:
+                try:
+                    if (
+                        _read_regular_at(
+                            generation_fd,
+                            MANIFEST_DESCRIPTOR_FILENAME,
+                            label="existing generation descriptor",
+                        )
+                        != descriptor_bytes
+                        or _read_regular_at(
+                            generation_fd,
+                            MANIFEST_RECORDS_FILENAME,
+                            label="existing generation records",
+                        )
+                        != records_bytes
+                    ):
+                        raise _publication_error("existing generation is not byte-identical")
+                finally:
+                    os.close(generation_fd)
+            else:
+                os.mkdir(temp_generation, mode=0o700, dir_fd=root_fd)
+                temporary_fd = os.open(
+                    temp_generation,
+                    os.O_RDONLY
+                    | getattr(os, "O_DIRECTORY", 0)
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_CLOEXEC", 0),
+                    dir_fd=root_fd,
+                )
+                try:
+                    _write_fsynced_at(
+                        temporary_fd,
+                        MANIFEST_RECORDS_FILENAME,
+                        records_bytes,
+                        written_boundary="generation_records_written",
+                        fsynced_boundary="generation_records_fsynced",
+                        boundary_hook=boundary_hook,
+                    )
+                    _write_fsynced_at(
+                        temporary_fd,
+                        MANIFEST_DESCRIPTOR_FILENAME,
+                        descriptor_bytes,
+                        written_boundary="generation_descriptor_written",
+                        fsynced_boundary="generation_descriptor_fsynced",
+                        boundary_hook=boundary_hook,
+                    )
+                    os.fsync(temporary_fd)
+                    _publication_boundary("temporary_generation_directory_fsynced", boundary_hook)
+                finally:
+                    os.close(temporary_fd)
+                os.rename(
+                    temp_generation,
+                    generation_id,
+                    src_dir_fd=root_fd,
+                    dst_dir_fd=root_fd,
+                )
+                _publication_boundary("generation_renamed", boundary_hook)
+                os.fsync(root_fd)
+                _publication_boundary("generations_parent_fsynced", boundary_hook)
 
-        pointer_bytes = _canonical_descriptor(pointer)
-        active_path.parent.mkdir(parents=True, exist_ok=True)
-        if active_path.is_file() and active_path.read_bytes() == pointer_bytes:
-            return
-        pointer_temp = active_path.parent / f".{active_path.name}.tmp-{uuid.uuid4().hex}"
-        try:
-            _write_fsynced(
-                pointer_temp,
-                pointer_bytes,
-                written_boundary="pointer_written",
-                fsynced_boundary="pointer_fsynced",
-                boundary_hook=boundary_hook,
-            )
-            os.replace(pointer_temp, active_path)
-            committed = True
-            _publication_boundary("pointer_replaced", boundary_hook)
-            _fsync_directory(active_path.parent)
-            _publication_boundary("active_parent_fsynced", boundary_hook)
-        finally:
-            if pointer_temp.exists():
-                pointer_temp.unlink()
+            pointer_bytes = _canonical_descriptor(pointer)
+            with _retained_directory_fd(
+                active_path.parent, label="active pointer parent", create=True
+            ) as active_parent_fd:
+                _publication_boundary("active_parent_anchored", boundary_hook)
+                try:
+                    existing_pointer = _read_regular_at(
+                        active_parent_fd,
+                        active_path.name,
+                        label="active pointer",
+                    )
+                except ManifestPublicationError as error:
+                    cause = error.__cause__
+                    if not isinstance(cause, FileNotFoundError):
+                        raise
+                    existing_pointer = None
+                if existing_pointer == pointer_bytes:
+                    return
+                pointer_temp = f".{active_path.name}.tmp-{uuid.uuid4().hex}"
+                try:
+                    _write_fsynced_at(
+                        active_parent_fd,
+                        pointer_temp,
+                        pointer_bytes,
+                        written_boundary="pointer_written",
+                        fsynced_boundary="pointer_fsynced",
+                        boundary_hook=boundary_hook,
+                    )
+                    os.replace(
+                        pointer_temp,
+                        active_path.name,
+                        src_dir_fd=active_parent_fd,
+                        dst_dir_fd=active_parent_fd,
+                    )
+                    committed = True
+                    _publication_boundary("pointer_replaced", boundary_hook)
+                    os.fsync(active_parent_fd)
+                    _publication_boundary("active_parent_fsynced", boundary_hook)
+                finally:
+                    with suppress(FileNotFoundError):
+                        os.unlink(pointer_temp, dir_fd=active_parent_fd)
     except ManifestPublicationError:
         raise
     except Exception as error:
         detail = error.strerror if isinstance(error, OSError) else type(error).__name__
         raise _publication_error(f"publication failed: {detail}", committed=committed) from error
     finally:
-        if temp_generation.exists():
-            shutil.rmtree(temp_generation)
+        try:
+            with _retained_directory_fd(
+                generation_root, label="generation root", create=False
+            ) as root_fd:
+                _remove_temporary_generation(root_fd, temp_generation)
+        except ManifestPublicationError:
+            pass
 
 
 def _load_yaml_mapping(path: Path, *, label: str) -> dict[str, object]:
@@ -2776,14 +3001,18 @@ def _retained_parent_dirfd(path: Path, *, label: str) -> Iterable[tuple[int, str
             )
             os.close(directory_fd)
             directory_fd = next_fd
-        yield directory_fd, components[-1]
     except ManifestPublicationError:
-        raise
-    except OSError as error:
-        raise _publication_error(f"cannot inspect {label}") from error
-    finally:
         if directory_fd is not None:
             os.close(directory_fd)
+        raise
+    except OSError as error:
+        if directory_fd is not None:
+            os.close(directory_fd)
+        raise _publication_error(f"cannot inspect {label}") from error
+    try:
+        yield directory_fd, components[-1]
+    finally:
+        os.close(directory_fd)
 
 
 def _read_regular_nofollow(path: Path, *, label: str, maximum_bytes: int) -> bytes:
@@ -3270,6 +3499,393 @@ def verify_authoritative_determinism(
     finally:
         shutil.rmtree(first)
         shutil.rmtree(second)
+
+
+def _load_canonical_yaml_nofollow(
+    path: Path, *, label: str, maximum_bytes: int
+) -> tuple[dict[str, object], bytes]:
+    payload = _read_regular_nofollow(path, label=label, maximum_bytes=maximum_bytes)
+    try:
+        loaded = yaml.safe_load(payload.decode("utf-8"))
+    except (UnicodeError, yaml.YAMLError) as error:
+        raise _publication_error(f"{label} is not canonical YAML") from error
+    if not isinstance(loaded, dict) or _canonical_descriptor(loaded) != payload:
+        raise _publication_error(f"{label} is not canonical YAML")
+    return loaded, payload
+
+
+def _declared_project_root(path: Path, declared: str) -> Path:
+    declared_parts = PurePosixPath(declared).parts
+    absolute = path.expanduser().absolute()
+    if not declared_parts or tuple(absolute.parts[-len(declared_parts) :]) != declared_parts:
+        raise _publication_error("manifest active path disagrees with candidate declaration")
+    root_parts = absolute.parts[: -len(declared_parts)]
+    return Path(*root_parts) if root_parts else Path(absolute.anchor)
+
+
+def _install_immutable_directory(
+    *,
+    destination: Path,
+    files: Mapping[str, bytes],
+    boundary: str,
+    boundary_hook: Callable[[str], None] | None,
+) -> None:
+    if not destination.name or any(
+        _SAFE_METADATA_PATTERN.fullmatch(name) is None for name in files
+    ):
+        raise _publication_error("immutable install names are invalid")
+    temporary = f".tmp-{destination.name}-{uuid.uuid4().hex}"
+
+    def verify_existing(parent_fd: int) -> None:
+        installed_fd = os.open(
+            destination.name,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=parent_fd,
+        )
+        try:
+            for name, expected in files.items():
+                if (
+                    _read_regular_at(installed_fd, name, label="immutable installed file")
+                    != expected
+                ):
+                    raise _publication_error("existing immutable directory is not byte-identical")
+        finally:
+            os.close(installed_fd)
+
+    def remove_temporary(parent_fd: int) -> None:
+        try:
+            temporary_fd = os.open(
+                temporary,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=parent_fd,
+            )
+        except FileNotFoundError:
+            return
+        try:
+            for name in files:
+                with suppress(FileNotFoundError):
+                    os.unlink(name, dir_fd=temporary_fd)
+        finally:
+            os.close(temporary_fd)
+        with suppress(FileNotFoundError):
+            os.rmdir(temporary, dir_fd=parent_fd)
+
+    with _retained_directory_fd(
+        destination.parent, label="immutable install parent", create=True
+    ) as parent_fd:
+        try:
+            installed_fd = os.open(
+                destination.name,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=parent_fd,
+            )
+        except FileNotFoundError:
+            installed_fd = None
+        if installed_fd is not None:
+            os.close(installed_fd)
+            verify_existing(parent_fd)
+        else:
+            try:
+                os.mkdir(temporary, mode=0o700, dir_fd=parent_fd)
+                temporary_fd = os.open(
+                    temporary,
+                    os.O_RDONLY
+                    | getattr(os, "O_DIRECTORY", 0)
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_CLOEXEC", 0),
+                    dir_fd=parent_fd,
+                )
+                try:
+                    for name, payload in files.items():
+                        _write_fsynced_at(
+                            temporary_fd,
+                            name,
+                            payload,
+                            written_boundary="generation_records_written",
+                            fsynced_boundary="generation_records_fsynced",
+                            boundary_hook=None,
+                        )
+                    os.fsync(temporary_fd)
+                finally:
+                    os.close(temporary_fd)
+                try:
+                    os.rename(
+                        temporary,
+                        destination.name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                    )
+                except OSError as error:
+                    if error.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
+                        raise
+                    remove_temporary(parent_fd)
+                    verify_existing(parent_fd)
+                os.fsync(parent_fd)
+            finally:
+                remove_temporary(parent_fd)
+        _install_boundary(boundary, boundary_hook)
+
+
+def _boot_id() -> str:
+    try:
+        value = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+    except OSError:
+        return "unavailable"
+    return value if re.fullmatch(r"[0-9a-f-]{36}", value) else "unavailable"
+
+
+def _write_lock_diagnostics(lock_fd: int, metadata: Mapping[str, object]) -> None:
+    payload = _canonical_descriptor(metadata)
+    os.ftruncate(lock_fd, 0)
+    os.lseek(lock_fd, 0, os.SEEK_SET)
+    view = memoryview(payload)
+    while view:
+        written = os.write(lock_fd, view)
+        if written < 1:
+            raise OSError("short lock diagnostic write")
+        view = view[written:]
+    os.fsync(lock_fd)
+
+
+@contextmanager
+def _permanent_install_lock(
+    active_parent_fd: int,
+    *,
+    expected_sha256: str,
+    candidate_sha256: str,
+    boundary_hook: Callable[[str], None] | None,
+) -> Iterable[int]:
+    no_follow, _, close_on_exec = _secure_dirfd_support()
+    try:
+        os.stat(INSTALL_LOCK_BASENAME, dir_fd=active_parent_fd, follow_symlinks=False)
+        newly_created = False
+    except FileNotFoundError:
+        newly_created = True
+    lock_fd = os.open(
+        INSTALL_LOCK_BASENAME,
+        os.O_RDWR | os.O_CREAT | no_follow | close_on_exec,
+        0o600,
+        dir_fd=active_parent_fd,
+    )
+    locked = False
+    released = False
+    try:
+        opened = os.fstat(lock_fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise _publication_error("permanent install lock is not a regular file")
+        if newly_created:
+            os.fsync(active_parent_fd)
+        for attempt in range(200):
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except BlockingIOError:
+                if attempt == 199:
+                    raise _publication_error("timed out acquiring permanent install lock") from None
+                time.sleep(0.01)
+        named = os.stat(
+            INSTALL_LOCK_BASENAME,
+            dir_fd=active_parent_fd,
+            follow_symlinks=False,
+        )
+        if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
+            raise _publication_error("permanent install lock inode changed")
+        diagnostics = {
+            "schema_version": 1,
+            "state": "held",
+            "boot_id": _boot_id(),
+            "pid": os.getpid(),
+            "process_start": str(time.monotonic_ns()),
+            "nonce": uuid.uuid4().hex,
+            "expected_active_sha256": expected_sha256,
+            "candidate_pointer_sha256": candidate_sha256,
+        }
+        _write_lock_diagnostics(lock_fd, diagnostics)
+        _install_boundary("install_lock_acquired", boundary_hook)
+        yield lock_fd
+        _write_lock_diagnostics(lock_fd, {**diagnostics, "state": "released"})
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        released = True
+        _install_boundary("install_lock_released", boundary_hook)
+    finally:
+        if locked and not released:
+            with suppress(OSError):
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+        _install_boundary("install_lock_closed", boundary_hook)
+
+
+def install_candidate(
+    *,
+    stage_root: Path,
+    generation_root: Path,
+    active_path: Path,
+    expected_active_sha256_from_stage: bool,
+    boundary_hook: Callable[[str], None] | None = None,
+) -> dict[str, object]:
+    """Install one fully validated staged v2 tuple through permanent-flock CAS."""
+
+    compressed_maximum, uncompressed_maximum = _manifest_recovery_limits(2)
+    metadata, _ = _load_canonical_yaml_nofollow(
+        stage_root / "install-metadata.yaml",
+        label="candidate install metadata",
+        maximum_bytes=131072,
+    )
+    pointer_relative = str(metadata.get("active_pointer_path", ""))
+    if pointer_relative != "data/manifests/smb-evaluation-v1.yaml":
+        raise _publication_error("candidate active pointer path is non-canonical")
+    pointer, pointer_bytes = _load_canonical_yaml_nofollow(
+        stage_root / pointer_relative,
+        label="candidate active pointer",
+        maximum_bytes=131072,
+    )
+    validate_instance("manifest-active", pointer, version=2)
+    generation_id = str(pointer["generation_id"])
+    generation_stage = stage_root / "artifacts/smb-manifests/generations" / generation_id
+    descriptor_bytes = _read_regular_nofollow(
+        generation_stage / MANIFEST_DESCRIPTOR_FILENAME,
+        label="candidate generation descriptor",
+        maximum_bytes=131072,
+    )
+    records_bytes = _read_regular_nofollow(
+        generation_stage / MANIFEST_RECORDS_FILENAME,
+        label="candidate generation records",
+        maximum_bytes=uncompressed_maximum,
+    )
+    try:
+        descriptor = yaml.safe_load(descriptor_bytes.decode("utf-8"))
+        rows = [json.loads(line) for line in records_bytes.decode("utf-8").splitlines()]
+    except (UnicodeError, yaml.YAMLError, json.JSONDecodeError) as error:
+        raise _publication_error("candidate generation is malformed") from error
+    if not isinstance(descriptor, dict) or any(not isinstance(row, dict) for row in rows):
+        raise _publication_error("candidate generation is malformed")
+    completed, rebuilt_pointer, canonical_descriptor, canonical_records = (
+        _validate_generation_inputs(descriptor, rows)
+    )
+    recovery_path = Path(str(pointer["recovery_descriptor_path"]))
+    recovery_records_path = Path(str(pointer["recovery_records_path"]))
+    recovery, recovery_bytes = _load_canonical_yaml_nofollow(
+        stage_root / recovery_path,
+        label="candidate recovery descriptor",
+        maximum_bytes=131072,
+    )
+    recovery_records = _read_regular_nofollow(
+        stage_root / recovery_records_path,
+        label="candidate recovery records",
+        maximum_bytes=compressed_maximum,
+    )
+    validate_instance("manifest-recovery", recovery, version=2)
+    bundle_id = str(recovery["bundle_id"])
+    expected_prefix = PurePosixPath("data/manifests/recovery/canonical-pixel-v2") / bundle_id
+    if (
+        recovery_bundle_id_v2(recovery) != bundle_id
+        or recovery_metadata_sha256(recovery, version=2) != recovery["metadata_sha256"]
+        or recovery_path.parent != expected_prefix
+        or recovery_records_path.parent != expected_prefix
+        or hashlib.sha256(recovery_bytes).hexdigest() != pointer["recovery_descriptor_sha256"]
+        or hashlib.sha256(recovery_records).hexdigest() != pointer["recovery_records_sha256"]
+        or canonical_descriptor != descriptor_bytes
+        or canonical_records != records_bytes
+    ):
+        raise _publication_error("candidate tuple identity is inconsistent")
+    if (
+        metadata.get("generation_id") != generation_id
+        or metadata.get("bundle_id") != bundle_id
+        or metadata.get("recovery_descriptor_path") != recovery["recovery_descriptor_path"]
+        or metadata.get("recovery_records_path") != recovery["recovery_records_path"]
+    ):
+        raise _publication_error("candidate install metadata disagrees with staged tuple")
+    rebuilt_pointer.update(
+        {
+            "recovery_descriptor_path": recovery["recovery_descriptor_path"],
+            "recovery_descriptor_sha256": hashlib.sha256(recovery_bytes).hexdigest(),
+            "recovery_records_path": recovery["recovery_records_path"],
+            "recovery_records_sha256": hashlib.sha256(recovery_records).hexdigest(),
+        }
+    )
+    if _canonical_descriptor(rebuilt_pointer) != pointer_bytes:
+        raise _publication_error("candidate pointer disagrees with staged tuple")
+    project_root = _declared_project_root(active_path, pointer_relative)
+    _install_immutable_directory(
+        destination=generation_root / generation_id,
+        files={
+            MANIFEST_DESCRIPTOR_FILENAME: descriptor_bytes,
+            MANIFEST_RECORDS_FILENAME: records_bytes,
+        },
+        boundary="candidate_generation_installed",
+        boundary_hook=boundary_hook,
+    )
+    _install_immutable_directory(
+        destination=project_root / expected_prefix,
+        files={
+            "manifest-recovery.yaml": recovery_bytes,
+            RECOVERY_RECORDS_FILENAME: recovery_records,
+        },
+        boundary="recovery_bundle_installed",
+        boundary_hook=boundary_hook,
+    )
+    expected_sha256 = str(metadata.get("expected_previous_active_sha256", ""))
+    if not expected_active_sha256_from_stage or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+        raise _publication_error("candidate expected active checksum is unavailable")
+    candidate_sha256 = hashlib.sha256(pointer_bytes).hexdigest()
+    with (
+        _retained_directory_fd(
+            active_path.parent, label="active pointer parent", create=True
+        ) as active_parent_fd,
+        _permanent_install_lock(
+            active_parent_fd,
+            expected_sha256=expected_sha256,
+            candidate_sha256=candidate_sha256,
+            boundary_hook=boundary_hook,
+        ),
+    ):
+        current = _read_regular_at(active_parent_fd, active_path.name, label="active pointer")
+        current_sha256 = hashlib.sha256(current).hexdigest()
+        _install_boundary("install_cas_read", boundary_hook)
+        if current_sha256 == candidate_sha256:
+            outcome = "idempotent"
+        elif current_sha256 != expected_sha256:
+            raise _publication_error("active pointer compare-and-swap conflict")
+        else:
+            temporary = f".{active_path.name}.tmp-{uuid.uuid4().hex}"
+            try:
+                _write_fsynced_at(
+                    active_parent_fd,
+                    temporary,
+                    pointer_bytes,
+                    written_boundary="pointer_written",
+                    fsynced_boundary="pointer_fsynced",
+                    boundary_hook=None,
+                )
+                os.replace(
+                    temporary,
+                    active_path.name,
+                    src_dir_fd=active_parent_fd,
+                    dst_dir_fd=active_parent_fd,
+                )
+                _install_boundary("install_pointer_replaced", boundary_hook)
+                os.fsync(active_parent_fd)
+                _install_boundary("install_pointer_fsynced", boundary_hook)
+                outcome = "installed"
+            finally:
+                with suppress(FileNotFoundError):
+                    os.unlink(temporary, dir_fd=active_parent_fd)
+    return {
+        "status": outcome,
+        "generation_id": completed["generation_id"],
+        "bundle_id": bundle_id,
+        "candidate_pointer_sha256": candidate_sha256,
+    }
 
 
 def export_manifest_recovery(
@@ -4312,6 +4928,11 @@ def _parser() -> argparse.ArgumentParser:
     determinism.add_argument("--legacy-recovery-records", type=Path, required=True)
     determinism.add_argument("--stage-parent", type=Path, required=True)
     determinism.add_argument("--verified-stage", type=Path, required=True)
+    install = commands.add_parser("install-candidate")
+    install.add_argument("--stage-root", type=Path, required=True)
+    install.add_argument("--manifest-generation-root", type=Path, required=True)
+    install.add_argument("--manifest-active", type=Path, required=True)
+    install.add_argument("--expected-active-sha256-from-stage", action="store_true", required=True)
     migrate = commands.add_parser("migrate-authoritative")
     migration_commands = migrate.add_subparsers(dest="migration_command", required=True)
     migrate_audit = migration_commands.add_parser("audit")
@@ -4409,6 +5030,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             legacy_recovery_records_path=arguments.legacy_recovery_records,
             stage_parent=arguments.stage_parent,
             verified_stage=arguments.verified_stage,
+        )
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+    if arguments.command == "install-candidate":
+        report = install_candidate(
+            stage_root=arguments.stage_root,
+            generation_root=arguments.manifest_generation_root,
+            active_path=arguments.manifest_active,
+            expected_active_sha256_from_stage=arguments.expected_active_sha256_from_stage,
         )
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0
