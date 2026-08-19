@@ -23,7 +23,11 @@ import yaml
 from PIL import Image, PngImagePlugin
 
 import score_super_resolution.smb_audit as smb_audit
-from score_super_resolution.contracts import load_schema, recovery_metadata_sha256
+from score_super_resolution.contracts import (
+    load_schema,
+    recovery_metadata_sha256,
+    validate_instance,
+)
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "smb" / "records.json"
 PUBLICATION_BOUNDARIES = (
@@ -356,7 +360,13 @@ def _perceptual_relation(
         "disposition": disposition,
         "reviewer": "reviewer-1" if reviewed else None,
         "reviewed_at": "2026-08-18" if reviewed else None,
-        "rationale": "Independent pair adjudication." if reviewed else "",
+        "rationale": (
+            "Independent pair adjudication."
+            if reviewed
+            else "Perceptual comparison evidence is unavailable."
+            if disposition == "unavailable"
+            else ""
+        ),
     }
 
 
@@ -402,6 +412,40 @@ def _completed_v2_review_rows(rows: list[dict[str, Any]]) -> list[dict[str, str]
     return review_rows
 
 
+def _unavailable_pair_review_fixture() -> tuple[
+    list[dict[str, Any]], list[dict[str, str]], str, str
+]:
+    rows = _compact_v2_rows()
+    _attach_relation(rows, 0, 64, disposition="unavailable")
+    pair_id = smb_audit._pair_id(
+        "perceptual",
+        str(rows[0]["item_id"]),
+        str(rows[64]["item_id"]),
+    )
+    reason = "Perceptual comparison evidence is unavailable."
+    review_rows = _completed_v2_review_rows(rows)
+    pair_review = next(row for row in review_rows if row["review_key"] == pair_id)
+    pair_review.update(
+        {
+            "review_status": "unavailable",
+            "reviewer": "",
+            "reviewed_at": "",
+            "rationale": reason,
+            "duplicate_disposition": "unavailable",
+        }
+    )
+    return rows, review_rows, pair_id, reason
+
+
+def _unavailable_pair_relations(rows: list[dict[str, Any]], pair_id: str) -> list[dict[str, Any]]:
+    return [
+        relation
+        for row in rows
+        for relation in row["duplicate_relations"]
+        if relation["pair_id"] == pair_id
+    ]
+
+
 def test_v2_review_preparation_separates_population_sample_and_pair_evidence() -> None:
     rows = _compact_v2_rows()
     _attach_relation(rows, 0, 64, disposition="pending")
@@ -418,6 +462,146 @@ def test_v2_review_preparation_separates_population_sample_and_pair_evidence() -
     assert not any(
         row["review_kind"] == "visual_item" and row["item_id"] == unsampled for row in prepared
     )
+
+
+def test_v2_unavailable_pair_round_trips_through_publication_and_empty_root_recovery(
+    tmp_path: Path,
+) -> None:
+    rows, review_rows, pair_id, reason = _unavailable_pair_review_fixture()
+    original_relations = _unavailable_pair_relations(rows, pair_id)
+    assert len(original_relations) == 2
+    assert original_relations[0]["evidence"] == original_relations[1]["evidence"]
+
+    prepared = smb_audit.prepare_v2_review_rows(rows)
+    prepared_pair = next(row for row in prepared if row["review_key"] == pair_id)
+    assert prepared_pair == {
+        **{field: "" for field in smb_audit.REVIEW_CSV_FIELDS},
+        "review_kind": "duplicate_pair",
+        "review_key": pair_id,
+        "item_id": "smb-test-000000",
+        "candidate_item_id": "smb-test-000064",
+        "review_status": "unavailable",
+        "rationale": reason,
+        "duplicate_disposition": "unavailable",
+    }
+    smb_audit.canonical_review_csv(review_rows)
+
+    finalized = smb_audit.apply_review_dispositions(rows, review_rows)
+    finalized_relations = _unavailable_pair_relations(finalized, pair_id)
+    assert finalized_relations == original_relations
+    for relation in finalized_relations:
+        assert relation["disposition"] == "unavailable"
+        assert relation["reviewer"] is None
+        assert relation["reviewed_at"] is None
+        assert relation["rationale"] == reason
+    descriptor = _compact_v2_descriptor(finalized)
+    smb_audit.validate_v2_manifest_collection(descriptor, finalized)
+
+    source_active = tmp_path / "source" / "data/manifests/smb-evaluation-v1.yaml"
+    source_generations = tmp_path / "source-generations"
+    smb_audit.publish_manifest_generation(
+        active_path=source_active,
+        generation_root=source_generations,
+        descriptor=descriptor,
+        rows=finalized,
+    )
+    published_descriptor, published_rows = smb_audit.resolve_active_manifest(
+        active_path=source_active,
+        generation_root=source_generations,
+    )
+    assert _unavailable_pair_relations(published_rows, pair_id) == original_relations
+
+    recovery_descriptor = tmp_path / "recovery" / "manifest-recovery.yaml"
+    recovery_records = tmp_path / "recovery" / "manifest-records.jsonl.gz"
+    smb_audit.export_manifest_recovery(
+        active_path=source_active,
+        generation_root=source_generations,
+        recovery_descriptor_path=recovery_descriptor,
+        recovery_records_path=recovery_records,
+    )
+    recovered_active = tmp_path / "recovered" / "data/manifests/smb-evaluation-v1.yaml"
+    recovered_active.parent.mkdir(parents=True)
+    recovered_active.write_bytes(source_active.read_bytes())
+    recovered_generations = tmp_path / "recovered-generations"
+    assert not recovered_generations.exists()
+    smb_audit.recover_active_manifest(
+        active_path=recovered_active,
+        recovery_descriptor_path=recovery_descriptor,
+        recovery_records_path=recovery_records,
+        generation_root=recovered_generations,
+    )
+    recovered_descriptor, recovered_rows = smb_audit.resolve_active_manifest(
+        active_path=recovered_active,
+        generation_root=recovered_generations,
+    )
+
+    assert recovered_descriptor == published_descriptor
+    assert _unavailable_pair_relations(recovered_rows, pair_id) == original_relations
+    for row in recovered_rows:
+        validate_instance("manifest-row", row, version=2)
+    smb_audit.validate_v2_manifest_collection(recovered_descriptor, recovered_rows)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "reviewer",
+        "reviewed_at",
+        "missing_reason",
+        "human_reviewed_unavailable",
+        "visual_unavailable",
+        "policy_unavailable",
+    ),
+)
+def test_v2_unavailable_pair_review_state_rejects_attribution_or_state_confusion(
+    mutation: str,
+) -> None:
+    rows, review_rows, pair_id, reason = _unavailable_pair_review_fixture()
+    pair_review = next(row for row in review_rows if row["review_key"] == pair_id)
+    if mutation == "reviewer":
+        pair_review["reviewer"] = "fabricated-reviewer"
+    elif mutation == "reviewed_at":
+        pair_review["reviewed_at"] = "2026-08-19"
+    elif mutation == "missing_reason":
+        pair_review["rationale"] = ""
+    elif mutation == "human_reviewed_unavailable":
+        pair_review.update(
+            {
+                "review_status": "reviewed",
+                "reviewer": "reviewer-1",
+                "reviewed_at": "2026-08-19",
+                "rationale": reason,
+            }
+        )
+    else:
+        review_kind = "visual_item" if mutation == "visual_unavailable" else "item_policy"
+        wrong_kind = next(row for row in review_rows if row["review_kind"] == review_kind)
+        wrong_kind.update(
+            {
+                "review_status": "unavailable",
+                "reviewer": "",
+                "reviewed_at": "",
+                "rationale": reason,
+            }
+        )
+
+    with pytest.raises(smb_audit.ReviewFinalizationError, match=r"unavailable|rationale"):
+        smb_audit.apply_review_dispositions(rows, review_rows)
+
+
+def test_v2_human_reviewed_pair_semantics_remain_attributed() -> None:
+    rows = _compact_v2_rows()
+    _attach_relation(rows, 0, 64, disposition="pending")
+    review_rows = _completed_v2_review_rows(rows)
+    pair_review = next(row for row in review_rows if row["review_kind"] == "duplicate_pair")
+
+    finalized = smb_audit.apply_review_dispositions(rows, review_rows)
+    relations = _unavailable_pair_relations(finalized, pair_review["review_key"])
+
+    assert len(relations) == 2
+    assert all(relation["disposition"] == "distinct" for relation in relations)
+    assert all(relation["reviewer"] == "reviewer-1" for relation in relations)
+    assert all(relation["reviewed_at"] == "2026-08-18" for relation in relations)
 
 
 def test_v2_exact_equality_generates_automatic_mirrored_duplicate_evidence() -> None:
