@@ -158,7 +158,7 @@ def _compact_v2_rows() -> list[dict[str, Any]]:
                 "paired_ineligibility_reason": None,
             }
         )
-    selected = set(smb_audit.select_visual_sample(rows, seed=17, sample_size=64))
+    selected = set(smb_audit.select_visual_sample(rows, seed=5, sample_size=64))
     for row in rows:
         sampled = row["item_id"] in selected
         row["audit_sample_member"] = sampled
@@ -207,7 +207,7 @@ def _compact_v2_descriptor(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "grouping_unit": "source_score",
         "upstream_split": "test",
         "project_split": "evaluation",
-        "deterministic_seed": 17,
+        "deterministic_seed": 5,
         "exclusions": [],
         "row_schema_id": "manifest-row",
         "row_schema_version": 2,
@@ -242,7 +242,7 @@ def _compact_v2_descriptor(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "sample_selection": {
             "algorithm": "sha256-rank",
             "version": 1,
-            "seed": 17,
+            "seed": 5,
             "population_size": 685,
             "sample_size": 64,
             "identity_fields": ["upstream_index", "item_id"],
@@ -338,7 +338,7 @@ def test_v2_review_preparation_separates_population_sample_and_pair_evidence() -
 
     kinds = Counter(row["review_kind"] for row in prepared)
     assert kinds == {"item_policy": 685, "visual_item": 64, "duplicate_pair": 1}
-    expected_sample = set(smb_audit.select_visual_sample(rows, seed=17, sample_size=64))
+    expected_sample = set(smb_audit.select_visual_sample(rows, seed=5, sample_size=64))
     assert {
         row["item_id"] for row in prepared if row["review_kind"] == "visual_item"
     } == expected_sample
