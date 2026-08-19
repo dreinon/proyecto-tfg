@@ -309,6 +309,27 @@ def _attach_relation(
         summary[f"{disposition}_relation_count"] += 1
 
 
+def _completed_v2_review_rows(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    review_rows = smb_audit.prepare_v2_review_rows(rows)
+    for row in review_rows:
+        row["review_status"] = "reviewed"
+        row["reviewer"] = "reviewer-1"
+        row["reviewed_at"] = "2026-08-18"
+        row["rationale"] = "Reviewed without changing automated identity evidence."
+        if row["review_kind"] == "item_policy":
+            row["dataset_licence_status"] = "confirmed"
+            row["item_provenance_status"] = "unavailable"
+            row["access_status"] = "confirmed"
+            row["redistribution_status"] = "not_established"
+            row["figure_reproduction_status"] = "prohibited"
+        elif row["review_kind"] == "visual_item":
+            row["quality_disposition"] = "acceptable"
+            row["suitability_disposition"] = "suitable"
+        else:
+            row["duplicate_disposition"] = "distinct"
+    return review_rows
+
+
 def test_v2_review_preparation_separates_population_sample_and_pair_evidence() -> None:
     rows = _compact_v2_rows()
     _attach_relation(rows, 0, 64, disposition="pending")
@@ -500,6 +521,70 @@ def test_v2_reconciliation_reports_validated_generation_facts(tmp_path: Path) ->
         "exclusion_count": 0,
         "source_group_count": 685,
     }
+
+
+@pytest.mark.parametrize("mutation", ("all_one", "all_null", "one_null"))
+def test_v2_collection_rejects_destroyed_source_group_mapping(mutation: str) -> None:
+    rows = _compact_v2_rows()
+    descriptor = _compact_v2_descriptor(rows)
+    if mutation == "all_one":
+        for row in rows:
+            row["source_group_id"] = "collapsed-group"
+    elif mutation == "all_null":
+        for row in rows:
+            row["source_group_id"] = None
+    else:
+        rows[0]["source_group_id"] = None
+
+    with pytest.raises(smb_audit.ManifestPublicationError, match="group"):
+        smb_audit.validate_v2_manifest_collection(descriptor, rows)
+
+
+def test_v2_policy_group_replacement_is_rejected_without_mutating_audit_rows() -> None:
+    rows = _compact_v2_rows()
+    review_rows = _completed_v2_review_rows(rows)
+    original = copy.deepcopy(rows)
+    policy = next(row for row in review_rows if row["review_kind"] == "item_policy")
+    policy["source_group_id"] = "replacement-group"
+
+    with pytest.raises(smb_audit.ReviewFinalizationError, match="source_group_id"):
+        smb_audit.apply_review_dispositions(rows, review_rows)
+
+    assert rows == original
+
+
+def test_v2_review_application_preserves_audited_source_groups() -> None:
+    rows = _compact_v2_rows()
+    original_groups = [row["source_group_id"] for row in rows]
+
+    updated = smb_audit.apply_review_dispositions(rows, _completed_v2_review_rows(rows))
+
+    assert [row["source_group_id"] for row in updated] == original_groups
+
+
+def test_tracked_active_recovery_retains_260_canonical_source_groups(tmp_path: Path) -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    manifest_root = project_root / "data" / "manifests"
+    recovery_descriptor = manifest_root / "smb-evaluation-v1-recovery.yaml"
+    recovery_records = manifest_root / "smb-evaluation-v1-recovery.jsonl.gz"
+    active_path = tmp_path / "smb-evaluation-v1.yaml"
+    active_path.write_bytes((manifest_root / "smb-evaluation-v1.yaml").read_bytes())
+    generation_root = tmp_path / "generations"
+
+    smb_audit.recover_active_manifest(
+        active_path=active_path,
+        recovery_descriptor_path=recovery_descriptor,
+        recovery_records_path=recovery_records,
+        generation_root=generation_root,
+    )
+    descriptor, rows = smb_audit.resolve_active_manifest(
+        active_path=active_path, generation_root=generation_root
+    )
+    report = smb_audit.reconcile_manifest(active_path=active_path, generation_root=generation_root)
+
+    assert descriptor["benchmark_state"] == "AUDITED_LOCKED"
+    assert report["source_group_count"] == 260
+    assert len({row["source_group_id"] for row in rows}) == 260
 
 
 def test_v2_policy_and_candidate_saves_do_not_create_visual_or_item_pair_claims(
