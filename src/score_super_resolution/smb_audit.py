@@ -642,6 +642,16 @@ def _git_bytes(project_root: Path, *arguments: str) -> bytes:
     return completed.stdout
 
 
+def _nul_paths(output: bytes) -> tuple[PurePosixPath, ...]:
+    try:
+        decoded = [part.decode("utf-8") for part in output.split(b"\0") if part]
+    except UnicodeError as error:
+        raise RuntimeError(
+            "authoritative SMB audit provenance contains a non-UTF-8 path"
+        ) from error
+    return tuple(PurePosixPath(path) for path in decoded)
+
+
 def _is_authoritative_audit_source_path(relative_path: PurePosixPath) -> bool:
     if relative_path.as_posix() in {"pyproject.toml", "uv.lock"}:
         return True
@@ -655,12 +665,29 @@ def _is_authoritative_audit_source_path(relative_path: PurePosixPath) -> bool:
 
 def _authoritative_audit_source_paths(project_root: Path) -> tuple[Path, ...]:
     root = project_root.expanduser().resolve()
-    python_root = root / "src" / "score_super_resolution"
-    schema_root = root / "data" / "schemas"
     lock_path = root / "uv.lock"
     project_path = root / "pyproject.toml"
-    python_paths = list(python_root.rglob("*.py")) if python_root.is_dir() else []
-    schema_paths = list(schema_root.rglob("*.json")) if schema_root.is_dir() else []
+    git_paths = _nul_paths(
+        _git_bytes(
+            root,
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            "src/score_super_resolution",
+            "data/schemas",
+            "pyproject.toml",
+            "uv.lock",
+        )
+    )
+    relevant = sorted(
+        {path for path in git_paths if _is_authoritative_audit_source_path(path)},
+        key=lambda path: path.as_posix(),
+    )
+    python_paths = [path for path in relevant if path.suffix == ".py"]
+    schema_paths = [path for path in relevant if path.suffix == ".json"]
     if (
         not python_paths
         or not schema_paths
@@ -668,7 +695,7 @@ def _authoritative_audit_source_paths(project_root: Path) -> tuple[Path, ...]:
         or not project_path.is_file()
     ):
         raise RuntimeError("authoritative SMB audit provenance source set is incomplete")
-    paths = [*python_paths, *schema_paths, project_path, lock_path]
+    paths = [root / path for path in relevant]
     relative_paths: list[Path] = []
     for path in paths:
         if path.is_symlink() or not path.is_file():
@@ -717,16 +744,6 @@ def _source_tree_sha256(project_root: Path, source_paths: Iterable[Path]) -> str
             raise RuntimeError("cannot read authoritative SMB audit provenance source") from error
         _update_framed_digest(digest, relative.encode("utf-8"), content)
     return digest.hexdigest()
-
-
-def _nul_paths(output: bytes) -> tuple[PurePosixPath, ...]:
-    try:
-        decoded = [part.decode("utf-8") for part in output.split(b"\0") if part]
-    except UnicodeError as error:
-        raise RuntimeError(
-            "authoritative SMB audit provenance contains a non-UTF-8 path"
-        ) from error
-    return tuple(PurePosixPath(path) for path in decoded)
 
 
 def audit_source_provenance(project_root: Path | None = None) -> dict[str, object]:
