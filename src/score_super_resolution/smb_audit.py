@@ -92,6 +92,7 @@ PUBLICATION_BOUNDARIES = (
 
 _SAFE_METADATA_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}\Z")
 _SAFE_UPSTREAM_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+_PAGE_SUFFIX_PATTERN = re.compile(r"_p[0-9]+\Z")
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 _IMAGE_PATH_FAILURE_CODES = frozenset(
     {
@@ -734,6 +735,22 @@ def _raw_metadata_sha256(metadata: object) -> str | None:
     return hashlib.sha256(RAW_METADATA_DOMAIN + payload).hexdigest()
 
 
+def _canonical_source_group_id(original_score_normalized: object) -> str:
+    """Derive one leakage-safe score identity from a normalized SMB page identity."""
+
+    if (
+        not isinstance(original_score_normalized, str)
+        or _SAFE_METADATA_PATTERN.fullmatch(original_score_normalized) is None
+    ):
+        raise ValueError("source identity must contain a safe normalized original score")
+    source_group_id, replacements = _PAGE_SUFFIX_PATTERN.subn(
+        "", original_score_normalized, count=1
+    )
+    if replacements != 1 or _SAFE_METADATA_PATTERN.fullmatch(source_group_id) is None:
+        raise ValueError("source identity must end in one canonical page suffix")
+    return source_group_id
+
+
 def _v2_row_from_automated_audit(row: Mapping[str, object]) -> dict[str, object]:
     """Compact one freshly audited v1-shaped row without adding human claims."""
 
@@ -746,6 +763,7 @@ def _v2_row_from_automated_audit(row: Mapping[str, object]) -> dict[str, object]
     assert isinstance(page_texture, Mapping)
     assert isinstance(quality, Mapping)
     sampled = row["audit_sample_member"] is True
+    source_group_id = _canonical_source_group_id(original_score.get("normalized"))
     return {
         "schema_version": 2,
         "record_type": "manifest-row",
@@ -763,7 +781,7 @@ def _v2_row_from_automated_audit(row: Mapping[str, object]) -> dict[str, object]
             "page_texture_normalized": page_texture.get("normalized"),
             "page_texture_raw_sha256": _raw_metadata_sha256(page_texture),
         },
-        "source_group_id": row["source_group_id"],
+        "source_group_id": source_group_id,
         "image": {
             "encoded_sha256": row["encoded_sha256"],
             "pixel_sha256": row["pixel_sha256"],
@@ -2047,6 +2065,13 @@ def validate_v2_manifest_collection(
             for field, expected in source_contract.items():
                 if row.get(field) != expected:
                     raise ValueError(f"row {index}: source {field} disagrees with descriptor")
+            source_identity = row["source_identity"]
+            assert isinstance(source_identity, Mapping)
+            expected_group = _canonical_source_group_id(
+                source_identity.get("original_score_normalized")
+            )
+            if row.get("source_group_id") != expected_group:
+                raise ValueError(f"row {index}: source group disagrees with audited identity")
 
         derived_exclusions = sorted(
             (
@@ -2970,6 +2995,16 @@ def prepare_v2_review_rows(
         validate_instance("manifest-row", row, version=2)
         item_id = str(row["item_id"])
         source_group_id = row.get("source_group_id")
+        source_identity = row["source_identity"]
+        assert isinstance(source_identity, Mapping)
+        try:
+            expected_group = _canonical_source_group_id(
+                source_identity.get("original_score_normalized")
+            )
+        except ValueError as error:
+            raise _review_error(f"{item_id}: invalid audited source group") from error
+        if source_group_id != expected_group:
+            raise _review_error(f"{item_id}: source_group_id disagrees with audited identity")
         policy = {
             **{field: "" for field in REVIEW_CSV_FIELDS},
             "review_kind": "item_policy",
@@ -3298,6 +3333,8 @@ def _validated_v2_review_rows(
             raise _review_error(f"{key}: reviewed_at must be an ISO date") from None
 
         if row["review_kind"] == "item_policy":
+            if row["source_group_id"] != emitted["source_group_id"]:
+                raise _review_error(f"{key}: source_group_id does not match emitted audit evidence")
             _require_enum(row, "dataset_licence_status", {"confirmed"})
             _require_enum(row, "item_provenance_status", _ITEM_PROVENANCE_STATUSES)
             _require_enum(row, "access_status", _ACCESS_STATUSES)
@@ -3367,7 +3404,6 @@ def _apply_v2_review_dispositions(
     for review in validated:
         item = by_id[review["item_id"]]
         if review["review_kind"] == "item_policy":
-            item["source_group_id"] = review["source_group_id"] or None
             item_provenance = (
                 {
                     "status": "confirmed",
