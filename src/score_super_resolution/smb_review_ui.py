@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import os
 import re
 from datetime import date
@@ -15,27 +14,13 @@ import pandas as pd
 from IPython.display import clear_output
 
 from score_super_resolution.benchmark_policy import BenchmarkPurpose
+from score_super_resolution.review_evidence import (
+    canonical_review_csv,
+    read_review,
+    validate_human_cell,
+)
 from score_super_resolution.smb import load_smb
 
-REVIEW_FIELDS = (
-    "review_kind",
-    "review_key",
-    "item_id",
-    "candidate_item_id",
-    "review_status",
-    "reviewer",
-    "reviewed_at",
-    "rationale",
-    "source_group_id",
-    "quality_disposition",
-    "suitability_disposition",
-    "duplicate_disposition",
-    "dataset_licence_status",
-    "item_provenance_status",
-    "access_status",
-    "redistribution_status",
-    "figure_reproduction_status",
-)
 PAGE_SUFFIX = re.compile(r"_p\d+$")
 BATCH_SIZE = 16
 INDIVIDUAL_REVIEW_MARKER = "[individual-review]"
@@ -80,19 +65,14 @@ class SMBReviewSession:
         )
 
     def read_rows(self) -> list[dict[str, str]]:
-        with self.review_path.open(newline="", encoding="utf-8") as handle:
-            reader = csv.DictReader(handle)
-            if tuple(reader.fieldnames or ()) != REVIEW_FIELDS:
-                raise RuntimeError("Unexpected SMB review CSV contract")
-            return list(reader)
+        return list(read_review(self.review_path).rows)
 
     def write_rows(self, rows: list[dict[str, str]]) -> None:
         """Atomically save without changing the header or row order."""
+        content = canonical_review_csv(rows)
         temporary = self.review_path.with_suffix(".csv.tmp")
-        with temporary.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=REVIEW_FIELDS, lineterminator="\n")
-            writer.writeheader()
-            writer.writerows(rows)
+        with temporary.open("wb") as handle:
+            handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, self.review_path)
@@ -115,6 +95,7 @@ class SMBReviewSession:
         reviewer = reviewer.strip()
         if not reviewer:
             raise ValueError("Indica el nombre del revisor")
+        validate_human_cell(reviewer, field="reviewer", review_key="session-policy")
         rows = self.read_rows()
         visual_set = set(self.visual_item_ids)
         today = date.today().isoformat()
@@ -159,6 +140,8 @@ class SMBReviewSession:
         rationale = rationale.strip()
         if not reviewer or not rationale:
             raise ValueError("Revisor y justificación son obligatorios")
+        validate_human_cell(reviewer, field="reviewer", review_key=item_id)
+        validate_human_cell(rationale, field="rationale", review_key=item_id)
         rows = self.read_rows()
         row = next(row for row in rows if row["review_key"] == item_id)
         policy_fields = (
@@ -193,6 +176,8 @@ class SMBReviewSession:
         rationale = rationale.strip()
         if not reviewer or not rationale:
             raise ValueError("Revisor y justificación son obligatorios")
+        validate_human_cell(reviewer, field="reviewer", review_key=review_key)
+        validate_human_cell(rationale, field="rationale", review_key=review_key)
         rows = self.read_rows()
         row = next(row for row in rows if row["review_key"] == review_key)
         involved = {row["item_id"], row["candidate_item_id"]}
@@ -231,6 +216,7 @@ class SMBReviewSession:
         reviewer = reviewer.strip()
         if not reviewer:
             raise ValueError("Indica el nombre del revisor")
+        validate_human_cell(reviewer, field="reviewer", review_key=f"batch-{batch_number}")
         unknown = excluded_ids - set(item_ids)
         if unknown:
             raise ValueError(f"Las exclusiones no pertenecen al lote: {sorted(unknown)}")

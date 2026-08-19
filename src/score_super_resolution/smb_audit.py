@@ -30,6 +30,15 @@ from score_super_resolution.benchmark_policy import (
     assert_smb_purpose_allowed,
 )
 from score_super_resolution.contracts import ContractValidationError, validate_instance
+from score_super_resolution.review_evidence import (
+    REVIEW_FIELDS as REVIEW_CSV_FIELDS,
+)
+from score_super_resolution.review_evidence import (
+    ReviewEvidenceError,
+    canonical_review_csv,
+    read_review,
+    validate_review_rows,
+)
 from score_super_resolution.smb import _read_descriptor, load_smb
 
 EXPECTED_ROW_COUNT = 685
@@ -45,25 +54,6 @@ AUDIT_SOURCE_SET_VERSION = 1
 AUDIT_SOURCE_TREE_DOMAIN = b"smb-audit-source-tree-v1\0"
 AUDIT_PATCH_DOMAIN = b"smb-audit-patch-state-v1\0"
 AUDIT_LOCK_DOMAIN = b"smb-audit-uv-lock-v1\0"
-REVIEW_CSV_FIELDS = (
-    "review_kind",
-    "review_key",
-    "item_id",
-    "candidate_item_id",
-    "review_status",
-    "reviewer",
-    "reviewed_at",
-    "rationale",
-    "source_group_id",
-    "quality_disposition",
-    "suitability_disposition",
-    "duplicate_disposition",
-    "dataset_licence_status",
-    "item_provenance_status",
-    "access_status",
-    "redistribution_status",
-    "figure_reproduction_status",
-)
 PUBLICATION_BOUNDARIES = (
     "generation_records_written",
     "generation_records_fsynced",
@@ -1383,10 +1373,7 @@ def _expected_review_rows(rows: Sequence[Mapping[str, object]]) -> list[dict[str
 
 def _write_review_rows(path: Path, review_rows: Sequence[Mapping[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=REVIEW_CSV_FIELDS, quoting=csv.QUOTE_ALL)
-        writer.writeheader()
-        writer.writerows(review_rows)
+    path.write_bytes(canonical_review_csv(review_rows))
 
 
 def write_review_csv(*, active_path: Path, generation_root: Path, output_path: Path) -> None:
@@ -1465,18 +1452,9 @@ def emit_review_evidence_from_active_manifest(
 
 def _read_review_rows(review_path: Path) -> list[dict[str, str]]:
     try:
-        with review_path.open(encoding="utf-8", newline="") as handle:
-            reader = csv.DictReader(handle)
-            if tuple(reader.fieldnames or ()) != REVIEW_CSV_FIELDS:
-                raise _review_error("CSV header does not match the exact review contract")
-            rows = list(reader)
-    except ReviewFinalizationError:
-        raise
-    except (OSError, UnicodeError, csv.Error) as error:
-        raise _review_error(f"cannot read review CSV: {type(error).__name__}") from error
-    if any(None in row or set(row) != set(REVIEW_CSV_FIELDS) for row in rows):
-        raise _review_error("review CSV row does not match the exact header")
-    return [{field: str(row[field]) for field in REVIEW_CSV_FIELDS} for row in rows]
+        return list(read_review(review_path).rows)
+    except ReviewEvidenceError as error:
+        raise _review_error(str(error)) from error
 
 
 _QUALITY_DISPOSITIONS = {
@@ -1514,6 +1492,10 @@ def _require_enum(row: Mapping[str, str], field: str, allowed: set[str]) -> None
 def _validated_review_rows(
     rows: Sequence[Mapping[str, object]], review_rows: Sequence[Mapping[str, str]]
 ) -> list[dict[str, str]]:
+    try:
+        review_rows = validate_review_rows(review_rows)
+    except ReviewEvidenceError as error:
+        raise _review_error(str(error)) from error
     expected_rows = _expected_review_rows(rows)
     expected = {row["review_key"]: row for row in expected_rows}
     seen: dict[str, dict[str, str]] = {}

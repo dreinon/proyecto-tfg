@@ -15,7 +15,6 @@ from score_super_resolution.review_evidence import (
 )
 from score_super_resolution.smb_review_ui import SMBReviewSession
 
-
 TRACKED_REVIEW = Path(__file__).parents[1] / "data" / "audits" / "smb-review-v1.csv"
 CONTROL_CHARACTERS = tuple(chr(codepoint) for codepoint in (*range(0x20), 0x7F, *range(0x80, 0xA0)))
 FORMULA_PREFIXES = ("=2+2", "+2+2", "-2+2", "@SUM(1,1)", "  =2+2", "\v@SUM(1,1)")
@@ -66,7 +65,7 @@ def test_existing_accented_review_round_trips_to_identical_canonical_bytes() -> 
     document = read_review(TRACKED_REVIEW)
 
     assert len(document.rows) == 699
-    assert any("Daniel Reinón García" == row["reviewer"] for row in document.rows)
+    assert any(row["reviewer"] == "Daniel Reinón García" for row in document.rows)
     assert canonical_review_csv(document.rows) == TRACKED_REVIEW.read_bytes()
     assert document.canonical_bytes == TRACKED_REVIEW.read_bytes()
 
@@ -95,9 +94,7 @@ def test_direct_ui_save_rejects_formula_examples(
 
 
 @pytest.mark.parametrize("field", REVIEW_FIELDS)
-def test_ui_write_boundary_rejects_unsafe_content_in_every_cell(
-    tmp_path: Path, field: str
-) -> None:
+def test_ui_write_boundary_rejects_unsafe_content_in_every_cell(tmp_path: Path, field: str) -> None:
     review_path = tmp_path / "smb-review-v1.csv"
     rows = _safe_rows()
     _write_rows(review_path, rows)
@@ -112,8 +109,6 @@ def test_ui_write_boundary_rejects_unsafe_content_in_every_cell(
 
 
 def test_display_neutralization_is_not_valid_canonical_input() -> None:
-    assert validate_human_cell(
-        "'=2+2", field="rationale", review_key="smb-test-000000"
-    ) == "'=2+2"
+    assert validate_human_cell("'=2+2", field="rationale", review_key="smb-test-000000") == "'=2+2"
     with pytest.raises(ReviewEvidenceError):
         validate_human_cell("=2+2", field="rationale", review_key="smb-test-000000")
