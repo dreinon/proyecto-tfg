@@ -21,6 +21,7 @@ import uuid
 import warnings
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import date
 from itertools import combinations
 from pathlib import Path, PurePosixPath
@@ -85,6 +86,8 @@ MANIFEST_DESCRIPTOR_FILENAME = "manifest-descriptor.yaml"
 MANIFEST_RECORDS_FILENAME = "manifest-records.jsonl"
 RECOVERY_RECORDS_FILENAME = "manifest-records.jsonl.gz"
 RECOVERY_READ_CHUNK_SIZE = 64 * 1024
+_OS_OPEN_SUPPORTS_DIR_FD = os.open in getattr(os, "supports_dir_fd", set())
+_OS_STAT_SUPPORTS_DIR_FD = os.stat in getattr(os, "supports_dir_fd", set())
 AUTHORITATIVE_MIGRATION_STAGE = ".migrate-authoritative-v2"
 PUBLICATION_BOUNDARIES = (
     "generation_records_written",
@@ -2731,33 +2734,90 @@ def _reject_symlink_components(path: Path, *, label: str, final_may_not_exist: b
     return absolute
 
 
-def _read_regular_nofollow(path: Path, *, label: str, maximum_bytes: int) -> bytes:
-    absolute = _reject_symlink_components(path, label=label, final_may_not_exist=False)
+def _secure_dirfd_support() -> tuple[int, int, int]:
     no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory_only = getattr(os, "O_DIRECTORY", 0)
     close_on_exec = getattr(os, "O_CLOEXEC", 0)
-    if no_follow == 0:
+    if (
+        no_follow == 0
+        or directory_only == 0
+        or not _OS_OPEN_SUPPORTS_DIR_FD
+        or not _OS_STAT_SUPPORTS_DIR_FD
+    ):
         raise _publication_error("secure no-follow recovery reads are unavailable")
+    return no_follow, directory_only, close_on_exec
+
+
+@contextmanager
+def _retained_parent_dirfd(path: Path, *, label: str) -> Iterable[tuple[int, str]]:
+    """Retain the verified parent inode while a basename-only operation runs."""
+
+    no_follow, directory_only, close_on_exec = _secure_dirfd_support()
+    expanded = path.expanduser()
+    if expanded.is_absolute():
+        anchor = expanded.anchor
+        components = expanded.parts[1:]
+    else:
+        anchor = "."
+        components = expanded.parts
+    if not components or any(component in {"", ".", ".."} for component in components):
+        raise _publication_error(f"{label} must be a regular file")
+    directory_fd: int | None = None
+    try:
+        directory_fd = os.open(
+            anchor,
+            os.O_RDONLY | directory_only | no_follow | close_on_exec,
+        )
+        for component in components[:-1]:
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | directory_only | no_follow | close_on_exec,
+                dir_fd=directory_fd,
+            )
+            os.close(directory_fd)
+            directory_fd = next_fd
+        yield directory_fd, components[-1]
+    except ManifestPublicationError:
+        raise
+    except OSError as error:
+        raise _publication_error(f"cannot inspect {label}") from error
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
+def _read_regular_nofollow(path: Path, *, label: str, maximum_bytes: int) -> bytes:
+    no_follow, _, close_on_exec = _secure_dirfd_support()
+    non_blocking = getattr(os, "O_NONBLOCK", 0)
     descriptor: int | None = None
     try:
-        descriptor = os.open(absolute, os.O_RDONLY | no_follow | close_on_exec)
-        opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode):
-            raise _publication_error(f"{label} must be a regular file")
-        if opened.st_size > maximum_bytes:
-            raise _publication_error(f"{label} exceeds its schema-declared maximum")
-        chunks: list[bytes] = []
-        consumed = 0
-        while True:
-            chunk = os.read(descriptor, min(RECOVERY_READ_CHUNK_SIZE, maximum_bytes + 1 - consumed))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            consumed += len(chunk)
-            if consumed > maximum_bytes:
+        with _retained_parent_dirfd(path, label=label) as (parent_fd, basename):
+            descriptor = os.open(
+                basename,
+                os.O_RDONLY | no_follow | close_on_exec | non_blocking,
+                dir_fd=parent_fd,
+            )
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode):
+                raise _publication_error(f"{label} must be a regular file")
+            if opened.st_size > maximum_bytes:
                 raise _publication_error(f"{label} exceeds its schema-declared maximum")
-        if consumed != opened.st_size:
-            raise _publication_error(f"{label} changed while being read")
-        return b"".join(chunks)
+            chunks: list[bytes] = []
+            consumed = 0
+            while True:
+                chunk = os.read(
+                    descriptor,
+                    min(RECOVERY_READ_CHUNK_SIZE, maximum_bytes + 1 - consumed),
+                )
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                consumed += len(chunk)
+                if consumed > maximum_bytes:
+                    raise _publication_error(f"{label} exceeds its schema-declared maximum")
+            if consumed != opened.st_size:
+                raise _publication_error(f"{label} changed while being read")
+            return b"".join(chunks)
     except ManifestPublicationError:
         raise
     except OSError as error:
