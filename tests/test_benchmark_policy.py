@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 import yaml
 
+import score_super_resolution.benchmark_policy as benchmark_policy
 import score_super_resolution.smb_audit as smb_audit
 from score_super_resolution.benchmark_policy import (
     AUDIT_PURPOSES,
@@ -253,7 +254,22 @@ def _synthetic_evaluation_gate(
         reference["artifact_path"] = relative.as_posix()
         reference["artifact_sha256"] = digest
 
+    human_evidence = {
+        "evidence_type": "human-review",
+        "evidence_id": "synthetic-human-review-v1",
+        "reviewer": "accountable-reviewer",
+        "reviewed_at": "2026-08-18",
+        "decision": "approved",
+    }
+    human_evidence_relative = Path("evidence") / "human-review.json"
+    human_evidence_digest = _write_control(project_root / human_evidence_relative, human_evidence)
     human_control = _freeze_control("human_unlock_recorded")
+    human_control["content"]["approval_evidence"].update(
+        {
+            "artifact_path": human_evidence_relative.as_posix(),
+            "artifact_sha256": human_evidence_digest,
+        }
+    )
     human_control["content"]["prerequisite_digests"] = {
         prerequisite_id: record["prerequisites"][prerequisite_id]["artifact_sha256"]
         for prerequisite_id in _PRECEDING_PREREQUISITES
@@ -505,6 +521,24 @@ def test_artifact_unlock_contract_self_validates_and_matches_analysis_protocol()
     assert prerequisite_schema["required"] == protocol_ids
     assert set(prerequisite_schema["properties"]) == set(protocol_ids)
     validate_instance("smb-evaluation-unlock", _artifact_backed_unlock())
+
+
+def test_production_registry_owns_every_analysis_prerequisite_contract() -> None:
+    assert tuple(benchmark_policy._PREREQUISITE_CONTRACTS) == tuple(_PREREQUISITE_CONTRACTS)
+    for prerequisite_id, (
+        artifact_kind,
+        schema_id,
+        schema_versions,
+    ) in _PREREQUISITE_CONTRACTS.items():
+        contract = benchmark_policy._PREREQUISITE_CONTRACTS[prerequisite_id]
+        expected_versions = (
+            schema_versions if isinstance(schema_versions, tuple) else (schema_versions,)
+        )
+        assert (contract.artifact_kind, contract.schema_id, contract.schema_versions) == (
+            artifact_kind,
+            schema_id,
+            expected_versions,
+        )
 
 
 @pytest.mark.parametrize("prerequisite_id", tuple(_PREREQUISITE_CONTRACTS))
@@ -787,6 +821,15 @@ def test_runtime_gate_rejects_semantically_invalid_correctly_hashed_artifact(
     _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
 
 
+def test_runtime_gate_rejects_artifact_changed_after_recording(tmp_path: Path) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
+    reference = record["prerequisites"]["methods_frozen"]
+    artifact_path = project_root / reference["artifact_path"]
+    artifact_path.write_bytes(artifact_path.read_bytes() + b" ")
+
+    _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
+
+
 def test_manifest_pointer_hash_is_insufficient_when_generation_is_absent(tmp_path: Path) -> None:
     record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
     reference = record["prerequisites"]["evaluation_manifest_frozen"]
@@ -839,6 +882,22 @@ def test_human_approval_must_digest_every_preceding_artifact(tmp_path: Path) -> 
     artifact_path = project_root / reference["artifact_path"]
     control = json.loads(artifact_path.read_text(encoding="utf-8"))
     control["content"]["prerequisite_digests"]["methods_frozen"] = "0" * 64
+    reference["artifact_sha256"] = _write_control(artifact_path, control)
+
+    _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
+
+
+@pytest.mark.parametrize("mutation", ("missing", "wrong_digest"))
+def test_human_review_evidence_must_exist_and_match_digest(mutation: str, tmp_path: Path) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
+    reference = record["prerequisites"]["human_unlock_recorded"]
+    artifact_path = project_root / reference["artifact_path"]
+    control = json.loads(artifact_path.read_text(encoding="utf-8"))
+    evidence = control["content"]["approval_evidence"]
+    if mutation == "missing":
+        evidence["artifact_path"] = "evidence/missing-review.json"
+    else:
+        evidence["artifact_sha256"] = "0" * 64
     reference["artifact_sha256"] = _write_control(artifact_path, control)
 
     _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
