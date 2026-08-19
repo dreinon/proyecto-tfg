@@ -715,7 +715,7 @@ def test_manifest_v2_compact_row_excludes_raw_upstream_content() -> None:
     (
         (
             lambda row: row["visual_review"].pop("reviewer"),
-            "required property",
+            "visual_review",
         ),
         (
             lambda row: row.update(audit_sample_member=False),
@@ -723,19 +723,19 @@ def test_manifest_v2_compact_row_excludes_raw_upstream_content() -> None:
         ),
         (
             lambda row: row["visual_review"].update(status="not_visually_reviewed"),
-            "additional properties",
+            "visual_review",
         ),
         (
             lambda row: row["visual_review"].update(status="targeted_human_reviewed"),
-            "target_basis_ref",
+            "visual_review",
         ),
         (
             lambda row: row["visual_review"].update(status="unavailable"),
-            "additional properties",
+            "visual_review",
         ),
         (
             lambda row: row["visual_review"].update(status="not_applicable"),
-            "additional properties",
+            "visual_review",
         ),
     ),
     ids=(
@@ -779,6 +779,48 @@ def test_manifest_v2_targeted_review_is_separate_from_the_frozen_sample() -> Non
 
 
 @pytest.mark.parametrize(
+    "automated_audit",
+    (
+        {"status": "pending", "rationale": "Automated audit has not run."},
+        {"status": "unavailable", "reason": "Image bytes could not be decoded."},
+        {"status": "not_applicable", "reason": "No image audit applies to this record."},
+    ),
+    ids=("pending", "unavailable", "not-applicable"),
+)
+def test_manifest_v2_automated_audit_noncompleted_states_are_closed(
+    automated_audit: dict[str, object],
+) -> None:
+    row = _v2_row()
+    row["automated_audit"] = automated_audit
+    validate_instance("manifest-row", row, version=2)
+
+    row["automated_audit"] = {"status": automated_audit["status"]}
+    with pytest.raises(ContractValidationError, match="automated_audit"):
+        validate_instance("manifest-row", row, version=2)
+
+
+@pytest.mark.parametrize(
+    "visual_review",
+    (
+        {"status": "unavailable", "reason": "The image could not be rendered."},
+        {"status": "not_applicable", "reason": "Visual review does not apply."},
+    ),
+    ids=("unavailable", "not-applicable"),
+)
+def test_manifest_v2_visual_nonreview_states_are_closed(
+    visual_review: dict[str, object],
+) -> None:
+    row = _v2_row()
+    row["audit_sample_member"] = False
+    row["visual_review"] = visual_review
+    validate_instance("manifest-row", row, version=2)
+
+    row["visual_review"] = {"status": visual_review["status"]}
+    with pytest.raises(ContractValidationError, match="visual_review"):
+        validate_instance("manifest-row", row, version=2)
+
+
+@pytest.mark.parametrize(
     "mutation",
     (
         lambda relation: relation.update(disposition="distinct"),
@@ -818,6 +860,27 @@ def test_manifest_v2_exact_relation_is_closed_automated_evidence(mutation: Any) 
 def test_manifest_v2_reviewed_perceptual_relation_requires_human_evidence(mutation: Any) -> None:
     row = _v2_row()
     mutation(row["duplicate_relations"][1])
+    with pytest.raises(ContractValidationError):
+        validate_instance("manifest-row", row, version=2)
+
+
+def test_manifest_v2_pending_perceptual_relation_cannot_impersonate_human_review() -> None:
+    row = _v2_row()
+    relation = row["duplicate_relations"][1]
+    relation.update(
+        evidence_basis="perceptual_hash_candidate",
+        disposition="pending",
+        reviewer=None,
+        reviewed_at=None,
+        rationale="",
+    )
+    row["duplicate_summary"].update(
+        pending_relation_count=1,
+        related_relation_count=0,
+    )
+    validate_instance("manifest-row", row, version=2)
+
+    relation["reviewer"] = "reviewer-1"
     with pytest.raises(ContractValidationError):
         validate_instance("manifest-row", row, version=2)
 

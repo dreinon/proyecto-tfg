@@ -1,0 +1,621 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v2:manifest-row",
+  "title": "Compact truthful SMB manifest row v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "manifest_version",
+    "source_key",
+    "source_revision",
+    "split",
+    "upstream_index",
+    "item_id",
+    "source_identity",
+    "source_group_id",
+    "image",
+    "annotations",
+    "automated_audit",
+    "visual_review",
+    "audit_sample_member",
+    "duplicate_relations",
+    "near_duplicate_candidate_ids",
+    "duplicate_summary",
+    "expected_status",
+    "processing_status",
+    "unprocessable_reason",
+    "rights",
+    "paired_eligible",
+    "paired_ineligibility_reason"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "record_type": {"const": "manifest-row"},
+    "manifest_version": {"const": 2},
+    "source_key": {"const": "smb"},
+    "source_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "split": {"const": "test"},
+    "upstream_index": {"type": "integer", "minimum": 0, "maximum": 684},
+    "item_id": {"type": "string", "pattern": "^smb-test-[0-9]{6}$"},
+    "source_identity": {"$ref": "#/$defs/source_identity"},
+    "source_group_id": {
+      "type": ["string", "null"],
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "image": {"$ref": "#/$defs/image"},
+    "annotations": {"$ref": "#/$defs/annotations"},
+    "automated_audit": {"$ref": "#/$defs/automated_audit"},
+    "visual_review": {"$ref": "#/$defs/visual_review"},
+    "audit_sample_member": {"type": "boolean"},
+    "duplicate_relations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/duplicate_relation"}
+    },
+    "near_duplicate_candidate_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/pair_id"}
+    },
+    "duplicate_summary": {"$ref": "#/$defs/duplicate_summary"},
+    "expected_status": {"enum": ["processable", "unprocessable"]},
+    "processing_status": {"enum": ["processed", "failed"]},
+    "unprocessable_reason": {"type": ["string", "null"], "minLength": 1},
+    "rights": {"$ref": "#/$defs/rights"},
+    "paired_eligible": {"type": "boolean"},
+    "paired_ineligibility_reason": {"type": ["string", "null"], "minLength": 1}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "visual_review": {
+            "properties": {"status": {"const": "sampled_human_reviewed"}},
+            "required": ["status"]
+          }
+        }
+      },
+      "then": {"properties": {"audit_sample_member": {"const": true}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "visual_review": {
+            "properties": {"status": {"const": "targeted_human_reviewed"}},
+            "required": ["status"]
+          }
+        }
+      },
+      "then": {"properties": {"audit_sample_member": {"const": false}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "visual_review": {
+            "properties": {"status": {"const": "not_visually_reviewed"}},
+            "required": ["status"]
+          }
+        }
+      },
+      "then": {"properties": {"audit_sample_member": {"const": false}}}
+    },
+    {
+      "if": {"properties": {"processing_status": {"const": "processed"}}},
+      "then": {
+        "properties": {
+          "expected_status": {"const": "processable"},
+          "unprocessable_reason": {"type": "null"}
+        }
+      },
+      "else": {
+        "properties": {
+          "expected_status": {"const": "unprocessable"},
+          "unprocessable_reason": {"type": "string", "minLength": 1},
+          "paired_eligible": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"paired_eligible": {"const": true}}},
+      "then": {"properties": {"paired_ineligibility_reason": {"type": "null"}}},
+      "else": {
+        "properties": {
+          "paired_ineligibility_reason": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nullable_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "normalized": {
+      "type": ["string", "null"],
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "source_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "original_score_normalized",
+        "original_score_raw_sha256",
+        "page_normalized",
+        "page_raw_sha256",
+        "page_texture_normalized",
+        "page_texture_raw_sha256"
+      ],
+      "properties": {
+        "original_score_normalized": {"$ref": "#/$defs/normalized"},
+        "original_score_raw_sha256": {"$ref": "#/$defs/nullable_sha256"},
+        "page_normalized": {"$ref": "#/$defs/normalized"},
+        "page_raw_sha256": {"$ref": "#/$defs/nullable_sha256"},
+        "page_texture_normalized": {"$ref": "#/$defs/normalized"},
+        "page_texture_raw_sha256": {"$ref": "#/$defs/nullable_sha256"}
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "encoded_sha256",
+        "pixel_sha256",
+        "declared_width",
+        "declared_height",
+        "decoded_width",
+        "decoded_height",
+        "mode",
+        "format",
+        "byte_count"
+      ],
+      "properties": {
+        "encoded_sha256": {"$ref": "#/$defs/nullable_sha256"},
+        "pixel_sha256": {"$ref": "#/$defs/nullable_sha256"},
+        "declared_width": {"type": ["integer", "null"], "minimum": 1},
+        "declared_height": {"type": ["integer", "null"], "minimum": 1},
+        "decoded_width": {"type": ["integer", "null"], "minimum": 1},
+        "decoded_height": {"type": ["integer", "null"], "minimum": 1},
+        "mode": {"type": ["string", "null"], "minLength": 1, "maxLength": 16},
+        "format": {"type": ["string", "null"], "minLength": 1, "maxLength": 16},
+        "byte_count": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "annotations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["region_count", "bbox_valid", "required_text_present", "failures"],
+      "properties": {
+        "region_count": {"type": ["integer", "null"], "minimum": 0},
+        "bbox_valid": {"type": ["boolean", "null"]},
+        "required_text_present": {"type": ["boolean", "null"]},
+        "failures": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "automated_audit": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "algorithm_version", "quality_flags"],
+          "properties": {
+            "status": {"const": "automated"},
+            "algorithm_version": {"const": "smb-audit-v2"},
+            "quality_flags": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "rationale"],
+          "properties": {
+            "status": {"const": "pending"},
+            "rationale": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reason"],
+          "properties": {
+            "status": {"const": "unavailable"},
+            "reason": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reason"],
+          "properties": {
+            "status": {"const": "not_applicable"},
+            "reason": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    },
+    "human_visual_review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "reviewer",
+        "reviewed_at",
+        "rationale",
+        "quality_flags",
+        "suitability"
+      ],
+      "properties": {
+        "status": {"enum": ["sampled_human_reviewed", "targeted_human_reviewed"]},
+        "target_basis_ref": {"type": "string", "minLength": 1},
+        "reviewer": {"type": "string", "minLength": 1},
+        "reviewed_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+        "rationale": {"type": "string", "minLength": 1},
+        "quality_flags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "suitability": {"enum": ["suitable", "unsuitable", "uncertain", "not_assessed"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "targeted_human_reviewed"}}},
+          "then": {"required": ["target_basis_ref"]},
+          "else": {"not": {"required": ["target_basis_ref"]}}
+        }
+      ]
+    },
+    "visual_review": {
+      "oneOf": [
+        {"$ref": "#/$defs/human_visual_review"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": {"status": {"const": "not_visually_reviewed"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reason"],
+          "properties": {
+            "status": {"const": "unavailable"},
+            "reason": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reason"],
+          "properties": {
+            "status": {"const": "not_applicable"},
+            "reason": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    },
+    "pair_id": {"type": "string", "pattern": "^pair-[0-9a-f]{16}$"},
+    "pair_items": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "string", "pattern": "^smb-test-[0-9]{6}$"},
+        {"type": "string", "pattern": "^smb-test-[0-9]{6}$"}
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "exact_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["encoded_sha256", "pixel_sha256"],
+      "properties": {
+        "encoded_sha256": {"$ref": "#/$defs/nullable_sha256"},
+        "pixel_sha256": {"$ref": "#/$defs/nullable_sha256"}
+      },
+      "anyOf": [
+        {"properties": {"encoded_sha256": {"$ref": "#/$defs/sha256"}}},
+        {"properties": {"pixel_sha256": {"$ref": "#/$defs/sha256"}}}
+      ]
+    },
+    "perceptual_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "version", "distance"],
+      "properties": {
+        "algorithm": {"const": "phash"},
+        "version": {"const": 1},
+        "distance": {"type": "integer", "minimum": 0}
+      }
+    },
+    "exact_relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pair_id",
+        "candidate_type",
+        "item_ids",
+        "counterpart_item_id",
+        "evidence_basis",
+        "evidence",
+        "disposition",
+        "reviewer",
+        "reviewed_at",
+        "rationale"
+      ],
+      "properties": {
+        "pair_id": {"$ref": "#/$defs/pair_id"},
+        "candidate_type": {"const": "exact"},
+        "item_ids": {"$ref": "#/$defs/pair_items"},
+        "counterpart_item_id": {"type": "string", "pattern": "^smb-test-[0-9]{6}$"},
+        "evidence_basis": {"const": "cryptographic_equality"},
+        "evidence": {"$ref": "#/$defs/exact_evidence"},
+        "disposition": {"const": "duplicate"},
+        "reviewer": {"type": "null"},
+        "reviewed_at": {"type": "null"},
+        "rationale": {"type": "string", "minLength": 1}
+      }
+    },
+    "perceptual_reviewed_relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pair_id",
+        "candidate_type",
+        "item_ids",
+        "counterpart_item_id",
+        "evidence_basis",
+        "evidence",
+        "disposition",
+        "reviewer",
+        "reviewed_at",
+        "rationale"
+      ],
+      "properties": {
+        "pair_id": {"$ref": "#/$defs/pair_id"},
+        "candidate_type": {"const": "perceptual"},
+        "item_ids": {"$ref": "#/$defs/pair_items"},
+        "counterpart_item_id": {"type": "string", "pattern": "^smb-test-[0-9]{6}$"},
+        "evidence_basis": {"const": "perceptual_hash_plus_human_review"},
+        "evidence": {"$ref": "#/$defs/perceptual_evidence"},
+        "disposition": {"enum": ["distinct", "duplicate", "related"]},
+        "reviewer": {"type": "string", "minLength": 1},
+        "reviewed_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+        "rationale": {"type": "string", "minLength": 1}
+      }
+    },
+    "perceptual_pending_relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pair_id",
+        "candidate_type",
+        "item_ids",
+        "counterpart_item_id",
+        "evidence_basis",
+        "evidence",
+        "disposition",
+        "reviewer",
+        "reviewed_at",
+        "rationale"
+      ],
+      "properties": {
+        "pair_id": {"$ref": "#/$defs/pair_id"},
+        "candidate_type": {"const": "perceptual"},
+        "item_ids": {"$ref": "#/$defs/pair_items"},
+        "counterpart_item_id": {"type": "string", "pattern": "^smb-test-[0-9]{6}$"},
+        "evidence_basis": {"const": "perceptual_hash_candidate"},
+        "evidence": {"$ref": "#/$defs/perceptual_evidence"},
+        "disposition": {"const": "pending"},
+        "reviewer": {"type": "null"},
+        "reviewed_at": {"type": "null"},
+        "rationale": {"const": ""}
+      }
+    },
+    "perceptual_unavailable_relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pair_id",
+        "candidate_type",
+        "item_ids",
+        "counterpart_item_id",
+        "evidence_basis",
+        "evidence",
+        "disposition",
+        "reviewer",
+        "reviewed_at",
+        "rationale"
+      ],
+      "properties": {
+        "pair_id": {"$ref": "#/$defs/pair_id"},
+        "candidate_type": {"const": "perceptual"},
+        "item_ids": {"$ref": "#/$defs/pair_items"},
+        "counterpart_item_id": {"type": "string", "pattern": "^smb-test-[0-9]{6}$"},
+        "evidence_basis": {"const": "perceptual_hash_candidate"},
+        "evidence": {"$ref": "#/$defs/perceptual_evidence"},
+        "disposition": {"const": "unavailable"},
+        "reviewer": {"type": "null"},
+        "reviewed_at": {"type": "null"},
+        "rationale": {"type": "string", "minLength": 1}
+      }
+    },
+    "duplicate_relation": {
+      "oneOf": [
+        {"$ref": "#/$defs/exact_relation"},
+        {"$ref": "#/$defs/perceptual_reviewed_relation"},
+        {"$ref": "#/$defs/perceptual_pending_relation"},
+        {"$ref": "#/$defs/perceptual_unavailable_relation"}
+      ]
+    },
+    "duplicate_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exact_relation_count",
+        "perceptual_relation_count",
+        "pending_relation_count",
+        "duplicate_relation_count",
+        "related_relation_count",
+        "distinct_relation_count",
+        "unavailable_relation_count",
+        "group_ids"
+      ],
+      "properties": {
+        "exact_relation_count": {"type": "integer", "minimum": 0},
+        "perceptual_relation_count": {"type": "integer", "minimum": 0},
+        "pending_relation_count": {"type": "integer", "minimum": 0},
+        "duplicate_relation_count": {"type": "integer", "minimum": 0},
+        "related_relation_count": {"type": "integer", "minimum": 0},
+        "distinct_relation_count": {"type": "integer", "minimum": 0},
+        "unavailable_relation_count": {"type": "integer", "minimum": 0},
+        "group_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^duplicate-group-[0-9a-f]{16}$"}
+        }
+      }
+    },
+    "dataset_licence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "identifier", "reference"],
+      "properties": {
+        "status": {"const": "confirmed"},
+        "identifier": {"const": "CC-BY-NC-4.0"},
+        "reference": {"type": "string", "format": "uri", "minLength": 1}
+      }
+    },
+    "item_provenance": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "evidence_ref"],
+          "properties": {
+            "status": {"const": "confirmed"},
+            "evidence_ref": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "rationale"],
+          "properties": {
+            "status": {"const": "pending"},
+            "rationale": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reason"],
+          "properties": {
+            "status": {"const": "unavailable"},
+            "reason": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reason"],
+          "properties": {
+            "status": {"const": "not_applicable"},
+            "reason": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    },
+    "reuse_disposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reviewed_basis_ref"],
+      "properties": {
+        "status": {"enum": ["not_established", "permitted", "prohibited"]},
+        "reviewed_basis_ref": {"type": ["string", "null"], "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"enum": ["not_established", "prohibited"]}}},
+          "then": {"properties": {"reviewed_basis_ref": {"type": "null"}}}
+        }
+      ]
+    },
+    "rights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_licence",
+        "item_provenance",
+        "access_status",
+        "redistribution",
+        "figure_reproduction"
+      ],
+      "properties": {
+        "dataset_licence": {"$ref": "#/$defs/dataset_licence"},
+        "item_provenance": {"$ref": "#/$defs/item_provenance"},
+        "access_status": {"enum": ["confirmed", "restricted"]},
+        "redistribution": {"$ref": "#/$defs/reuse_disposition"},
+        "figure_reproduction": {"$ref": "#/$defs/reuse_disposition"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "not": {
+              "properties": {
+                "item_provenance": {
+                  "properties": {"status": {"const": "confirmed"}},
+                  "required": ["status"]
+                }
+              }
+            }
+          },
+          "then": {
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "redistribution": {
+                      "properties": {"status": {"const": "permitted"}},
+                      "required": ["status"]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "redistribution": {
+                      "properties": {"reviewed_basis_ref": {"type": "string", "minLength": 1}}
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "figure_reproduction": {
+                      "properties": {"status": {"const": "permitted"}},
+                      "required": ["status"]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "figure_reproduction": {
+                      "properties": {"reviewed_basis_ref": {"type": "string", "minLength": 1}}
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
