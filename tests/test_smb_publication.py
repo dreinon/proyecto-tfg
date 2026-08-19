@@ -74,7 +74,6 @@ def _compact_v2_rows() -> list[dict[str, Any]]:
         item_id = f"smb-test-{index:06d}"
         encoded = hashlib.sha256(f"encoded-{index}".encode()).hexdigest()
         pixels = hashlib.sha256(f"pixels-{index}".encode()).hexdigest()
-        sampled = index < 64
         rows.append(
             {
                 "schema_version": 2,
@@ -86,7 +85,7 @@ def _compact_v2_rows() -> list[dict[str, Any]]:
                 "upstream_index": index,
                 "item_id": item_id,
                 "source_identity": {
-                    "original_score_normalized": f"score-{index:03d}",
+                    "original_score_normalized": f"score-{index:03d}_p0",
                     "original_score_raw_sha256": hashlib.sha256(
                         f"score-{index:03d}".encode()
                     ).hexdigest(),
@@ -118,19 +117,8 @@ def _compact_v2_rows() -> list[dict[str, Any]]:
                     "algorithm_version": "smb-audit-v2",
                     "quality_flags": [],
                 },
-                "visual_review": (
-                    {
-                        "status": "sampled_human_reviewed",
-                        "reviewer": "reviewer-1",
-                        "reviewed_at": "2026-08-18",
-                        "rationale": "Reviewed in the frozen sample.",
-                        "quality_flags": [],
-                        "suitability": "suitable",
-                    }
-                    if sampled
-                    else {"status": "not_visually_reviewed"}
-                ),
-                "audit_sample_member": sampled,
+                "visual_review": {"status": "not_visually_reviewed"},
+                "audit_sample_member": False,
                 "duplicate_relations": [],
                 "near_duplicate_candidate_ids": [],
                 "duplicate_summary": {
@@ -170,6 +158,19 @@ def _compact_v2_rows() -> list[dict[str, Any]]:
                 "paired_ineligibility_reason": None,
             }
         )
+    selected = set(smb_audit.select_visual_sample(rows, seed=17, sample_size=64))
+    for row in rows:
+        sampled = row["item_id"] in selected
+        row["audit_sample_member"] = sampled
+        if sampled:
+            row["visual_review"] = {
+                "status": "sampled_human_reviewed",
+                "reviewer": "reviewer-1",
+                "reviewed_at": "2026-08-18",
+                "rationale": "Reviewed in the frozen sample.",
+                "quality_flags": [],
+                "suitability": "suitable",
+            }
     return rows
 
 
@@ -370,6 +371,133 @@ def test_v2_collection_retains_different_relations_sharing_one_item() -> None:
 
     relations = {r["counterpart_item_id"]: r["disposition"] for r in rows[0]["duplicate_relations"]}
     assert relations == {"smb-test-000001": "distinct", "smb-test-000002": "related"}
+
+
+def test_v2_collection_rejects_count_preserving_sample_identity_swap() -> None:
+    rows = _compact_v2_rows()
+    descriptor = _compact_v2_descriptor(rows)
+    sampled = next(row for row in rows if row["audit_sample_member"] is True)
+    unsampled = next(row for row in rows if row["audit_sample_member"] is False)
+    sampled["audit_sample_member"] = False
+    sampled["visual_review"] = {"status": "not_visually_reviewed"}
+    unsampled["audit_sample_member"] = True
+    unsampled["visual_review"] = {
+        "status": "sampled_human_reviewed",
+        "reviewer": "reviewer-1",
+        "reviewed_at": "2026-08-18",
+        "rationale": "Substituted while preserving all declared counts.",
+        "quality_flags": [],
+        "suitability": "suitable",
+    }
+
+    with pytest.raises(smb_audit.ManifestPublicationError, match="sample"):
+        smb_audit.validate_v2_manifest_collection(descriptor, rows)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    (
+        ("seed", "seed"),
+        ("identity_fields", "validation"),
+        ("algorithm", "validation"),
+        ("version", "validation"),
+    ),
+)
+def test_v2_collection_rejects_sample_selector_contract_drift(mutation: str, match: str) -> None:
+    rows = _compact_v2_rows()
+    descriptor = _compact_v2_descriptor(rows)
+    if mutation == "seed":
+        descriptor["sample_selection"]["seed"] += 1
+    elif mutation == "identity_fields":
+        descriptor["sample_selection"]["identity_fields"] = ["item_id", "upstream_index"]
+    elif mutation == "algorithm":
+        descriptor["sample_selection"]["algorithm"] = "other-rank"
+    else:
+        descriptor["sample_selection"]["version"] = 2
+
+    with pytest.raises(smb_audit.ManifestPublicationError, match=match):
+        smb_audit.validate_v2_manifest_collection(descriptor, rows)
+
+
+@pytest.mark.parametrize("field", ("source_key", "source_revision", "split"))
+def test_v2_collection_rejects_row_source_provenance_drift(field: str) -> None:
+    rows = _compact_v2_rows()
+    descriptor = _compact_v2_descriptor(rows)
+    rows[0][field] = {
+        "source_key": "other",
+        "source_revision": "b" * 40,
+        "split": "validation",
+    }[field]
+
+    with pytest.raises(smb_audit.ManifestPublicationError, match="source"):
+        smb_audit.validate_v2_manifest_collection(descriptor, rows)
+
+
+@pytest.mark.parametrize(
+    "mutation", ("deleted", "added", "duplicated", "reordered", "identity", "reason")
+)
+def test_v2_collection_rejects_exclusion_ledger_drift(mutation: str) -> None:
+    rows = _compact_v2_rows()
+    for index in (4, 8):
+        rows[index]["paired_eligible"] = False
+        rows[index]["paired_ineligibility_reason"] = "invalid_region_annotation"
+    descriptor = _compact_v2_descriptor(rows)
+    descriptor["exclusions"] = [
+        {
+            "upstream_index": row["upstream_index"],
+            "item_id": row["item_id"],
+            "reason": row["paired_ineligibility_reason"],
+        }
+        for row in rows
+        if row["paired_eligible"] is False
+    ]
+    if mutation == "deleted":
+        descriptor["exclusions"].pop()
+    elif mutation == "added":
+        descriptor["exclusions"].append(
+            {"upstream_index": 12, "item_id": "smb-test-000012", "reason": "extra"}
+        )
+    elif mutation == "duplicated":
+        descriptor["exclusions"].append(copy.deepcopy(descriptor["exclusions"][0]))
+    elif mutation == "reordered":
+        descriptor["exclusions"].reverse()
+    elif mutation == "identity":
+        descriptor["exclusions"][0]["item_id"] = "smb-test-000005"
+    else:
+        descriptor["exclusions"][0]["reason"] = "different_reason"
+
+    with pytest.raises(smb_audit.ManifestPublicationError, match="exclusion"):
+        smb_audit.validate_v2_manifest_collection(descriptor, rows)
+
+
+def test_v2_reconciliation_reports_validated_generation_facts(tmp_path: Path) -> None:
+    rows = _compact_v2_rows()
+    descriptor = _compact_v2_descriptor(rows)
+    active_path = tmp_path / "active.yaml"
+    generation_root = tmp_path / "generations"
+    smb_audit.publish_manifest_generation(
+        active_path=active_path,
+        generation_root=generation_root,
+        descriptor=descriptor,
+        rows=rows,
+    )
+    resolved, _ = smb_audit.resolve_active_manifest(
+        active_path=active_path, generation_root=generation_root
+    )
+
+    report = smb_audit.reconcile_manifest(active_path=active_path, generation_root=generation_root)
+
+    assert report == {
+        "row_count": 685,
+        "processed": 685,
+        "failed": 0,
+        "paired_eligible": 685,
+        "generation_id": resolved["generation_id"],
+        "records_sha256": resolved["records_sha256"],
+        "benchmark_state": "AUDITED_LOCKED",
+        "exclusion_count": 0,
+        "source_group_count": 685,
+    }
 
 
 def test_v2_policy_and_candidate_saves_do_not_create_visual_or_item_pair_claims(
