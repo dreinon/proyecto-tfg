@@ -241,6 +241,31 @@ def test_review_validation_rejects_incomplete_or_unstable_joins(
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "payload"),
+    (("reviewer", "=2+2"), ("rationale", "@SUM(1,1)")),
+)
+def test_finalizer_rejects_formula_prefixed_human_evidence(
+    tmp_path: Path, field: str, payload: str
+) -> None:
+    active_path, generation_root, _, _, _, review = _emit_review_bundle(tmp_path)
+    rows = _complete_review(review)
+    rows[0][field] = payload
+    _write_review(review, rows)
+
+    with pytest.raises(smb_audit.ReviewFinalizationError) as caught:
+        smb_audit.finalize_reviewed_manifest(
+            review_path=review,
+            active_path=active_path,
+            generation_root=generation_root,
+        )
+
+    message = str(caught.value)
+    assert field in message
+    assert rows[0]["review_key"] in message
+    assert payload not in message
+
+
 def test_apply_review_dispositions_preserves_denominator_and_updates_candidate_pair(
     tmp_path: Path,
 ) -> None:
