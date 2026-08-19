@@ -81,6 +81,9 @@ RECOVERY_COMMAND = (
     "--recovery-records data/manifests/smb-evaluation-v1-recovery.jsonl.gz "
     "--manifest-generation-root artifacts/smb-manifests/generations"
 )
+MANIFEST_DESCRIPTOR_FILENAME = "manifest-descriptor.yaml"
+MANIFEST_RECORDS_FILENAME = "manifest-records.jsonl"
+RECOVERY_RECORDS_FILENAME = "manifest-records.jsonl.gz"
 RECOVERY_READ_CHUNK_SIZE = 64 * 1024
 AUTHORITATIVE_MIGRATION_STAGE = ".migrate-authoritative-v2"
 PUBLICATION_BOUNDARIES = (
@@ -503,6 +506,7 @@ def _audit_after_guard(
     trusted_cache_roots: Sequence[Path],
     max_encoded_bytes: int,
     max_pixels: int,
+    detailed_limit_failures: bool = False,
 ) -> tuple[dict[str, object], imagehash.ImageHash | None]:
     row = _base_row(record, upstream_index)
     row["source_revision"] = source_revision
@@ -524,7 +528,8 @@ def _audit_after_guard(
             row["declared_width"], row["declared_height"], max_pixels=max_pixels
         )
     ):
-        return _mark_failure(row, "declared_image_too_large", quality_flag="oversized"), None
+        reason = "declared_image_too_large" if detailed_limit_failures else "image_too_large"
+        return _mark_failure(row, reason, quality_flag="oversized"), None
     if PILLOW_VERSION != CANONICAL_PIXEL_DECODER_VERSION:
         return _mark_failure(row, "unsupported_pillow_version"), None
 
@@ -955,6 +960,7 @@ def audit_dataset_v2(
                 trusted_cache_roots=normalized_roots,
                 max_encoded_bytes=max_encoded_bytes,
                 max_pixels=max_pixels,
+                detailed_limit_failures=True,
             ),
         )
         if not isinstance(result, tuple):
@@ -2881,7 +2887,7 @@ def _build_manifest_recovery_v2(
     recovery["bundle_id"] = recovery_bundle_id_v2(recovery)
     bundle_prefix = f"data/manifests/recovery/canonical-pixel-v2/{recovery['bundle_id']}"
     recovery["recovery_descriptor_path"] = f"{bundle_prefix}/manifest-recovery.yaml"
-    recovery["recovery_records_path"] = f"{bundle_prefix}/manifest-records.jsonl.gz"
+    recovery["recovery_records_path"] = f"{bundle_prefix}/{RECOVERY_RECORDS_FILENAME}"
     recovery["metadata_sha256"] = recovery_metadata_sha256(recovery, version=2)
     validate_instance("manifest-recovery", recovery, version=2)
     recovery_bytes = _canonical_descriptor(recovery)
@@ -2994,11 +3000,28 @@ def _join_protected_candidate_evidence(
 
 
 def _candidate_tree_bytes(root: Path) -> dict[str, bytes]:
-    return {
-        path.relative_to(root).as_posix(): path.read_bytes()
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    }
+    active_relative = Path("data/manifests/smb-evaluation-v1.yaml")
+    active_path = root / active_relative
+    if not active_path.exists():
+        synthetic_relative = Path("candidate.yaml")
+        return {synthetic_relative.as_posix(): (root / synthetic_relative).read_bytes()}
+    active_bytes = active_path.read_bytes()
+    try:
+        pointer = yaml.safe_load(active_bytes.decode("utf-8"))
+    except (UnicodeError, yaml.YAMLError) as error:
+        raise ValueError("candidate active pointer is invalid") from error
+    if not isinstance(pointer, Mapping):
+        raise ValueError("candidate active pointer is invalid")
+    generation_prefix = Path("artifacts/smb-manifests/generations")
+    relatives = (
+        active_relative,
+        generation_prefix / str(pointer["descriptor_path"]),
+        generation_prefix / str(pointer["records_path"]),
+        Path(str(pointer["recovery_descriptor_path"])),
+        Path(str(pointer["recovery_records_path"])),
+        Path("install-metadata.yaml"),
+    )
+    return {relative.as_posix(): (root / relative).read_bytes() for relative in relatives}
 
 
 def build_canonical_pixel_rehash_candidate(
@@ -3092,8 +3115,8 @@ def build_canonical_pixel_rehash_candidate(
         active_path = staging_root / str(recovery["active_pointer_path"])
         recovery_descriptor_path = staging_root / str(recovery["recovery_descriptor_path"])
         recovery_records_path = staging_root / str(recovery["recovery_records_path"])
-        _durable_replace(generation_path / "manifest-descriptor.yaml", descriptor_bytes)
-        _durable_replace(generation_path / "manifest-records.jsonl", records_bytes)
+        _durable_replace(generation_path / MANIFEST_DESCRIPTOR_FILENAME, descriptor_bytes)
+        _durable_replace(generation_path / MANIFEST_RECORDS_FILENAME, records_bytes)
         _durable_replace(recovery_records_path, compressed_bytes)
         _durable_replace(recovery_descriptor_path, recovery_bytes)
         _durable_replace(active_path, _canonical_descriptor(pointer))

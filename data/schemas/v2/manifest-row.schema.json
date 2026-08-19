@@ -328,6 +328,15 @@
         }
       ]
     },
+    "legacy_exact_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["encoded_sha256", "pixel_sha256"],
+      "properties": {
+        "encoded_sha256": {"$ref": "#/$defs/sha256"},
+        "pixel_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
     "perceptual_evidence": {
       "type": "object",
       "additionalProperties": false,
@@ -358,8 +367,15 @@
         "candidate_type": {"const": "exact"},
         "item_ids": {"$ref": "#/$defs/pair_items"},
         "counterpart_item_id": {"type": "string", "pattern": "^smb-test-[0-9]{6}$"},
-        "evidence_basis": {"const": "canonical_pixel_sha256"},
-        "evidence": {"$ref": "#/$defs/exact_evidence"},
+        "evidence_basis": {
+          "enum": ["canonical_pixel_sha256", "cryptographic_equality"]
+        },
+        "evidence": {
+          "oneOf": [
+            {"$ref": "#/$defs/exact_evidence"},
+            {"$ref": "#/$defs/legacy_exact_evidence"}
+          ]
+        },
         "disposition": {"const": "duplicate"},
         "reviewer": {"type": "null"},
         "reviewed_at": {"type": "null"},
