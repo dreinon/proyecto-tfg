@@ -84,7 +84,7 @@ def _artifact_backed_unlock() -> dict[str, Any]:
         "schema_version": 1,
         "record_type": "smb-evaluation-unlock",
         "review_status": "reviewed",
-        "reviewer": "accountable-reviewer",
+        "reviewer": "synthetic-accountable-reviewer",
         "reviewed_at": "2026-08-18",
         "prerequisites": {
             prerequisite_id: _artifact_reference(prerequisite_id)
@@ -149,7 +149,7 @@ def _freeze_content(control_id: str) -> dict[str, Any]:
             "claim_rules": ["synthetic-claim-v1"],
         },
         "human_unlock_recorded": {
-            "reviewer": "accountable-reviewer",
+            "reviewer": "synthetic-accountable-reviewer",
             "reviewed_at": "2026-08-18",
             "decision": "approved",
             "approval_evidence": {
@@ -222,6 +222,10 @@ def _synthetic_evaluation_gate(
         from test_smb_publication import _compact_v2_descriptor, _compact_v2_rows
 
         manifest_rows = _compact_v2_rows()
+        for row in manifest_rows:
+            visual_review = row["visual_review"]
+            if visual_review["status"] == "sampled_human_reviewed":
+                visual_review["reviewer"] = "synthetic-visual-reviewer"
         manifest_descriptor = _compact_v2_descriptor(manifest_rows)
     else:
         manifest_rows = _manifest_rows()
@@ -268,7 +272,7 @@ def _synthetic_evaluation_gate(
     human_evidence = {
         "evidence_type": "human-review",
         "evidence_id": "synthetic-human-review-v1",
-        "reviewer": "accountable-reviewer",
+        "reviewer": "synthetic-accountable-reviewer",
         "reviewed_at": "2026-08-18",
         "decision": "approved",
     }
@@ -311,6 +315,84 @@ def test_complete_v2_manifest_unlock_resolves_before_one_callback(tmp_path: Path
 
     assert result == "executed"
     assert calls == ["called"]
+
+
+def test_synthetic_typed_v2_fixture_passes_artifact_backed_unlock(tmp_path: Path) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(
+        tmp_path, manifest_schema_version=2
+    )
+    assert record["reviewer"].startswith("synthetic-")
+    calls: list[str] = []
+
+    result = assert_smb_purpose_allowed(
+        source_descriptor=_smb_descriptor(),
+        purpose=BenchmarkPurpose.METRIC,
+        state=BenchmarkState.EVALUATION_UNLOCKED,
+        unlock_record=record,
+        project_root=project_root,
+        manifest_generation_root=generation_root,
+        callback=lambda: calls.append("no-outcome-sentinel") or "sentinel-only",
+    )
+
+    assert result == "sentinel-only"
+    assert calls == ["no-outcome-sentinel"]
+    for purpose in NEVER_ALLOWED_PURPOSES:
+        with pytest.raises(BenchmarkPolicyError, match=purpose.value):
+            assert_smb_purpose_allowed(
+                source_descriptor=_smb_descriptor(),
+                purpose=purpose,
+                state=BenchmarkState.EVALUATION_UNLOCKED,
+                unlock_record=record,
+                project_root=project_root,
+                manifest_generation_root=generation_root,
+                callback=lambda: calls.append("forbidden"),
+            )
+    assert calls == ["no-outcome-sentinel"]
+
+
+def test_real_phase_1_artifacts_remain_locked() -> None:
+    project_root = Path(__file__).parents[1]
+    active_path = project_root / "data" / "manifests" / "smb-evaluation-v1.yaml"
+    generation_root = project_root / "artifacts" / "smb-manifests" / "generations"
+    pointer = yaml.safe_load(active_path.read_text(encoding="utf-8"))
+    record = _artifact_backed_unlock()
+    manifest_reference = record["prerequisites"]["evaluation_manifest_frozen"]
+    manifest_reference.update(
+        {
+            "schema_version": pointer["schema_version"],
+            "artifact_path": active_path.relative_to(project_root).as_posix(),
+            "artifact_sha256": hashlib.sha256(active_path.read_bytes()).hexdigest(),
+            "expected_generation_id": pointer["generation_id"],
+            "expected_row_count": pointer["row_count"],
+            "expected_records_sha256": pointer["records_sha256"],
+            "expected_benchmark_state": "AUDITED_LOCKED",
+        }
+    )
+    calls: list[str] = []
+
+    with pytest.raises(BenchmarkPolicyError):
+        assert_smb_purpose_allowed(
+            source_descriptor=_smb_descriptor(),
+            purpose=BenchmarkPurpose.METRIC,
+            state=BenchmarkState.EVALUATION_UNLOCKED,
+            unlock_record=record,
+            project_root=project_root,
+            manifest_generation_root=generation_root,
+            callback=lambda: calls.append("called"),
+        )
+    assert calls == []
+    for purpose in NEVER_ALLOWED_PURPOSES:
+        with pytest.raises(BenchmarkPolicyError, match=purpose.value):
+            assert_smb_purpose_allowed(
+                source_descriptor=_smb_descriptor(),
+                purpose=purpose,
+                state=BenchmarkState.EVALUATION_UNLOCKED,
+                unlock_record=record,
+                project_root=project_root,
+                manifest_generation_root=generation_root,
+                callback=lambda: calls.append("called"),
+            )
+    assert calls == []
 
 
 @pytest.mark.parametrize(
