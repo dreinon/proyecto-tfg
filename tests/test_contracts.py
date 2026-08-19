@@ -76,6 +76,34 @@ RECOVERY_REQUIRED_FIELDS = (
     "metadata_sha256",
 )
 
+RECOVERY_V2_REQUIRED_FIELDS = (
+    "schema_version",
+    "record_type",
+    "bundle_id",
+    "active_pointer_path",
+    "manifest_id",
+    "generation_id",
+    "descriptor_path",
+    "descriptor_sha256",
+    "descriptor_yaml",
+    "records_path",
+    "row_schema_id",
+    "row_schema_version",
+    "row_count",
+    "records_sha256",
+    "source_revision",
+    "source_provenance",
+    "audit_version",
+    "benchmark_state",
+    "recovery_descriptor_path",
+    "recovery_records_path",
+    "compression",
+    "compressed_sha256",
+    "compressed_size_bytes",
+    "uncompressed_size_bytes",
+    "metadata_sha256",
+)
+
 
 def _canonical_yaml(record: dict[str, Any]) -> bytes:
     return yaml.safe_dump(
@@ -211,6 +239,80 @@ def _recovery_record() -> dict[str, Any]:
 
 def _resign_recovery(record: dict[str, Any]) -> None:
     record["metadata_sha256"] = _recovery_metadata_sha256(record)
+
+
+def _v2_bundle_id(record: dict[str, Any]) -> str:
+    excluded = {
+        "bundle_id",
+        "recovery_descriptor_path",
+        "recovery_records_path",
+        "metadata_sha256",
+    }
+    core = {key: value for key, value in record.items() if key not in excluded}
+    payload = json.dumps(
+        core,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(b"manifest-recovery-bundle-v2\0" + payload).hexdigest()
+
+
+def _recovery_v2_record() -> dict[str, Any]:
+    legacy = _recovery_record()
+    descriptor = yaml.safe_load(legacy["descriptor_yaml"])
+    descriptor["hash_provenance"]["pixels"] = {
+        "algorithm": "sha256",
+        "version": 2,
+        "canonicalization": "canonical-rgba-frame-v2",
+        "domain_separator": "smb-canonical-rgba-frame-v2",
+        "decoder_library": "Pillow",
+        "decoder_version": "12.3.0",
+        "output_mode": "RGBA8",
+        "alpha_policy": "retain-alpha-and-underlying-rgb",
+        "orientation_policy": "stored-raster-ignore-exif",
+        "metadata_policy": "ignore-non-raster-metadata",
+        "max_encoded_bytes": 67_108_864,
+        "max_pixels": 100_000_000,
+        "failure_policy": "safe-explicit-failure-no-digest",
+    }
+    descriptor["duplicate_provenance"]["exact"] = {
+        "algorithm": "canonical-pixel-sha256",
+        "version": 2,
+    }
+    records_bytes = b"{}\n"
+    descriptor.pop("generation_id", None)
+    generation_id = hashlib.sha256(
+        b"smb-manifest-generation-v2\0" + _canonical_yaml(descriptor) + b"\0" + records_bytes
+    ).hexdigest()
+    descriptor["generation_id"] = generation_id
+    descriptor_bytes = _canonical_yaml(descriptor)
+    recovery = {
+        key: value
+        for key, value in legacy.items()
+        if key not in {"active_pointer_sha256", "recovery_command"}
+    }
+    recovery.update(
+        {
+            "schema_version": 2,
+            "descriptor_yaml": descriptor_bytes.decode("utf-8"),
+            "descriptor_sha256": hashlib.sha256(descriptor_bytes).hexdigest(),
+            "generation_id": generation_id,
+            "descriptor_path": f"{generation_id}/manifest-descriptor.yaml",
+            "records_path": f"{generation_id}/manifest-records.jsonl",
+            "bundle_id": "",
+            "recovery_descriptor_path": "",
+            "recovery_records_path": "",
+            "metadata_sha256": "",
+        }
+    )
+    recovery["bundle_id"] = _v2_bundle_id(recovery)
+    prefix = f"data/manifests/recovery/canonical-pixel-v2/{recovery['bundle_id']}"
+    recovery["recovery_descriptor_path"] = f"{prefix}/manifest-recovery.yaml"
+    recovery["recovery_records_path"] = f"{prefix}/manifest-records.jsonl.gz"
+    recovery["metadata_sha256"] = contracts.recovery_metadata_sha256(recovery, version=2)
+    return recovery
 
 
 def _fixture(name: str) -> dict[str, dict[str, Any]]:
@@ -665,3 +767,58 @@ def test_manifest_recovery_contract_rejects_embedded_descriptor_mutation() -> No
 
     with pytest.raises(ContractValidationError):
         validate_instance("manifest-recovery", recovery, version=1)
+
+
+def test_manifest_recovery_v2_contract_accepts_non_cyclic_bundle() -> None:
+    recovery = _recovery_v2_record()
+
+    validate_instance("manifest-recovery", recovery, version=2)
+
+    assert "active_pointer_sha256" not in recovery
+    assert recovery["recovery_descriptor_path"].endswith(
+        f"/{recovery['bundle_id']}/manifest-recovery.yaml"
+    )
+    assert recovery["recovery_records_path"].endswith(
+        f"/{recovery['bundle_id']}/manifest-records.jsonl.gz"
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "active_pointer_sha256",
+        "bundle_id",
+        "descriptor_path",
+        "records_path",
+        "recovery_descriptor_path",
+        "recovery_records_path",
+        "descriptor_sha256",
+        "records_sha256",
+        "compressed_sha256",
+        "metadata_sha256",
+    ),
+)
+def test_manifest_recovery_v2_rejects_cyclic_or_mismatched_identity(mutation: str) -> None:
+    recovery = _recovery_v2_record()
+    if mutation == "active_pointer_sha256":
+        recovery[mutation] = "f" * 64
+    elif mutation == "bundle_id":
+        recovery[mutation] = "f" * 64
+    elif mutation in {"descriptor_path", "records_path"}:
+        recovery[mutation] = recovery[mutation].replace(recovery["generation_id"], "f" * 64)
+    elif mutation in {"recovery_descriptor_path", "recovery_records_path"}:
+        recovery[mutation] = recovery[mutation].replace(recovery["bundle_id"], "f" * 64)
+    else:
+        recovery[mutation] = "f" * 64
+    if mutation != "metadata_sha256":
+        recovery["metadata_sha256"] = contracts.recovery_metadata_sha256(recovery, version=2)
+
+    with pytest.raises(ContractValidationError):
+        validate_instance("manifest-recovery", recovery, version=2)
+
+
+def test_manifest_recovery_versions_do_not_cross_validate() -> None:
+    with pytest.raises(ContractValidationError):
+        validate_instance("manifest-recovery", _recovery_record(), version=2)
+    with pytest.raises(ContractValidationError):
+        validate_instance("manifest-recovery", _recovery_v2_record(), version=1)

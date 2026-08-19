@@ -1550,6 +1550,169 @@ def _export_recovery_bundle(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     return active_path, source_root, recovery_descriptor, recovery_records
 
 
+def _legacy_recovery_bundle(tmp_path: Path) -> tuple[Path, Path, Path]:
+    rows = _compact_v2_rows()
+    _attach_relation(rows, 0, 64, disposition="distinct")
+    descriptor = _compact_v2_descriptor(rows)
+    descriptor["hash_provenance"]["pixels"] = {
+        "algorithm": "sha256",
+        "version": 1,
+        "canonicalization": "rgba-uint8-row-major-v1",
+    }
+    descriptor["duplicate_provenance"]["exact"] = {
+        "algorithm": "encoded-and-pixel-sha256",
+        "version": 1,
+    }
+    active_path = tmp_path / "legacy" / "data" / "manifests" / "smb-evaluation-v1.yaml"
+    generation_root = tmp_path / "legacy-generations"
+    recovery_descriptor = tmp_path / "legacy-recovery.yaml"
+    recovery_records = tmp_path / "legacy-recovery.jsonl.gz"
+    smb_audit.publish_manifest_generation(
+        active_path=active_path,
+        generation_root=generation_root,
+        descriptor=descriptor,
+        rows=rows,
+        allow_legacy_hash_provenance=True,
+    )
+    smb_audit.export_manifest_recovery(
+        active_path=active_path,
+        generation_root=generation_root,
+        recovery_descriptor_path=recovery_descriptor,
+        recovery_records_path=recovery_records,
+    )
+    return active_path, recovery_descriptor, recovery_records
+
+
+def _tree_bytes(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def test_canonical_rehash_candidate_is_deterministic_and_never_activates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    active_path, recovery_descriptor, recovery_records = _legacy_recovery_bundle(tmp_path)
+    original_active = active_path.read_bytes()
+    legacy_root = tmp_path / "legacy-resolve"
+    _, legacy_rows = smb_audit.resolve_active_manifest(
+        active_path=active_path,
+        generation_root=tmp_path / "legacy-generations",
+    )
+    corrected = copy.deepcopy(legacy_rows)
+    for index, row in enumerate(corrected):
+        row["image"]["pixel_sha256"] = hashlib.sha256(
+            f"canonical-frame-{index}".encode()
+        ).hexdigest()
+    corrected = smb_audit.derive_v2_exact_relations(corrected)
+    monkeypatch.setattr(smb_audit, "load_smb", lambda **_kwargs: [object()] * 685)
+    monkeypatch.setattr(smb_audit, "_without_automatic_image_decoding", lambda value: value)
+    monkeypatch.setattr(smb_audit, "audit_dataset_v2", lambda *_args, **_kwargs: corrected)
+    monkeypatch.setattr(
+        smb_audit,
+        "audit_source_provenance",
+        lambda _root: copy.deepcopy(_compact_v2_descriptor(corrected)["source_provenance"]),
+    )
+    source_path = Path(__file__).parents[1] / "data" / "sources" / "smb.yaml"
+
+    first = smb_audit.build_canonical_pixel_rehash_candidate(
+        source_path=source_path,
+        trusted_cache_roots=(tmp_path,),
+        legacy_active_path=active_path,
+        legacy_recovery_descriptor_path=recovery_descriptor,
+        legacy_recovery_records_path=recovery_records,
+        staging_root=tmp_path / "candidate-a",
+    )
+    second = smb_audit.build_canonical_pixel_rehash_candidate(
+        source_path=source_path,
+        trusted_cache_roots=(tmp_path,),
+        legacy_active_path=active_path,
+        legacy_recovery_descriptor_path=recovery_descriptor,
+        legacy_recovery_records_path=recovery_records,
+        staging_root=tmp_path / "candidate-b",
+    )
+
+    assert first == second
+    assert _tree_bytes(tmp_path / "candidate-a") == _tree_bytes(tmp_path / "candidate-b")
+    assert active_path.read_bytes() == original_active
+    assert first["row_count"] == 685
+    assert first["sampled_human_review_count"] == 64
+    assert first["source_group_count"] == 685
+    assert first["benchmark_state"] == "AUDITED_LOCKED"
+    assert first["bundle_id"] in first["recovery_descriptor_path"]
+    assert legacy_root.exists() is False
+
+
+@pytest.mark.parametrize(
+    "protected_family",
+    (
+        "sample",
+        "visual_review",
+        "perceptual_review",
+        "source_group",
+        "rights",
+        "source_identity",
+        "eligibility",
+        "benchmark_state",
+    ),
+)
+def test_canonical_rehash_candidate_rejects_protected_evidence_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    protected_family: str,
+) -> None:
+    active_path, recovery_descriptor, recovery_records = _legacy_recovery_bundle(tmp_path)
+    _, legacy_rows = smb_audit.resolve_active_manifest(
+        active_path=active_path,
+        generation_root=tmp_path / "legacy-generations",
+    )
+    corrected = copy.deepcopy(legacy_rows)
+    target = corrected[0]
+    if protected_family == "sample":
+        target["audit_sample_member"] = not target["audit_sample_member"]
+    elif protected_family == "visual_review":
+        sampled = next(row for row in corrected if row["audit_sample_member"] is True)
+        sampled["visual_review"]["rationale"] = "changed"
+    elif protected_family == "perceptual_review":
+        target["duplicate_relations"][0]["disposition"] = "related"
+    elif protected_family == "source_group":
+        target["source_group_id"] = "changed-group"
+    elif protected_family == "rights":
+        target["rights"]["figure_reproduction"]["status"] = "permitted"
+    elif protected_family == "source_identity":
+        target["source_identity"]["page_normalized"] = "changed"
+    elif protected_family == "eligibility":
+        target["paired_eligible"] = False
+        target["paired_ineligibility_reason"] = "changed"
+    else:
+        monkeypatch.setattr(
+            smb_audit,
+            "_candidate_benchmark_state",
+            lambda _descriptor: "EVALUATION_UNLOCKED",
+            raising=False,
+        )
+    monkeypatch.setattr(smb_audit, "load_smb", lambda **_kwargs: [object()] * 685)
+    monkeypatch.setattr(smb_audit, "_without_automatic_image_decoding", lambda value: value)
+    monkeypatch.setattr(smb_audit, "audit_dataset_v2", lambda *_args, **_kwargs: corrected)
+    monkeypatch.setattr(
+        smb_audit,
+        "audit_source_provenance",
+        lambda _root: copy.deepcopy(_compact_v2_descriptor(corrected)["source_provenance"]),
+    )
+
+    with pytest.raises(ValueError, match="protected|AUDITED_LOCKED"):
+        smb_audit.build_canonical_pixel_rehash_candidate(
+            source_path=Path(__file__).parents[1] / "data" / "sources" / "smb.yaml",
+            trusted_cache_roots=(tmp_path,),
+            legacy_active_path=active_path,
+            legacy_recovery_descriptor_path=recovery_descriptor,
+            legacy_recovery_records_path=recovery_records,
+            staging_root=tmp_path / "candidate",
+        )
+
+
 def _rewrite_recovery_descriptor(path: Path, recovery: dict[str, Any]) -> None:
     recovery["metadata_sha256"] = recovery_metadata_sha256(recovery)
     path.write_bytes(smb_audit._canonical_descriptor(recovery))
