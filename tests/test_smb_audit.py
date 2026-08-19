@@ -518,7 +518,9 @@ def test_authenticated_audit_orchestrates_exact_revision_and_redacted_exports(
         row["source_revision"] = source_descriptor["revision"]
     for row in rows[:64]:
         row["audit_sample_member"] = True
-    audited: list[tuple[object, dict[str, Any], int, int]] = []
+    audited: list[tuple[object, dict[str, Any], tuple[Path, ...], int, int]] = []
+    trusted_cache_root = tmp_path / "huggingface-cache"
+    trusted_cache_root.mkdir()
 
     def loader(repository_id: str, *, split: str, revision: str) -> object:
         loaded.append((repository_id, split, revision))
@@ -528,14 +530,28 @@ def test_authenticated_audit_orchestrates_exact_revision_and_redacted_exports(
         received: object,
         *,
         source_descriptor: dict[str, Any],
+        trusted_cache_roots: tuple[Path, ...],
         deterministic_seed: int,
         sample_size: int,
     ) -> list[dict[str, Any]]:
-        audited.append((received, source_descriptor, deterministic_seed, sample_size))
+        audited.append(
+            (
+                received,
+                source_descriptor,
+                trusted_cache_roots,
+                deterministic_seed,
+                sample_size,
+            )
+        )
         return rows
 
     monkeypatch.setattr(smb_audit, "audit_dataset", audit)
     monkeypatch.setattr(smb_audit, "_current_code_revision", lambda: "a" * 40)
+    monkeypatch.setattr(
+        smb_audit,
+        "_hugging_face_datasets_cache_roots",
+        lambda: (trusted_cache_root,),
+    )
     audit_descriptor = tmp_path / "data" / "audits" / "smb-audit-v1.yaml"
     audit_records = tmp_path / "data" / "audits" / "smb-audit-v1.jsonl"
     sample = tmp_path / "data" / "audits" / "smb-visual-sample-v1.csv"
@@ -555,7 +571,7 @@ def test_authenticated_audit_orchestrates_exact_revision_and_redacted_exports(
     )
 
     assert loaded == [("PRAIG/SMB", "test", source_descriptor["revision"])]
-    assert audited == [(records, source_descriptor, 20260818, 64)]
+    assert audited == [(records, source_descriptor, (trusted_cache_root,), 20260818, 64)]
     assert report == {"row_count": 685, "processed": 685, "failed": 0, "paired_eligible": 685}
     descriptor, resolved = resolve_active_manifest(active_path=active, generation_root=generations)
     assert descriptor["code_revision"] == "a" * 40

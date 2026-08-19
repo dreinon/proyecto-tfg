@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import uuid
@@ -76,6 +77,15 @@ PUBLICATION_BOUNDARIES = (
 _SAFE_METADATA_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}\Z")
 _SAFE_UPSTREAM_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+_IMAGE_PATH_FAILURE_CODES = frozenset(
+    {
+        "image_path_invalid",
+        "image_path_not_regular",
+        "image_path_outside_trusted_cache",
+        "image_path_symlink",
+        "image_path_unavailable",
+    }
+)
 
 
 class ManifestPublicationError(RuntimeError):
@@ -88,6 +98,16 @@ class ManifestPublicationError(RuntimeError):
 
 class ReviewFinalizationError(ValueError):
     """Report an invalid or incomplete human review without changing evidence."""
+
+
+class _ImageIngestionError(ValueError):
+    """Carry only a safe allowlisted image-ingestion failure code."""
+
+    def __init__(self, code: str) -> None:
+        if code not in _IMAGE_PATH_FAILURE_CODES:
+            raise ValueError("invalid image-ingestion failure code")
+        self.code = code
+        super().__init__(code)
 
 
 def _review_error(detail: str) -> ReviewFinalizationError:
@@ -156,7 +176,102 @@ def _nullable_positive_integer(value: object) -> int | None:
     return value
 
 
-def _encoded_image(record: Mapping[str, object]) -> bytes:
+def _normalized_trusted_cache_roots(trusted_cache_roots: Sequence[Path]) -> tuple[Path, ...]:
+    if isinstance(trusted_cache_roots, (str, bytes, bytearray)) or not trusted_cache_roots:
+        raise ValueError("trusted_cache_roots must be a non-empty sequence")
+    normalized: list[Path] = []
+    for raw_root in trusted_cache_roots:
+        root = Path(raw_root)
+        if not root.is_absolute():
+            raise ValueError("trusted_cache_roots must contain only absolute paths")
+        try:
+            resolved = root.resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            raise ValueError("trusted_cache_roots must contain existing directories") from error
+        if not resolved.is_dir():
+            raise ValueError("trusted_cache_roots must contain only directories")
+        if resolved not in normalized:
+            normalized.append(resolved)
+    if not normalized:
+        raise ValueError("trusted_cache_roots must contain at least one directory")
+    return tuple(normalized)
+
+
+def _path_failure_from_os_error(error: OSError) -> _ImageIngestionError:
+    if error.errno in {getattr(os, "ELOOP", 40), getattr(os, "ENOTDIR", 20)}:
+        return _ImageIngestionError("image_path_symlink")
+    return _ImageIngestionError("image_path_unavailable")
+
+
+def _read_trusted_regular_file(raw_path: str, trusted_cache_roots: Sequence[Path]) -> bytes:
+    if "\0" in raw_path:
+        raise _ImageIngestionError("image_path_invalid")
+    candidate = Path(raw_path)
+    if not candidate.is_absolute() or ".." in candidate.parts:
+        raise _ImageIngestionError("image_path_invalid")
+    try:
+        resolved_candidate = candidate.resolve(strict=False)
+    except (OSError, RuntimeError) as error:
+        raise _ImageIngestionError("image_path_unavailable") from error
+    matching_roots = [
+        root
+        for root in trusted_cache_roots
+        if resolved_candidate != root and resolved_candidate.is_relative_to(root)
+    ]
+    if len(matching_roots) != 1:
+        raise _ImageIngestionError("image_path_outside_trusted_cache")
+    trusted_root = matching_roots[0]
+    try:
+        relative = candidate.relative_to(trusted_root)
+    except ValueError as error:
+        raise _ImageIngestionError("image_path_outside_trusted_cache") from error
+    if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        raise _ImageIngestionError("image_path_invalid")
+
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory_only = getattr(os, "O_DIRECTORY", 0)
+    close_on_exec = getattr(os, "O_CLOEXEC", 0)
+    non_blocking = getattr(os, "O_NONBLOCK", 0)
+    if no_follow == 0 or directory_only == 0:
+        raise RuntimeError("secure no-follow file access is unavailable")
+    directory_fd: int | None = None
+    file_fd: int | None = None
+    try:
+        directory_fd = os.open(
+            trusted_root,
+            os.O_RDONLY | directory_only | no_follow | close_on_exec,
+        )
+        for component in relative.parts[:-1]:
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | directory_only | no_follow | close_on_exec,
+                dir_fd=directory_fd,
+            )
+            os.close(directory_fd)
+            directory_fd = next_fd
+        file_fd = os.open(
+            relative.parts[-1],
+            os.O_RDONLY | no_follow | close_on_exec | non_blocking,
+            dir_fd=directory_fd,
+        )
+        opened = os.fstat(file_fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise _ImageIngestionError("image_path_not_regular")
+        with os.fdopen(file_fd, "rb", closefd=True) as handle:
+            file_fd = None
+            return handle.read()
+    except _ImageIngestionError:
+        raise
+    except OSError as error:
+        raise _path_failure_from_os_error(error) from error
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
+def _encoded_image(record: Mapping[str, object], *, trusted_cache_roots: Sequence[Path]) -> bytes:
     image = record.get("image")
     if isinstance(image, bytes):
         return image
@@ -170,12 +285,7 @@ def _encoded_image(record: Mapping[str, object]) -> bytes:
             return bytes(encoded)
         raw_path = image.get("path")
         if isinstance(raw_path, str) and raw_path:
-            path = Path(raw_path)
-            try:
-                if path.is_file():
-                    return path.read_bytes()
-            except OSError:
-                pass
+            return _read_trusted_regular_file(raw_path, trusted_cache_roots)
     raise ValueError("image_bytes_unavailable")
 
 
@@ -295,6 +405,7 @@ def _base_row(record: Mapping[str, object], upstream_index: int) -> dict[str, ob
 def _mark_failure(
     row: dict[str, object], reason: str, *, quality_flag: str = "unprocessable"
 ) -> dict[str, object]:
+    row["expected_status"] = "unprocessable"
     row["processing_status"] = "failed"
     row["unprocessable_reason"] = reason
     row["paired_eligible"] = False
@@ -317,13 +428,16 @@ def _audit_after_guard(
     *,
     upstream_index: int,
     source_revision: str,
+    trusted_cache_roots: Sequence[Path],
     max_encoded_bytes: int,
     max_pixels: int,
 ) -> tuple[dict[str, object], imagehash.ImageHash | None]:
     row = _base_row(record, upstream_index)
     row["source_revision"] = source_revision
     try:
-        encoded = _encoded_image(record)
+        encoded = _encoded_image(record, trusted_cache_roots=trusted_cache_roots)
+    except _ImageIngestionError as error:
+        return _mark_failure(row, error.code), None
     except ValueError:
         return _mark_failure(row, "image_bytes_unavailable"), None
     row["byte_count"] = len(encoded)
@@ -380,11 +494,13 @@ def audit_item(
     *,
     upstream_index: int,
     source_descriptor: Mapping[str, object],
+    trusted_cache_roots: Sequence[Path],
     max_encoded_bytes: int = DEFAULT_MAX_ENCODED_BYTES,
     max_pixels: int = DEFAULT_MAX_PIXELS,
 ) -> dict[str, object]:
     """Audit one item after the locked-benchmark guard, returning one strict row."""
 
+    normalized_roots = _normalized_trusted_cache_roots(trusted_cache_roots)
     result = assert_smb_purpose_allowed(
         source_descriptor=source_descriptor,
         purpose=BenchmarkPurpose.CONTENT_AUDIT,
@@ -392,6 +508,7 @@ def audit_item(
             record,
             upstream_index=upstream_index,
             source_revision=str(source_descriptor.get("revision", "")),
+            trusted_cache_roots=normalized_roots,
             max_encoded_bytes=max_encoded_bytes,
             max_pixels=max_pixels,
         ),
@@ -444,6 +561,7 @@ def audit_dataset(
     records: Sequence[Mapping[str, object]],
     *,
     source_descriptor: Mapping[str, object],
+    trusted_cache_roots: Sequence[Path],
     deterministic_seed: int = 20260818,
     sample_size: int = DEFAULT_SAMPLE_SIZE,
     max_encoded_bytes: int = DEFAULT_MAX_ENCODED_BYTES,
@@ -451,6 +569,7 @@ def audit_dataset(
 ) -> list[dict[str, object]]:
     """Audit fixtures safely, preserve every input, and label duplicate candidates."""
 
+    normalized_roots = _normalized_trusted_cache_roots(trusted_cache_roots)
     audited: list[tuple[dict[str, object], imagehash.ImageHash | None]] = []
     for upstream_index, record in enumerate(records):
         result = assert_smb_purpose_allowed(
@@ -460,6 +579,7 @@ def audit_dataset(
                 record,
                 upstream_index=upstream_index,
                 source_revision=str(source_descriptor.get("revision", "")),
+                trusted_cache_roots=normalized_roots,
                 max_encoded_bytes=max_encoded_bytes,
                 max_pixels=max_pixels,
             ),
@@ -647,6 +767,12 @@ def _without_automatic_image_decoding(dataset: object) -> object:
     return cast_column("image", DatasetImage(decode=False))
 
 
+def _hugging_face_datasets_cache_roots() -> tuple[Path, ...]:
+    from datasets import config as datasets_config
+
+    return (Path(datasets_config.HF_DATASETS_CACHE),)
+
+
 def run_authenticated_audit(
     *,
     source_path: Path,
@@ -679,6 +805,7 @@ def run_authenticated_audit(
     rows = audit_dataset(
         dataset,  # type: ignore[arg-type]
         source_descriptor=source_descriptor,
+        trusted_cache_roots=_hugging_face_datasets_cache_roots(),
         deterministic_seed=deterministic_seed,
         sample_size=DEFAULT_SAMPLE_SIZE,
     )
