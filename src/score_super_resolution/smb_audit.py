@@ -38,6 +38,7 @@ from score_super_resolution.review_evidence import (
     ReviewEvidenceError,
     canonical_review_csv,
     read_review,
+    save_review,
     validate_review_rows,
 )
 from score_super_resolution.smb import _read_descriptor, load_smb
@@ -59,6 +60,8 @@ AUDIT_SOURCE_SET_VERSION = 1
 AUDIT_SOURCE_TREE_DOMAIN = b"smb-audit-source-tree-v1\0"
 AUDIT_PATCH_DOMAIN = b"smb-audit-patch-state-v1\0"
 AUDIT_LOCK_DOMAIN = b"smb-audit-uv-lock-v1\0"
+RAW_METADATA_DOMAIN = b"smb-raw-metadata-v1\0"
+AUTHORITATIVE_MIGRATION_STAGE = ".migrate-authoritative-v2"
 PUBLICATION_BOUNDARIES = (
     "generation_records_written",
     "generation_records_fsynced",
@@ -699,6 +702,201 @@ def derive_v2_exact_relations(
     return updated
 
 
+def _raw_metadata_sha256(metadata: object) -> str | None:
+    """Digest one upstream scalar without retaining its potentially large raw value."""
+
+    if not isinstance(metadata, Mapping):
+        return None
+    raw = metadata.get("raw")
+    if raw is None:
+        return None
+    payload = json.dumps(
+        raw,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(RAW_METADATA_DOMAIN + payload).hexdigest()
+
+
+def _v2_row_from_automated_audit(row: Mapping[str, object]) -> dict[str, object]:
+    """Compact one freshly audited v1-shaped row without adding human claims."""
+
+    original_score = row["original_score"]
+    page = row["page"]
+    page_texture = row["page_texture"]
+    quality = row["quality"]
+    assert isinstance(original_score, Mapping)
+    assert isinstance(page, Mapping)
+    assert isinstance(page_texture, Mapping)
+    assert isinstance(quality, Mapping)
+    sampled = row["audit_sample_member"] is True
+    return {
+        "schema_version": 2,
+        "record_type": "manifest-row",
+        "manifest_version": 2,
+        "source_key": "smb",
+        "source_revision": row["source_revision"],
+        "split": "test",
+        "upstream_index": row["upstream_index"],
+        "item_id": row["item_id"],
+        "source_identity": {
+            "original_score_normalized": original_score.get("normalized"),
+            "original_score_raw_sha256": _raw_metadata_sha256(original_score),
+            "page_normalized": page.get("normalized"),
+            "page_raw_sha256": _raw_metadata_sha256(page),
+            "page_texture_normalized": page_texture.get("normalized"),
+            "page_texture_raw_sha256": _raw_metadata_sha256(page_texture),
+        },
+        "source_group_id": row["source_group_id"],
+        "image": {
+            "encoded_sha256": row["encoded_sha256"],
+            "pixel_sha256": row["pixel_sha256"],
+            "declared_width": row["declared_width"],
+            "declared_height": row["declared_height"],
+            "decoded_width": row["decoded_width"],
+            "decoded_height": row["decoded_height"],
+            "mode": row["image_mode"],
+            "format": row["image_format"],
+            "byte_count": row["byte_count"],
+        },
+        "annotations": {
+            "region_count": row["region_count"],
+            "bbox_valid": row["bbox_valid"],
+            "required_text_present": row["required_text_present"],
+            "failures": list(row["annotation_failures"]),
+        },
+        "automated_audit": {
+            "status": "automated",
+            "algorithm_version": "smb-audit-v2",
+            "quality_flags": list(quality["flags"]),
+        },
+        "visual_review": (
+            {
+                "status": "unavailable",
+                "reason": "Frozen-sample human evidence has not yet been migrated.",
+            }
+            if sampled
+            else {"status": "not_visually_reviewed"}
+        ),
+        "audit_sample_member": sampled,
+        "duplicate_relations": [],
+        "near_duplicate_candidate_ids": [],
+        "duplicate_summary": {
+            "exact_relation_count": 0,
+            "perceptual_relation_count": 0,
+            "pending_relation_count": 0,
+            "duplicate_relation_count": 0,
+            "related_relation_count": 0,
+            "distinct_relation_count": 0,
+            "unavailable_relation_count": 0,
+            "group_ids": [],
+        },
+        "expected_status": row["expected_status"],
+        "processing_status": row["processing_status"],
+        "unprocessable_reason": row["unprocessable_reason"],
+        "rights": {
+            "dataset_licence": {
+                "status": "confirmed",
+                "identifier": "CC-BY-NC-4.0",
+                "reference": "https://creativecommons.org/licenses/by-nc/4.0/",
+            },
+            "item_provenance": {
+                "status": "pending",
+                "rationale": "Per-item provenance has not been established.",
+            },
+            "access_status": "confirmed",
+            "redistribution": {
+                "status": "not_established",
+                "reviewed_basis_ref": None,
+            },
+            "figure_reproduction": {
+                "status": "prohibited",
+                "reviewed_basis_ref": None,
+            },
+        },
+        "paired_eligible": row["paired_eligible"],
+        "paired_ineligibility_reason": row["paired_ineligibility_reason"],
+    }
+
+
+def audit_dataset_v2(
+    records: Sequence[Mapping[str, object]],
+    *,
+    source_descriptor: Mapping[str, object],
+    trusted_cache_roots: Sequence[Path],
+    deterministic_seed: int = 20260818,
+    sample_size: int = DEFAULT_SAMPLE_SIZE,
+    max_encoded_bytes: int = DEFAULT_MAX_ENCODED_BYTES,
+    max_pixels: int = DEFAULT_MAX_PIXELS,
+) -> list[dict[str, object]]:
+    """Run one authenticated audit and retain compact v2 duplicate evidence."""
+
+    normalized_roots = _normalized_trusted_cache_roots(trusted_cache_roots)
+    audited: list[tuple[dict[str, object], imagehash.ImageHash | None]] = []
+    for upstream_index, record in enumerate(records):
+        result = assert_smb_purpose_allowed(
+            source_descriptor=source_descriptor,
+            purpose=BenchmarkPurpose.CONTENT_AUDIT,
+            callback=lambda record=record, upstream_index=upstream_index: _audit_after_guard(
+                record,
+                upstream_index=upstream_index,
+                source_revision=str(source_descriptor.get("revision", "")),
+                trusted_cache_roots=normalized_roots,
+                max_encoded_bytes=max_encoded_bytes,
+                max_pixels=max_pixels,
+            ),
+        )
+        if not isinstance(result, tuple):
+            raise RuntimeError("SMB audit guard returned no item result")
+        audited.append(result)
+
+    audited_rows = [row for row, _ in audited]
+    selected = set(
+        select_visual_sample(audited_rows, seed=deterministic_seed, sample_size=sample_size)
+    )
+    for row in audited_rows:
+        row["audit_sample_member"] = row["item_id"] in selected
+    rows = [_v2_row_from_automated_audit(row) for row in audited_rows]
+
+    for first_index, (first_row, first_hash) in enumerate(audited):
+        if first_hash is None:
+            continue
+        for second_index in range(first_index + 1, len(audited)):
+            second_row, second_hash = audited[second_index]
+            if second_hash is None or first_row["pixel_sha256"] == second_row["pixel_sha256"]:
+                continue
+            distance = int(first_hash - second_hash)
+            if distance > MAXIMUM_HAMMING_DISTANCE:
+                continue
+            item_ids = sorted((str(first_row["item_id"]), str(second_row["item_id"])))
+            pair_id = _pair_id("perceptual", *item_ids)
+            shared: dict[str, object] = {
+                "pair_id": pair_id,
+                "candidate_type": "perceptual",
+                "item_ids": item_ids,
+                "evidence_basis": "perceptual_hash_candidate",
+                "evidence": {"algorithm": "phash", "version": 1, "distance": distance},
+                "disposition": "pending",
+                "reviewer": None,
+                "reviewed_at": None,
+                "rationale": "",
+            }
+            for row_index, counterpart in (
+                (first_index, second_row),
+                (second_index, first_row),
+            ):
+                rows[row_index]["duplicate_relations"].append(  # type: ignore[union-attr]
+                    {**shared, "counterpart_item_id": counterpart["item_id"]}
+                )
+
+    rows = derive_v2_exact_relations(rows)
+    for row in rows:
+        validate_instance("manifest-row", row, version=2)
+    return rows
+
+
 def audit_dataset(
     records: Sequence[Mapping[str, object]],
     *,
@@ -1156,6 +1354,589 @@ def run_authenticated_audit(
         implementation_provenance=implementation_provenance,
     )
     return report
+
+
+def _migration_project_paths(source_path: Path) -> dict[str, Path]:
+    source = source_path.expanduser().resolve()
+    project_root = source.parents[2]
+    if source != project_root / "data" / "sources" / "smb.yaml":
+        raise ValueError("authoritative migration requires the canonical SMB descriptor path")
+    return {
+        "project_root": project_root,
+        "audit_descriptor": project_root / "data" / "audits" / "smb-audit-v1.yaml",
+        "audit_records": project_root / "data" / "audits" / "smb-audit-v1.jsonl",
+        "review": project_root / "data" / "audits" / "smb-review-v1.csv",
+    }
+
+
+def _migration_stage_paths(generation_root: Path) -> dict[str, Path]:
+    stage_root = generation_root.resolve().parent / AUTHORITATIVE_MIGRATION_STAGE
+    return {
+        "root": stage_root,
+        "descriptor": stage_root / "stage.yaml",
+        "records": stage_root / "automated-records.jsonl",
+        "legacy_active": stage_root / "legacy-active.yaml",
+        "candidate_active": stage_root / "candidate-active.yaml",
+        "candidate_review": stage_root / "candidate-review.csv",
+    }
+
+
+def _durable_replace(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.parent / f".{path.name}.tmp-{uuid.uuid4().hex}"
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _review_file_identity(path: Path) -> tuple[str, tuple[int, int, int, int, int, int]]:
+    opened = path.stat()
+    metadata = (
+        opened.st_ino,
+        opened.st_mode,
+        opened.st_uid,
+        opened.st_gid,
+        opened.st_size,
+        opened.st_mtime_ns,
+    )
+    return hashlib.sha256(path.read_bytes()).hexdigest(), metadata
+
+
+def _sample_rows(path: Path) -> list[dict[str, str]]:
+    expected = (
+        "upstream_index",
+        "item_id",
+        "source_group_id",
+        "processing_status",
+        "audit_sample_member",
+    )
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if tuple(reader.fieldnames or ()) != expected:
+                raise ValueError("frozen sample has an unexpected header")
+            rows = list(reader)
+    except (OSError, UnicodeError, csv.Error) as error:
+        raise ValueError("cannot read the frozen SMB sample") from error
+    if (
+        len(rows) != DEFAULT_SAMPLE_SIZE
+        or len({row["item_id"] for row in rows}) != DEFAULT_SAMPLE_SIZE
+        or any(row["audit_sample_member"] != "True" for row in rows)
+    ):
+        raise ValueError("frozen sample must contain exactly 64 unique selected identities")
+    return rows
+
+
+def _legacy_candidate_pairs(
+    rows: Sequence[Mapping[str, object]], review_rows: Sequence[Mapping[str, str]]
+) -> dict[str, tuple[str, str]]:
+    occurrences: dict[str, list[str]] = defaultdict(list)
+    for row in rows:
+        candidates = row.get("near_duplicate_candidate_ids")
+        if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
+            raise _review_error("legacy manifest candidate evidence is malformed")
+        for candidate_id in candidates:
+            occurrences[str(candidate_id)].append(str(row["item_id"]))
+    result: dict[str, tuple[str, str]] = {}
+    for candidate_id, item_ids in occurrences.items():
+        canonical = tuple(sorted(item_ids))
+        if (
+            len(item_ids) != 2
+            or len(set(item_ids)) != 2
+            or candidate_id != _candidate_id(*canonical)
+        ):
+            raise _review_error("legacy candidate evidence is not canonical")
+        result[candidate_id] = canonical
+    reviewed = {
+        str(row["review_key"]): tuple(sorted((row["item_id"], row["candidate_item_id"])))
+        for row in review_rows
+        if row["review_kind"] == "candidate"
+    }
+    if reviewed != result:
+        raise _review_error("legacy review candidate keys disagree with the active generation")
+    return result
+
+
+def _v2_perceptual_pairs(
+    rows: Sequence[Mapping[str, object]],
+) -> dict[str, tuple[str, str]]:
+    result: dict[str, tuple[str, str]] = {}
+    for row in rows:
+        relations = row.get("duplicate_relations")
+        if not isinstance(relations, Sequence):
+            raise _review_error("v2 duplicate relations are malformed")
+        for relation in relations:
+            if not isinstance(relation, Mapping) or relation.get("candidate_type") != "perceptual":
+                continue
+            item_ids = relation.get("item_ids")
+            if not isinstance(item_ids, Sequence) or isinstance(item_ids, (str, bytes)):
+                raise _review_error("v2 perceptual pair identities are malformed")
+            pair = tuple(str(item_id) for item_id in item_ids)
+            if len(pair) != 2 or pair != tuple(sorted(pair)):
+                raise _review_error("v2 perceptual pair identities are not canonical")
+            pair_id = str(relation["pair_id"])
+            previous = result.setdefault(pair_id, pair)
+            if previous != pair:
+                raise _review_error("v2 perceptual pair mirrors disagree")
+    return result
+
+
+def _manifest_descriptor_v2(
+    *,
+    source_descriptor: Mapping[str, object],
+    rows: Sequence[Mapping[str, object]],
+    source_provenance: Mapping[str, object],
+    creation_command: str,
+    deterministic_seed: int,
+) -> dict[str, object]:
+    exclusions = [
+        {
+            "upstream_index": row["upstream_index"],
+            "item_id": row["item_id"],
+            "reason": row["paired_ineligibility_reason"],
+        }
+        for row in rows
+        if row["paired_eligible"] is False
+    ]
+    return {
+        "schema_version": 2,
+        "record_type": "manifest-descriptor",
+        "manifest_id": "smb-evaluation-v2",
+        "generation_algorithm": {
+            "algorithm": "sha256",
+            "version": 2,
+            "domain_separator": "smb-manifest-generation-v2",
+            "descriptor_canonicalization": "yaml-safe-sort-keys-utf8-v1",
+            "records_canonicalization": "jsonl-utf8-sorted-keys-v1",
+        },
+        "source_key": "smb",
+        "source_revision": source_descriptor["revision"],
+        "creation_command": creation_command,
+        "source_provenance": dict(source_provenance),
+        "grouping_unit": "source_score",
+        "upstream_split": "test",
+        "project_split": "evaluation",
+        "deterministic_seed": deterministic_seed,
+        "exclusions": exclusions,
+        "row_schema_id": "manifest-row",
+        "row_schema_version": 2,
+        "row_count": len(rows),
+        "records_sha256": "0" * 64,
+        "audit_version": "smb-audit-v2",
+        "benchmark_state": "AUDITED_LOCKED",
+        "hash_provenance": {
+            "encoded": {
+                "algorithm": "sha256",
+                "version": 1,
+                "canonicalization": "encoded-bytes-v1",
+            },
+            "pixels": {
+                "algorithm": "sha256",
+                "version": 1,
+                "canonicalization": "rgba-uint8-row-major-v1",
+            },
+        },
+        "duplicate_provenance": {
+            "exact": {"algorithm": "encoded-and-pixel-sha256", "version": 1},
+            "near": {
+                "algorithm": "phash",
+                "version": 1,
+                "library": "ImageHash",
+                "library_version": IMAGEHASH_VERSION,
+                "hash_size": HASH_SIZE,
+                "highfreq_factor": HIGHFREQ_FACTOR,
+                "maximum_hamming_distance": MAXIMUM_HAMMING_DISTANCE,
+            },
+        },
+        "sample_selection": {
+            "algorithm": "sha256-rank",
+            "version": 1,
+            "seed": deterministic_seed,
+            "population_size": EXPECTED_ROW_COUNT,
+            "sample_size": DEFAULT_SAMPLE_SIZE,
+            "identity_fields": ["upstream_index", "item_id"],
+            "selection_state": "pre-review",
+        },
+        "review_inference": _v2_review_inference(rows),
+    }
+
+
+def migrate_authoritative_audit(
+    *,
+    source_path: Path,
+    sample_path: Path,
+    active_path: Path,
+    generation_root: Path,
+    dataset_loader: Callable[..., object] | None = None,
+    deterministic_seed: int = 20260818,
+) -> dict[str, int]:
+    """Stage a corrected audit while leaving human evidence and active state intact."""
+
+    paths = _migration_project_paths(source_path)
+    review_path = paths["review"]
+    legacy_pointer_bytes = active_path.read_bytes()
+    legacy_descriptor, legacy_rows = resolve_active_manifest(
+        active_path=active_path, generation_root=generation_root
+    )
+    if legacy_descriptor.get("schema_version") != 1:
+        raise ValueError("authoritative audit migration requires the legacy v1 active generation")
+    legacy_review = _read_review_rows(review_path)
+    validated_legacy_review = _validated_review_rows(legacy_rows, legacy_review)
+    legacy_candidates = _legacy_candidate_pairs(legacy_rows, validated_legacy_review)
+    frozen_sample = _sample_rows(sample_path)
+    frozen_sample_ids = {row["item_id"] for row in frozen_sample}
+    if frozen_sample_ids != {
+        str(row["item_id"]) for row in legacy_rows if row["audit_sample_member"] is True
+    }:
+        raise ValueError("frozen sample disagrees with the legacy active generation")
+    review_sha256, review_metadata = _review_file_identity(review_path)
+    sample_sha256 = hashlib.sha256(sample_path.read_bytes()).hexdigest()
+
+    source_descriptor = _read_descriptor(source_path)
+    dataset = load_smb(
+        purpose=BenchmarkPurpose.CONTENT_AUDIT,
+        loader=dataset_loader,
+        descriptor_path=source_path,
+    )
+    dataset = _without_automatic_image_decoding(dataset)
+    try:
+        source_count = len(dataset)  # type: ignore[arg-type]
+    except TypeError as error:
+        raise ValueError("authenticated SMB source must expose an exact row count") from error
+    if source_count != EXPECTED_ROW_COUNT:
+        raise ValueError(
+            f"authenticated SMB source must contain exactly 685 rows, found {source_count}"
+        )
+    rows = audit_dataset_v2(
+        dataset,  # type: ignore[arg-type]
+        source_descriptor=source_descriptor,
+        trusted_cache_roots=_hugging_face_datasets_cache_roots(),
+        deterministic_seed=deterministic_seed,
+        sample_size=DEFAULT_SAMPLE_SIZE,
+    )
+    _require_complete_audit_rows(rows)
+    new_sample_ids = {str(row["item_id"]) for row in rows if row["audit_sample_member"] is True}
+    if new_sample_ids != frozen_sample_ids:
+        raise ValueError("corrected audit changed the frozen visual sample identities")
+    new_pairs = set(_v2_perceptual_pairs(rows).values())
+    if new_pairs != set(legacy_candidates.values()):
+        raise ValueError("corrected audit changed the perceptual candidate identity set")
+    source_provenance = audit_source_provenance(paths["project_root"])
+    records_bytes = _canonical_jsonl(rows)
+    stage = {
+        "schema_version": 1,
+        "record_type": "smb-authoritative-migration-stage",
+        "source_revision": source_descriptor["revision"],
+        "deterministic_seed": deterministic_seed,
+        "row_count": len(rows),
+        "records_sha256": hashlib.sha256(records_bytes).hexdigest(),
+        "legacy_active_sha256": hashlib.sha256(legacy_pointer_bytes).hexdigest(),
+        "legacy_generation_id": legacy_descriptor["generation_id"],
+        "legacy_records_sha256": legacy_descriptor["records_sha256"],
+        "legacy_review_sha256": review_sha256,
+        "legacy_sample_sha256": sample_sha256,
+        "sample_count": len(new_sample_ids),
+        "perceptual_pair_count": len(new_pairs),
+        "source_provenance": source_provenance,
+    }
+    stage_paths = _migration_stage_paths(generation_root)
+    _durable_replace(stage_paths["records"], records_bytes)
+    _durable_replace(stage_paths["descriptor"], _canonical_descriptor(stage))
+    _durable_replace(stage_paths["legacy_active"], legacy_pointer_bytes)
+
+    redacted_rows = [
+        {
+            "audit_sample_member": row["audit_sample_member"],
+            "item_id": row["item_id"],
+            "processing_status": row["processing_status"],
+            "source_group_id": row["source_group_id"],
+            "upstream_index": row["upstream_index"],
+        }
+        for row in rows
+    ]
+    audit_descriptor = {
+        "audit_version": "smb-audit-v2",
+        "benchmark_state": "AUDITED_LOCKED",
+        "implementation_provenance": source_provenance,
+        "legacy_generation_id": legacy_descriptor["generation_id"],
+        "manifest_id": "smb-evaluation-v2",
+        "record_type": "smb-audit-export",
+        "records_sha256": stage["records_sha256"],
+        "row_count": len(rows),
+        "schema_version": 2,
+        "source_key": "smb",
+        "source_revision": source_descriptor["revision"],
+    }
+    _durable_replace(paths["audit_descriptor"], _canonical_descriptor(audit_descriptor))
+    _durable_replace(paths["audit_records"], _canonical_jsonl(redacted_rows))
+    if _review_file_identity(review_path) != (review_sha256, review_metadata):
+        raise ValueError("authoritative automated audit changed the human review evidence")
+    if hashlib.sha256(sample_path.read_bytes()).hexdigest() != sample_sha256:
+        raise ValueError("authoritative automated audit changed the frozen sample evidence")
+    if active_path.read_bytes() != legacy_pointer_bytes:
+        raise ValueError("authoritative automated audit changed the active manifest pointer")
+    return {
+        "row_count": len(rows),
+        "processed": sum(row["processing_status"] == "processed" for row in rows),
+        "failed": sum(row["processing_status"] == "failed" for row in rows),
+        "paired_eligible": sum(row["paired_eligible"] is True for row in rows),
+        "sampled": len(new_sample_ids),
+        "perceptual_pairs": len(new_pairs),
+    }
+
+
+def _load_authoritative_stage(
+    generation_root: Path,
+) -> tuple[dict[str, object], list[dict[str, object]], dict[str, Path]]:
+    paths = _migration_stage_paths(generation_root)
+    stage = _load_yaml_mapping(paths["descriptor"], label="authoritative migration stage")
+    try:
+        records_bytes = paths["records"].read_bytes()
+        if hashlib.sha256(records_bytes).hexdigest() != stage["records_sha256"]:
+            raise ValueError("authoritative migration stage records checksum mismatch")
+        rows = [json.loads(line) for line in records_bytes.decode("utf-8").splitlines()]
+        if not all(isinstance(row, dict) for row in rows):
+            raise ValueError("authoritative migration stage contains a non-object row")
+        _require_complete_audit_rows(rows)
+        for row in rows:
+            validate_instance("manifest-row", row, version=2)
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, ValueError) as error:
+        raise ValueError("authoritative migration stage is invalid") from error
+    return stage, rows, paths
+
+
+def _migrated_v2_review_rows(
+    *,
+    staged_rows: Sequence[Mapping[str, object]],
+    legacy_rows: Sequence[Mapping[str, object]],
+    legacy_review_rows: Sequence[Mapping[str, str]],
+) -> list[dict[str, str]]:
+    validated = _validated_review_rows(legacy_rows, legacy_review_rows)
+    legacy_items = {row["item_id"]: row for row in validated if row["review_kind"] == "item"}
+    legacy_candidates = {
+        tuple(sorted((row["item_id"], row["candidate_item_id"]))): row
+        for row in validated
+        if row["review_kind"] == "candidate"
+    }
+    staged_pairs = _v2_perceptual_pairs(staged_rows)
+    if set(staged_pairs.values()) != set(legacy_candidates):
+        raise _review_error("perceptual candidate pairs drifted during decision migration")
+
+    migrated: list[dict[str, str]] = []
+    for row in staged_rows:
+        item_id = str(row["item_id"])
+        legacy = legacy_items[item_id]
+        migrated.append(
+            {
+                **{field: "" for field in REVIEW_CSV_FIELDS},
+                "review_kind": "item_policy",
+                "review_key": f"policy:{item_id}",
+                "item_id": item_id,
+                "review_status": "reviewed",
+                "reviewer": legacy["reviewer"],
+                "reviewed_at": legacy["reviewed_at"],
+                "rationale": (
+                    "Stable-key migration of the reviewed source grouping and dataset-level "
+                    "CC BY-NC 4.0 access policy; per-item provenance remains unavailable."
+                ),
+                "source_group_id": legacy["source_group_id"],
+                "dataset_licence_status": "confirmed",
+                "item_provenance_status": "unavailable",
+                "access_status": "confirmed",
+                "redistribution_status": "not_established",
+                "figure_reproduction_status": "prohibited",
+            }
+        )
+        if row["audit_sample_member"] is True:
+            migrated.append(
+                {
+                    **{field: "" for field in REVIEW_CSV_FIELDS},
+                    "review_kind": "visual_item",
+                    "review_key": f"visual:{item_id}",
+                    "item_id": item_id,
+                    "review_status": "reviewed",
+                    "reviewer": legacy["reviewer"],
+                    "reviewed_at": legacy["reviewed_at"],
+                    "rationale": legacy["rationale"],
+                    "quality_disposition": legacy["quality_disposition"],
+                    "suitability_disposition": legacy["suitability_disposition"],
+                }
+            )
+    for pair_id, pair in sorted(staged_pairs.items()):
+        legacy = legacy_candidates[pair]
+        migrated.append(
+            {
+                **{field: "" for field in REVIEW_CSV_FIELDS},
+                "review_kind": "duplicate_pair",
+                "review_key": pair_id,
+                "item_id": pair[0],
+                "candidate_item_id": pair[1],
+                "review_status": "reviewed",
+                "reviewer": legacy["reviewer"],
+                "reviewed_at": legacy["reviewed_at"],
+                "rationale": legacy["rationale"],
+                "duplicate_disposition": legacy["duplicate_disposition"],
+            }
+        )
+    return migrated
+
+
+def migrate_authoritative_decisions(
+    *,
+    legacy_review_path: Path,
+    sample_path: Path,
+    active_path: Path,
+    generation_root: Path,
+) -> dict[str, int]:
+    """Migrate only checksum-bound human decisions, then activate one final v2 generation."""
+
+    stage, staged_rows, stage_paths = _load_authoritative_stage(generation_root)
+    legacy_pointer_bytes = stage_paths["legacy_active"].read_bytes()
+    if hashlib.sha256(legacy_pointer_bytes).hexdigest() != stage["legacy_active_sha256"]:
+        raise ValueError("legacy active-pointer migration input changed")
+    legacy_descriptor, legacy_rows = resolve_active_manifest(
+        active_path=stage_paths["legacy_active"], generation_root=generation_root
+    )
+    if (
+        legacy_descriptor["generation_id"] != stage["legacy_generation_id"]
+        or legacy_descriptor["records_sha256"] != stage["legacy_records_sha256"]
+    ):
+        raise ValueError("legacy active generation disagrees with the migration stage")
+    review_document = read_review(legacy_review_path)
+    if review_document.sha256 != stage["legacy_review_sha256"]:
+        raise ValueError("legacy human review bytes changed after authoritative audit")
+    if hashlib.sha256(sample_path.read_bytes()).hexdigest() != stage["legacy_sample_sha256"]:
+        raise ValueError("frozen sample bytes changed after authoritative audit")
+    frozen_sample_ids = {row["item_id"] for row in _sample_rows(sample_path)}
+    if frozen_sample_ids != {
+        str(row["item_id"]) for row in staged_rows if row["audit_sample_member"] is True
+    }:
+        raise ValueError("frozen sample identities drifted during decision migration")
+
+    migrated_review = _migrated_v2_review_rows(
+        staged_rows=staged_rows,
+        legacy_rows=legacy_rows,
+        legacy_review_rows=review_document.rows,
+    )
+    updated_rows = _apply_v2_review_dispositions(staged_rows, migrated_review)
+    source_descriptor = _read_descriptor(
+        legacy_review_path.resolve().parents[1] / "sources" / "smb.yaml"
+    )
+    descriptor = _manifest_descriptor_v2(
+        source_descriptor=source_descriptor,
+        rows=updated_rows,
+        source_provenance=stage["source_provenance"],
+        creation_command=(
+            "uv run python -m score_super_resolution.smb_audit migrate-authoritative "
+            "decisions --legacy-review data/audits/smb-review-v1.csv "
+            "--sample data/audits/smb-visual-sample-v1.csv "
+            "--manifest-active data/manifests/smb-evaluation-v1.yaml "
+            "--manifest-generation-root artifacts/smb-manifests/generations"
+        ),
+        deterministic_seed=int(stage["deterministic_seed"]),
+    )
+    _require_complete_denominator(updated_rows)
+    counts = {
+        "row_count": len(updated_rows),
+        "processed": sum(row["processing_status"] == "processed" for row in updated_rows),
+        "failed": sum(row["processing_status"] == "failed" for row in updated_rows),
+        "paired_eligible": sum(row["paired_eligible"] is True for row in updated_rows),
+        "groups": len({row["source_group_id"] for row in updated_rows}),
+        "sampled_human": sum(
+            isinstance(row["visual_review"], Mapping)
+            and row["visual_review"].get("status") == "sampled_human_reviewed"
+            for row in updated_rows
+        ),
+        "not_visually_reviewed": sum(
+            isinstance(row["visual_review"], Mapping)
+            and row["visual_review"].get("status") == "not_visually_reviewed"
+            for row in updated_rows
+        ),
+        "perceptual_pairs": len(_v2_perceptual_pairs(updated_rows)),
+    }
+    required_counts = {
+        "row_count": 685,
+        "processed": 685,
+        "failed": 0,
+        "paired_eligible": 681,
+        "groups": 260,
+        "sampled_human": 64,
+        "not_visually_reviewed": 621,
+        "perceptual_pairs": 14,
+    }
+    if counts != required_counts:
+        raise ValueError(f"authoritative migration count reconciliation failed: {counts}")
+    if any(
+        row["rights"]["item_provenance"]["status"] == "unavailable"  # type: ignore[index]
+        and (
+            row["rights"]["redistribution"]["status"] == "permitted"  # type: ignore[index]
+            or row["rights"]["figure_reproduction"]["status"] == "permitted"  # type: ignore[index]
+        )
+        for row in updated_rows
+    ):
+        raise ValueError("unavailable per-item provenance inferred reuse permission")
+
+    _validate_generation_inputs(descriptor, updated_rows)
+    stage_paths["candidate_review"].write_bytes(legacy_review_path.read_bytes())
+    candidate_review_sha256 = save_review(
+        stage_paths["candidate_review"],
+        migrated_review,
+        expected_sha256=review_document.sha256,
+    )
+    publish_manifest_generation(
+        active_path=stage_paths["candidate_active"],
+        generation_root=generation_root,
+        descriptor=descriptor,
+        rows=updated_rows,
+    )
+    if reconcile_manifest(
+        active_path=stage_paths["candidate_active"], generation_root=generation_root
+    ) != {
+        "row_count": 685,
+        "processed": 685,
+        "failed": 0,
+        "paired_eligible": 681,
+    }:
+        raise ValueError("candidate v2 generation reconciliation failed")
+    candidate_review = read_review(stage_paths["candidate_review"])
+    if candidate_review.sha256 != candidate_review_sha256:
+        raise ValueError("candidate v2 review persistence changed its identity")
+    candidate_pointer_bytes = stage_paths["candidate_active"].read_bytes()
+    current_pointer_bytes = active_path.read_bytes()
+    if current_pointer_bytes not in {legacy_pointer_bytes, candidate_pointer_bytes}:
+        raise ValueError("active manifest changed outside the authoritative migration")
+
+    publish_manifest_generation(
+        active_path=active_path,
+        generation_root=generation_root,
+        descriptor=descriptor,
+        rows=updated_rows,
+    )
+    current_review = read_review(legacy_review_path)
+    if current_review.sha256 == review_document.sha256:
+        save_review(
+            legacy_review_path,
+            migrated_review,
+            expected_sha256=review_document.sha256,
+        )
+    elif current_review.sha256 != candidate_review_sha256:
+        raise ValueError("human review changed during final authoritative activation")
+    final_report = reconcile_manifest(active_path=active_path, generation_root=generation_root)
+    if final_report != {
+        "row_count": 685,
+        "processed": 685,
+        "failed": 0,
+        "paired_eligible": 681,
+    }:
+        raise ValueError("final v2 generation reconciliation failed")
+    return counts
 
 
 def _publication_boundary(name: str, hook: Callable[[str], None] | None) -> None:
@@ -2329,6 +3110,18 @@ class _SafeArgumentParser(argparse.ArgumentParser):
 def _parser() -> argparse.ArgumentParser:
     parser = _SafeArgumentParser(description="Validate and reconcile an active SMB manifest")
     commands = parser.add_subparsers(dest="command", required=True)
+    migrate = commands.add_parser("migrate-authoritative")
+    migration_commands = migrate.add_subparsers(dest="migration_command", required=True)
+    migrate_audit = migration_commands.add_parser("audit")
+    migrate_audit.add_argument("--source", type=Path, required=True)
+    migrate_audit.add_argument("--sample", type=Path, required=True)
+    migrate_audit.add_argument("--manifest-active", type=Path, required=True)
+    migrate_audit.add_argument("--manifest-generation-root", type=Path, required=True)
+    migrate_decisions = migration_commands.add_parser("decisions")
+    migrate_decisions.add_argument("--legacy-review", type=Path, required=True)
+    migrate_decisions.add_argument("--sample", type=Path, required=True)
+    migrate_decisions.add_argument("--manifest-active", type=Path, required=True)
+    migrate_decisions.add_argument("--manifest-generation-root", type=Path, required=True)
     audit = commands.add_parser("audit")
     audit.add_argument("--source", type=Path, required=True)
     audit.add_argument("--audit-descriptor", type=Path, required=True)
@@ -2364,6 +3157,23 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
+    if arguments.command == "migrate-authoritative":
+        if arguments.migration_command == "audit":
+            report = migrate_authoritative_audit(
+                source_path=arguments.source,
+                sample_path=arguments.sample,
+                active_path=arguments.manifest_active,
+                generation_root=arguments.manifest_generation_root,
+            )
+        else:
+            report = migrate_authoritative_decisions(
+                legacy_review_path=arguments.legacy_review,
+                sample_path=arguments.sample,
+                active_path=arguments.manifest_active,
+                generation_root=arguments.manifest_generation_root,
+            )
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
     if arguments.command == "audit":
         report = run_authenticated_audit(
             source_path=arguments.source,

@@ -1,9 +1,18 @@
-audit_version: smb-audit-v1
+audit_version: smb-audit-v2
 benchmark_state: AUDITED_LOCKED
-manifest_id: smb-evaluation-v1
+implementation_provenance:
+  algorithm: sha256
+  dirty: true
+  lock_sha256: 495acdabff917633bea25232181401def9e44ec8600c87221cce45fc9f379dce
+  patch_sha256: 81784d8fb08c96bf78dc8f99d2963535b688a7cce071f4fd99c2ca7a09011499
+  revision: 1adbe599a49e5da2c227d043d359887f2381cf7a
+  source_set_version: 1
+  source_tree_sha256: 8ac87f0d09ae1406b1bba2ec3fdb189827e9b4eb3d02d85c8ff25f8e64782022
+legacy_generation_id: 7ace2880084cc7f698eda78656a508cebceb7582891fdf105fd0ef4c5e625d36
+manifest_id: smb-evaluation-v2
 record_type: smb-audit-export
-records_sha256: 58b7149f37f4b5713f5ce1d4746c007f0bbb9111cc86bd1c9346b05002278638
+records_sha256: 293176dc48981ddcf9eebe2592ec4f2e748b31f5f670e84e886ecbe415cbd703
 row_count: 685
-schema_version: 1
+schema_version: 2
 source_key: smb
 source_revision: 96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb
