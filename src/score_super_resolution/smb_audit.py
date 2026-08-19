@@ -19,7 +19,7 @@ import uuid
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import imagehash
 import yaml
@@ -41,6 +41,10 @@ HIGHFREQ_FACTOR = 4
 MAXIMUM_HAMMING_DISTANCE = 6
 IMAGEHASH_VERSION = importlib.metadata.version("ImageHash")
 GENERATION_DOMAIN = b"smb-manifest-generation-v1\0"
+AUDIT_SOURCE_SET_VERSION = 1
+AUDIT_SOURCE_TREE_DOMAIN = b"smb-audit-source-tree-v1\0"
+AUDIT_PATCH_DOMAIN = b"smb-audit-patch-state-v1\0"
+AUDIT_LOCK_DOMAIN = b"smb-audit-uv-lock-v1\0"
 REVIEW_CSV_FIELDS = (
     "review_kind",
     "review_key",
@@ -625,19 +629,173 @@ def audit_dataset(
     return rows
 
 
-def _current_code_revision() -> str:
-    project_root = Path(__file__).resolve().parents[2]
-    completed = subprocess.run(
-        ["git", "rev-parse", "--verify", "HEAD^{commit}"],
-        cwd=project_root,
-        check=False,
-        capture_output=True,
-        text=True,
+def _git_bytes(project_root: Path, *arguments: str) -> bytes:
+    try:
+        completed = subprocess.run(
+            ["git", *arguments],
+            cwd=project_root,
+            check=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError("cannot establish authoritative SMB audit provenance") from error
+    return completed.stdout
+
+
+def _is_authoritative_audit_source_path(relative_path: PurePosixPath) -> bool:
+    if relative_path.as_posix() in {"pyproject.toml", "uv.lock"}:
+        return True
+    parts = relative_path.parts
+    return (
+        len(parts) >= 3
+        and parts[:2] == ("src", "score_super_resolution")
+        and relative_path.suffix == ".py"
+    ) or (len(parts) >= 3 and parts[:2] == ("data", "schemas") and relative_path.suffix == ".json")
+
+
+def _authoritative_audit_source_paths(project_root: Path) -> tuple[Path, ...]:
+    root = project_root.expanduser().resolve()
+    python_root = root / "src" / "score_super_resolution"
+    schema_root = root / "data" / "schemas"
+    lock_path = root / "uv.lock"
+    project_path = root / "pyproject.toml"
+    python_paths = list(python_root.rglob("*.py")) if python_root.is_dir() else []
+    schema_paths = list(schema_root.rglob("*.json")) if schema_root.is_dir() else []
+    if (
+        not python_paths
+        or not schema_paths
+        or not lock_path.is_file()
+        or not project_path.is_file()
+    ):
+        raise RuntimeError("authoritative SMB audit provenance source set is incomplete")
+    paths = [*python_paths, *schema_paths, project_path, lock_path]
+    relative_paths: list[Path] = []
+    for path in paths:
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError("authoritative SMB audit provenance sources must be regular files")
+        try:
+            relative = path.relative_to(root)
+        except ValueError as error:
+            raise RuntimeError(
+                "authoritative SMB audit provenance source escapes project"
+            ) from error
+        if not _is_authoritative_audit_source_path(PurePosixPath(relative.as_posix())):
+            raise RuntimeError("authoritative SMB audit provenance source set is invalid")
+        relative_paths.append(relative)
+    return tuple(sorted(set(relative_paths), key=lambda path: path.as_posix()))
+
+
+def _update_framed_digest(digest: object, label: bytes, payload: bytes) -> None:
+    assert hasattr(digest, "update")
+    digest.update(len(label).to_bytes(8, "big"))  # type: ignore[attr-defined]
+    digest.update(label)  # type: ignore[attr-defined]
+    digest.update(len(payload).to_bytes(8, "big"))  # type: ignore[attr-defined]
+    digest.update(payload)  # type: ignore[attr-defined]
+
+
+def _source_tree_sha256(project_root: Path, source_paths: Iterable[Path]) -> str:
+    root = project_root.expanduser().resolve()
+    normalized: dict[str, Path] = {}
+    for supplied in source_paths:
+        path = supplied if supplied.is_absolute() else root / supplied
+        try:
+            relative = path.relative_to(root)
+        except ValueError as error:
+            raise RuntimeError(
+                "authoritative SMB audit provenance source escapes project"
+            ) from error
+        normalized[relative.as_posix()] = path
+    if not normalized:
+        raise RuntimeError("authoritative SMB audit provenance source set is empty")
+    digest = hashlib.sha256(AUDIT_SOURCE_TREE_DOMAIN)
+    for relative, path in sorted(normalized.items()):
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError("authoritative SMB audit provenance source is unavailable")
+        try:
+            content = path.read_bytes()
+        except OSError as error:
+            raise RuntimeError("cannot read authoritative SMB audit provenance source") from error
+        _update_framed_digest(digest, relative.encode("utf-8"), content)
+    return digest.hexdigest()
+
+
+def _nul_paths(output: bytes) -> tuple[PurePosixPath, ...]:
+    try:
+        decoded = [part.decode("utf-8") for part in output.split(b"\0") if part]
+    except UnicodeError as error:
+        raise RuntimeError(
+            "authoritative SMB audit provenance contains a non-UTF-8 path"
+        ) from error
+    return tuple(PurePosixPath(path) for path in decoded)
+
+
+def audit_source_provenance(project_root: Path | None = None) -> dict[str, object]:
+    """Identify exact authoritative audit sources, Git patch state, and uv lock bytes."""
+
+    root = (project_root or Path(__file__).resolve().parents[2]).expanduser().resolve()
+    discovered_root = Path(
+        _git_bytes(root, "rev-parse", "--show-toplevel").decode("utf-8").strip()
+    ).resolve()
+    if discovered_root != root:
+        raise RuntimeError("authoritative SMB audit provenance resolved the wrong Git repository")
+    revision = _git_bytes(root, "rev-parse", "--verify", "HEAD^{commit}").decode().strip()
+    if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise RuntimeError("authoritative SMB audit provenance has no committed revision")
+
+    source_paths = _authoritative_audit_source_paths(root)
+    tracked_paths = _nul_paths(_git_bytes(root, "ls-files", "-z"))
+    relevant_tracked = tuple(
+        sorted(path for path in tracked_paths if _is_authoritative_audit_source_path(path))
     )
-    revision = completed.stdout.strip()
-    if completed.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
-        raise RuntimeError("cannot resolve the proyecto code revision for the SMB audit")
-    return revision
+    changed_paths = _nul_paths(_git_bytes(root, "diff", "--name-only", "-z", "HEAD", "--"))
+    untracked_paths = _nul_paths(
+        _git_bytes(root, "ls-files", "--others", "--exclude-standard", "-z")
+    )
+    relevant_changed = tuple(
+        sorted(path for path in changed_paths if _is_authoritative_audit_source_path(path))
+    )
+    relevant_untracked = tuple(
+        sorted(path for path in untracked_paths if _is_authoritative_audit_source_path(path))
+    )
+    patch_paths = sorted(
+        set((*relevant_tracked, *relevant_changed)), key=lambda path: path.as_posix()
+    )
+    patch_bytes = _git_bytes(
+        root,
+        "diff",
+        "--binary",
+        "--full-index",
+        "--no-ext-diff",
+        "--no-textconv",
+        "HEAD",
+        "--",
+        *(path.as_posix() for path in patch_paths),
+    )
+    patch_digest = hashlib.sha256(AUDIT_PATCH_DOMAIN)
+    _update_framed_digest(patch_digest, b"tracked-diff", patch_bytes)
+    for relative in relevant_untracked:
+        path = root / relative
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError("authoritative SMB audit provenance untracked source is unavailable")
+        try:
+            content = path.read_bytes()
+        except OSError as error:
+            raise RuntimeError("cannot read authoritative SMB audit provenance source") from error
+        _update_framed_digest(patch_digest, relative.as_posix().encode("utf-8"), content)
+
+    try:
+        lock_bytes = (root / "uv.lock").read_bytes()
+    except OSError as error:
+        raise RuntimeError("authoritative SMB audit provenance lock is unavailable") from error
+    return {
+        "source_set_version": AUDIT_SOURCE_SET_VERSION,
+        "algorithm": "sha256",
+        "revision": revision,
+        "dirty": bool(relevant_changed or relevant_untracked),
+        "source_tree_sha256": _source_tree_sha256(root, source_paths),
+        "patch_sha256": patch_digest.hexdigest(),
+        "lock_sha256": hashlib.sha256(AUDIT_LOCK_DOMAIN + lock_bytes).hexdigest(),
+    }
 
 
 def _audit_creation_command(
@@ -810,10 +968,11 @@ def run_authenticated_audit(
         sample_size=DEFAULT_SAMPLE_SIZE,
     )
     _require_complete_audit_rows(rows)
+    implementation_provenance = audit_source_provenance()
     descriptor = _manifest_descriptor(
         source_descriptor=source_descriptor,
         rows=rows,
-        code_revision=_current_code_revision(),
+        code_revision=str(implementation_provenance["revision"]),
         creation_command=_audit_creation_command(
             source_path=source_path,
             audit_descriptor_path=audit_descriptor_path,
@@ -839,6 +998,7 @@ def run_authenticated_audit(
         audit_records_path=audit_records_path,
         sample_path=sample_path,
         review_path=review_path,
+        implementation_provenance=implementation_provenance,
     )
     return report
 
@@ -1237,6 +1397,7 @@ def emit_review_evidence_from_active_manifest(
     audit_records_path: Path,
     sample_path: Path,
     review_path: Path,
+    implementation_provenance: Mapping[str, object] | None = None,
 ) -> None:
     """Regenerate tracked, redacted review evidence from one validated active generation."""
 
@@ -1254,6 +1415,8 @@ def emit_review_evidence_from_active_manifest(
         "source_key": descriptor["source_key"],
         "source_revision": descriptor["source_revision"],
     }
+    if implementation_provenance is not None:
+        audit_descriptor["implementation_provenance"] = dict(implementation_provenance)
     redacted_rows = [
         {
             "audit_sample_member": row["audit_sample_member"],

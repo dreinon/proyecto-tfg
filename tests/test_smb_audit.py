@@ -546,7 +546,20 @@ def test_authenticated_audit_orchestrates_exact_revision_and_redacted_exports(
         return rows
 
     monkeypatch.setattr(smb_audit, "audit_dataset", audit)
-    monkeypatch.setattr(smb_audit, "_current_code_revision", lambda: "a" * 40)
+    implementation_provenance = {
+        "source_set_version": 1,
+        "algorithm": "sha256",
+        "revision": "a" * 40,
+        "dirty": True,
+        "source_tree_sha256": "b" * 64,
+        "patch_sha256": "c" * 64,
+        "lock_sha256": "d" * 64,
+    }
+    monkeypatch.setattr(
+        smb_audit,
+        "audit_source_provenance",
+        lambda: implementation_provenance,
+    )
     monkeypatch.setattr(
         smb_audit,
         "_hugging_face_datasets_cache_roots",
@@ -578,6 +591,8 @@ def test_authenticated_audit_orchestrates_exact_revision_and_redacted_exports(
     assert descriptor["source_revision"] == source_descriptor["revision"]
     assert descriptor["benchmark_state"] == "AUDITED_LOCKED"
     assert len(resolved) == 685
+    audit_export = yaml.safe_load(audit_descriptor.read_text(encoding="utf-8"))
+    assert audit_export["implementation_provenance"] == implementation_provenance
     exported = [json.loads(line) for line in audit_records.read_text().splitlines()]
     assert len(exported) == 685
     assert set(exported[0]) == {
