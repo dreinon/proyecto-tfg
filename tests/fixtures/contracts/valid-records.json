@@ -139,6 +139,20 @@
       "review_date": "2026-08-17"
     }
   },
+  "claim_evidence_reviewed_leap_day": {
+    "schema_id": "claim-evidence",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "claim-evidence",
+      "claim_id": "CLM-LEAP-DAY",
+      "chapter_section": "04-datos/procedencia",
+      "status": "reviewed",
+      "evidence_ids": ["SRC-SMB-CARD"],
+      "limitations": "Leap-day validation fixture.",
+      "reviewer": "Daniel Reinon",
+      "review_date": "2024-02-29"
+    }
+  },
   "experiment_config_non_learned": {
     "schema_id": "experiment-config",
     "instance": {
@@ -381,6 +395,64 @@
           "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
       }
+    }
+  },
+  "run_record_equal_fractional_boundary": {
+    "schema_id": "run-record",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "run-record",
+      "run_record_id": "run-fixture-fractional-boundary",
+      "experiment_id": "experiment-fixture-v1",
+      "execution_id": "execution-fixture-fractional-boundary",
+      "status": "succeeded",
+      "started_at": "2026-08-18T12:00:00.125Z",
+      "completed_at": "2026-08-18T12:00:00.125Z",
+      "repositories": [
+        {
+          "role": "workspace-planning",
+          "root": "/workspace",
+          "revision_state": "unborn",
+          "revision": null,
+          "dirty": true
+        },
+        {
+          "role": "proyecto",
+          "root": "/workspace/proyecto",
+          "revision_state": "committed",
+          "revision": "2998c3c",
+          "dirty": false
+        },
+        {
+          "role": "memoria",
+          "root": "/workspace/memoria",
+          "revision_state": "committed",
+          "revision": "9b2c8b4",
+          "dirty": true
+        }
+      ],
+      "manifest_ids": ["fixture-validation-v1"],
+      "experiment_config_id": "experiment-config-fixture-v1",
+      "method": {"method_id": "bicubic-x4", "family": "non_learned"},
+      "seeds": [{"name": "python", "value": 20260818}],
+      "environment": {
+        "python_version": "3.12.12",
+        "dependency_snapshot_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "runtime": "local-cpu"
+      },
+      "hardware": {
+        "device_type": "cpu",
+        "device_name": "fixture-cpu",
+        "memory_bytes": 8589934592
+      },
+      "paths": {
+        "config": "configs/experiments/experiment-fixture-v1.json",
+        "logs": "artifacts/execution-fixture-fractional-boundary/logs",
+        "outputs": "artifacts/execution-fixture-fractional-boundary/outputs",
+        "metrics": "artifacts/execution-fixture-fractional-boundary/metrics.jsonl",
+        "failures": "artifacts/execution-fixture-fractional-boundary/failures.jsonl"
+      },
+      "model_provenance": {"status": "not_applicable"}
     }
   }
 }

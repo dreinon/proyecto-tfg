@@ -194,6 +194,78 @@ def test_reviewed_claim_requires_complete_review_evidence(field: str) -> None:
         validate_instance("claim-evidence", instance)
 
 
+def test_claim_review_date_rejects_month_99() -> None:
+    instance = _fixture("invalid-records.json")["claim_evidence_impossible_month"]["instance"]
+
+    with pytest.raises(ContractValidationError, match=r"\$\.review_date"):
+        validate_instance("claim-evidence", instance)
+
+
+def test_claim_review_date_rejects_invalid_day_for_month() -> None:
+    instance = _fixture("invalid-records.json")["claim_evidence_impossible_day_for_month"][
+        "instance"
+    ]
+
+    with pytest.raises(ContractValidationError, match=r"\$\.review_date"):
+        validate_instance("claim-evidence", instance)
+
+
+def test_model_verification_date_rejects_non_leap_february_29() -> None:
+    instance = _fixture("invalid-records.json")["model_descriptor_non_leap_february_29"]["instance"]
+
+    with pytest.raises(ContractValidationError, match=r"\$\.verification_date"):
+        validate_instance("model-descriptor", instance)
+
+
+def test_valid_leap_day_passes() -> None:
+    instance = _fixture("valid-records.json")["claim_evidence_reviewed_leap_day"]["instance"]
+
+    validate_instance("claim-evidence", instance)
+
+
+def test_run_timestamp_rejects_hour_77() -> None:
+    instance = copy.deepcopy(_fixture("valid-records.json")["run_record_non_learned"]["instance"])
+    instance["started_at"] = "2026-08-18T77:00:00Z"
+
+    with pytest.raises(ContractValidationError, match=r"\$\.started_at"):
+        validate_instance("run-record", instance)
+
+
+def test_run_timestamp_rejects_missing_utc_z() -> None:
+    instance = copy.deepcopy(_fixture("valid-records.json")["run_record_non_learned"]["instance"])
+    instance["started_at"] = "2026-08-18T12:00:00"
+
+    with pytest.raises(ContractValidationError, match=r"\$\.started_at"):
+        validate_instance("run-record", instance)
+
+
+def test_run_timestamp_rejects_malformed_fractional_seconds() -> None:
+    instance = copy.deepcopy(_fixture("valid-records.json")["run_record_non_learned"]["instance"])
+    instance["started_at"] = "2026-08-18T12:00:00.Z"
+
+    with pytest.raises(ContractValidationError, match=r"\$\.started_at"):
+        validate_instance("run-record", instance)
+
+
+def test_run_interval_rejects_completed_before_started() -> None:
+    instance = _fixture("invalid-records.json")["run_record_reversed_interval"]["instance"]
+
+    with pytest.raises(ContractValidationError, match=r"\$\.completed_at"):
+        validate_instance("run-record", instance)
+
+
+def test_run_interval_accepts_equal_fractional_instants() -> None:
+    instance = _fixture("valid-records.json")["run_record_equal_fractional_boundary"]["instance"]
+
+    validate_instance("run-record", instance)
+
+
+def test_run_interval_accepts_later_completed_at_without_fractional_seconds() -> None:
+    instance = _fixture("valid-records.json")["run_record_non_learned"]["instance"]
+
+    validate_instance("run-record", instance)
+
+
 @pytest.mark.parametrize(
     ("schema_id", "version"),
     (

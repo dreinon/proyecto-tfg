@@ -235,6 +235,110 @@
       "review_date": ""
     }
   },
+  "claim_evidence_impossible_month": {
+    "schema_id": "claim-evidence",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "claim-evidence",
+      "claim_id": "CLM-BAD-MONTH",
+      "chapter_section": "04-datos/procedencia",
+      "status": "reviewed",
+      "evidence_ids": ["SRC-SMB-CARD"],
+      "limitations": "Impossible-date validation fixture.",
+      "reviewer": "Daniel Reinon",
+      "review_date": "2026-99-17"
+    }
+  },
+  "claim_evidence_impossible_day_for_month": {
+    "schema_id": "claim-evidence",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "claim-evidence",
+      "claim_id": "CLM-BAD-DAY",
+      "chapter_section": "04-datos/procedencia",
+      "status": "reviewed",
+      "evidence_ids": ["SRC-SMB-CARD"],
+      "limitations": "Impossible-date validation fixture.",
+      "reviewer": "Daniel Reinon",
+      "review_date": "2026-04-31"
+    }
+  },
+  "model_descriptor_non_leap_february_29": {
+    "schema_id": "model-descriptor",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "model-descriptor",
+      "model_id": "example-model-invalid-date",
+      "source": {
+        "official_url": "https://example.org/models/example",
+        "version": "v1",
+        "revision": "abc123"
+      },
+      "checkpoint": {"status": "not_applicable"},
+      "license": {"id": "BSD-3-Clause", "url": "https://example.org/LICENSE"},
+      "input_assumptions": ["RGB input"],
+      "output_conventions": ["RGB output"],
+      "verification_date": "2025-02-29"
+    }
+  },
+  "run_record_reversed_interval": {
+    "schema_id": "run-record",
+    "instance": {
+      "schema_version": 1,
+      "record_type": "run-record",
+      "run_record_id": "run-fixture-reversed",
+      "experiment_id": "experiment-fixture-v1",
+      "execution_id": "execution-fixture-reversed",
+      "status": "failed",
+      "started_at": "2026-08-18T12:00:04Z",
+      "completed_at": "2026-08-18T12:00:00Z",
+      "repositories": [
+        {
+          "role": "workspace-planning",
+          "root": "/workspace",
+          "revision_state": "unborn",
+          "revision": null,
+          "dirty": true
+        },
+        {
+          "role": "proyecto",
+          "root": "/workspace/proyecto",
+          "revision_state": "committed",
+          "revision": "2998c3c",
+          "dirty": false
+        },
+        {
+          "role": "memoria",
+          "root": "/workspace/memoria",
+          "revision_state": "committed",
+          "revision": "9b2c8b4",
+          "dirty": true
+        }
+      ],
+      "manifest_ids": ["fixture-validation-v1"],
+      "experiment_config_id": "experiment-config-fixture-v1",
+      "method": {"method_id": "bicubic-x4", "family": "non_learned"},
+      "seeds": [{"name": "python", "value": 20260818}],
+      "environment": {
+        "python_version": "3.12.12",
+        "dependency_snapshot_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "runtime": "local-cpu"
+      },
+      "hardware": {
+        "device_type": "cpu",
+        "device_name": "fixture-cpu",
+        "memory_bytes": 8589934592
+      },
+      "paths": {
+        "config": "configs/experiments/experiment-fixture-v1.json",
+        "logs": "artifacts/execution-fixture-reversed/logs",
+        "outputs": "artifacts/execution-fixture-reversed/outputs",
+        "metrics": "artifacts/execution-fixture-reversed/metrics.jsonl",
+        "failures": "artifacts/execution-fixture-reversed/failures.jsonl"
+      },
+      "model_provenance": {"status": "not_applicable"}
+    }
+  },
   "experiment_config_missing_provenance": {
     "schema_id": "experiment-config",
     "instance": {
