@@ -1,0 +1,73 @@
+active_pointer_path: data/manifests/smb-evaluation-v1.yaml
+active_pointer_sha256: 735098782c7843be5b01aba57f4a0551467b4c5acb75360e31cdf40045b893ec
+audit_version: smb-audit-v2
+benchmark_state: AUDITED_LOCKED
+compressed_sha256: 200d47ec85dfb9b953a05ba308c41242ce1d7a15eddc57e497ae1329fee7e45c
+compressed_size_bytes: 164006
+compression:
+  algorithm: gzip
+  compresslevel: 9
+  filename: ''
+  format_version: 1
+  mtime: 0
+descriptor_path: 881d576e604ec9faef73ae1a302222cd21575116505f2146bfe2b1f45ffcde38/manifest-descriptor.yaml
+descriptor_sha256: f9682e2d08af5ed1a4b66f8b78a92075004e159d8238a3f8f23cff36d49ad535
+descriptor_yaml: "audit_version: smb-audit-v2\nbenchmark_state: AUDITED_LOCKED\ncreation_command:\
+  \ uv run python -m score_super_resolution.smb_audit migrate-authoritative\n  decisions\
+  \ --legacy-review data/audits/smb-review-v1.csv --sample data/audits/smb-visual-sample-v1.csv\n\
+  \  --manifest-active data/manifests/smb-evaluation-v1.yaml --manifest-generation-root\n\
+  \  artifacts/smb-manifests/generations\ndeterministic_seed: 20260818\nduplicate_provenance:\n\
+  \  exact:\n    algorithm: encoded-and-pixel-sha256\n    version: 1\n  near:\n  \
+  \  algorithm: phash\n    hash_size: 8\n    highfreq_factor: 4\n    library: ImageHash\n\
+  \    library_version: 4.3.2\n    maximum_hamming_distance: 6\n    version: 1\nexclusions:\n\
+  - item_id: smb-test-000146\n  reason: invalid_region_annotation\n  upstream_index:\
+  \ 146\n- item_id: smb-test-000284\n  reason: invalid_region_annotation\n  upstream_index:\
+  \ 284\n- item_id: smb-test-000539\n  reason: invalid_region_annotation\n  upstream_index:\
+  \ 539\n- item_id: smb-test-000674\n  reason: invalid_region_annotation\n  upstream_index:\
+  \ 674\ngeneration_algorithm:\n  algorithm: sha256\n  descriptor_canonicalization:\
+  \ yaml-safe-sort-keys-utf8-v1\n  domain_separator: smb-manifest-generation-v2\n\
+  \  records_canonicalization: jsonl-utf8-sorted-keys-v1\n  version: 2\ngeneration_id:\
+  \ 881d576e604ec9faef73ae1a302222cd21575116505f2146bfe2b1f45ffcde38\ngrouping_unit:\
+  \ source_score\nhash_provenance:\n  encoded:\n    algorithm: sha256\n    canonicalization:\
+  \ encoded-bytes-v1\n    version: 1\n  pixels:\n    algorithm: sha256\n    canonicalization:\
+  \ rgba-uint8-row-major-v1\n    version: 1\nmanifest_id: smb-evaluation-v2\nproject_split:\
+  \ evaluation\nrecord_type: manifest-descriptor\nrecords_sha256: 59c038b4105b0df81878b1feec30155b52602371ace48a9044a7f7c8edad6e30\n\
+  review_inference:\n  automated_population_audit_count: 685\n  exact_pair_automated_count:\
+  \ 0\n  inference_scope: sample_observation_only\n  not_applicable_visual_review_count:\
+  \ 0\n  not_visually_reviewed_count: 621\n  perceptual_pair_count: 14\n  perceptual_pair_human_review_count:\
+  \ 14\n  perceptual_pair_pending_count: 0\n  population_prevalence_inference: not_supported\n\
+  \  sampled_human_review_count: 64\n  targeted_human_review_count: 0\n  unavailable_visual_review_count:\
+  \ 0\nrow_count: 685\nrow_schema_id: manifest-row\nrow_schema_version: 2\nsample_selection:\n\
+  \  algorithm: sha256-rank\n  identity_fields:\n  - upstream_index\n  - item_id\n\
+  \  population_size: 685\n  sample_size: 64\n  seed: 20260818\n  selection_state:\
+  \ pre-review\n  version: 1\nschema_version: 2\nsource_key: smb\nsource_provenance:\n\
+  \  algorithm: sha256\n  dirty: true\n  lock_sha256: 495acdabff917633bea25232181401def9e44ec8600c87221cce45fc9f379dce\n\
+  \  patch_sha256: 81784d8fb08c96bf78dc8f99d2963535b688a7cce071f4fd99c2ca7a09011499\n\
+  \  revision: 1adbe599a49e5da2c227d043d359887f2381cf7a\n  source_set_version: 1\n\
+  \  source_tree_sha256: 8ac87f0d09ae1406b1bba2ec3fdb189827e9b4eb3d02d85c8ff25f8e64782022\n\
+  source_revision: 96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb\nupstream_split: test\n"
+generation_id: 881d576e604ec9faef73ae1a302222cd21575116505f2146bfe2b1f45ffcde38
+manifest_id: smb-evaluation-v2
+metadata_sha256: 8c28339bac3bb3ca86538c0d388079477b9f88a0c61979116468f1247a297deb
+record_type: manifest-recovery
+records_path: 881d576e604ec9faef73ae1a302222cd21575116505f2146bfe2b1f45ffcde38/manifest-records.jsonl
+records_sha256: 59c038b4105b0df81878b1feec30155b52602371ace48a9044a7f7c8edad6e30
+recovery_command: uv run python -m score_super_resolution.smb_audit recover-active
+  --manifest-active data/manifests/smb-evaluation-v1.yaml --recovery-descriptor data/manifests/smb-evaluation-v1-recovery.yaml
+  --recovery-records data/manifests/smb-evaluation-v1-recovery.jsonl.gz --manifest-generation-root
+  artifacts/smb-manifests/generations
+recovery_records_path: data/manifests/smb-evaluation-v1-recovery.jsonl.gz
+row_count: 685
+row_schema_id: manifest-row
+row_schema_version: 2
+schema_version: 1
+source_provenance:
+  algorithm: sha256
+  dirty: true
+  lock_sha256: 495acdabff917633bea25232181401def9e44ec8600c87221cce45fc9f379dce
+  patch_sha256: 81784d8fb08c96bf78dc8f99d2963535b688a7cce071f4fd99c2ca7a09011499
+  revision: 1adbe599a49e5da2c227d043d359887f2381cf7a
+  source_set_version: 1
+  source_tree_sha256: 8ac87f0d09ae1406b1bba2ec3fdb189827e9b4eb3d02d85c8ff25f8e64782022
+source_revision: 96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb
+uncompressed_size_bytes: 1559335
