@@ -322,6 +322,28 @@ def test_registry_reports_all_instance_errors_in_stable_order() -> None:
     assert "unknown" in messages[0]
 
 
+def test_semantic_validation_runs_after_structural_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def semantic_marker(schema_id: str, _instance: object) -> list[str]:
+        calls.append(schema_id)
+        return ["instance $: semantic marker"]
+
+    monkeypatch.setattr(contracts, "_semantic_validation_errors", semantic_marker)
+    invalid = copy.deepcopy(_fixture("valid-records.json")["claim_evidence_draft"]["instance"])
+    invalid["unknown"] = True
+    with pytest.raises(ContractValidationError, match="additional properties"):
+        validate_instance("claim-evidence", invalid)
+    assert calls == []
+
+    valid = _fixture("valid-records.json")["claim_evidence_draft"]["instance"]
+    with pytest.raises(ContractValidationError, match="semantic marker"):
+        validate_instance("claim-evidence", valid)
+    assert calls == ["claim-evidence"]
+
+
 @pytest.mark.parametrize(
     ("payload", "expected"),
     (

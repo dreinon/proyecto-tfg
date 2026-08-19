@@ -161,3 +161,114 @@ def test_nested_manifest_objects_are_strict() -> None:
     row["rights"]["unknown"] = "pending"
     with pytest.raises(ContractValidationError, match="additional properties"):
         validate_instance("manifest-row", row)
+
+
+def test_manifest_item_id_must_match_upstream_index_after_swapping_ids() -> None:
+    fixtures = _fixtures()
+    first = copy.deepcopy(fixtures["normal_row"])
+    second = copy.deepcopy(fixtures["failure_row"])
+    first["item_id"], second["item_id"] = second["item_id"], first["item_id"]
+
+    for row in (first, second):
+        with pytest.raises(ContractValidationError, match=r"\$\.item_id"):
+            validate_instance("manifest-row", row)
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "mutations"),
+    (
+        (
+            "normal_row",
+            {"expected_status": "unprocessable"},
+        ),
+        (
+            "failure_row",
+            {"expected_status": "processable"},
+        ),
+        (
+            "normal_row",
+            {"unprocessable_reason": "decode_failed"},
+        ),
+        (
+            "failure_row",
+            {"unprocessable_reason": None},
+        ),
+    ),
+    ids=(
+        "processed-cannot-be-expected-unprocessable",
+        "failed-cannot-be-expected-processable",
+        "processed-cannot-have-unprocessable-reason",
+        "failed-must-have-unprocessable-reason",
+    ),
+)
+def test_manifest_processing_state_union_rejects_contradictions(
+    fixture_name: str, mutations: dict[str, object]
+) -> None:
+    row = copy.deepcopy(_fixtures()[fixture_name])
+    row.update(mutations)
+
+    with pytest.raises(ContractValidationError):
+        validate_instance("manifest-row", row)
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "mutations"),
+    (
+        (
+            "normal_row",
+            {"paired_ineligibility_reason": "invalid_region_annotation"},
+        ),
+        (
+            "normal_row",
+            {"paired_eligible": False, "paired_ineligibility_reason": None},
+        ),
+    ),
+    ids=(
+        "paired-eligible-cannot-have-reason",
+        "paired-ineligible-must-have-reason",
+    ),
+)
+def test_manifest_pairing_state_union_rejects_contradictions(
+    fixture_name: str, mutations: dict[str, object]
+) -> None:
+    row = copy.deepcopy(_fixtures()[fixture_name])
+    row.update(mutations)
+
+    with pytest.raises(ContractValidationError):
+        validate_instance("manifest-row", row)
+
+
+def test_processed_paired_ineligible_annotation_row_remains_valid() -> None:
+    row = copy.deepcopy(_fixtures()["normal_row"])
+    row["bbox_valid"] = False
+    row["annotation_failures"] = ["region_0_out_of_bounds"]
+    row["paired_eligible"] = False
+    row["paired_ineligibility_reason"] = "invalid_region_annotation"
+
+    validate_instance("manifest-row", row)
+
+
+def test_failed_unprocessable_row_remains_valid() -> None:
+    validate_instance("manifest-row", _fixtures()["failure_row"])
+
+
+def test_manifest_candidate_ids_reject_duplicates() -> None:
+    row = copy.deepcopy(_fixtures()["normal_row"])
+    row["near_duplicate_candidate_ids"] = [
+        "candidate-0000000000000000",
+        "candidate-0000000000000000",
+    ]
+
+    with pytest.raises(ContractValidationError, match=r"\$\.near_duplicate_candidate_ids"):
+        validate_instance("manifest-row", row)
+
+
+def test_manifest_candidate_ids_must_be_in_canonical_order() -> None:
+    row = copy.deepcopy(_fixtures()["normal_row"])
+    row["near_duplicate_candidate_ids"] = [
+        "candidate-0000000000000001",
+        "candidate-0000000000000000",
+    ]
+
+    with pytest.raises(ContractValidationError, match=r"\$\.near_duplicate_candidate_ids"):
+        validate_instance("manifest-row", row)
