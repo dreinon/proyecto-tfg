@@ -1910,9 +1910,13 @@ def migrate_authoritative_decisions(
         descriptor=descriptor,
         rows=updated_rows,
     )
-    if reconcile_manifest(
+    candidate_report = reconcile_manifest(
         active_path=stage_paths["candidate_active"], generation_root=generation_root
-    ) != {
+    )
+    if {
+        field: candidate_report[field]
+        for field in ("row_count", "processed", "failed", "paired_eligible")
+    } != {
         "row_count": 685,
         "processed": 685,
         "failed": 0,
@@ -1943,7 +1947,10 @@ def migrate_authoritative_decisions(
     elif current_review.sha256 != candidate_review_sha256:
         raise ValueError("human review changed during final authoritative activation")
     final_report = reconcile_manifest(active_path=active_path, generation_root=generation_root)
-    if final_report != {
+    if {
+        field: final_report[field]
+        for field in ("row_count", "processed", "failed", "paired_eligible")
+    } != {
         "row_count": 685,
         "processed": 685,
         "failed": 0,
@@ -1995,10 +2002,84 @@ def validate_v2_manifest_collection(
     """Enforce v2 invariants that cannot be expressed by one row's JSON Schema."""
 
     try:
+        descriptor_contract = dict(descriptor)
+        descriptor_contract.setdefault("generation_id", "0" * 64)
+        validate_instance("manifest-descriptor", descriptor_contract, version=2)
         _require_complete_audit_rows(rows)
         by_id = {str(row["item_id"]): row for row in rows}
         if any(row.get("item_id") != _safe_item_id(int(row["upstream_index"])) for row in rows):
             raise ValueError("item identity does not match upstream index")
+
+        selection = descriptor["sample_selection"]
+        assert isinstance(selection, Mapping)
+        if selection["seed"] != descriptor["deterministic_seed"]:
+            raise ValueError("sample selection seed disagrees with deterministic seed")
+        expected_selection = {
+            "algorithm": "sha256-rank",
+            "version": 1,
+            "seed": descriptor["deterministic_seed"],
+            "population_size": len(rows),
+            "sample_size": DEFAULT_SAMPLE_SIZE,
+            "identity_fields": ["upstream_index", "item_id"],
+            "selection_state": "pre-review",
+        }
+        if dict(selection) != expected_selection:
+            raise ValueError("sample selection contract is unsupported or inconsistent")
+        selected_ids = set(
+            select_visual_sample(
+                rows,
+                seed=int(selection["seed"]),
+                sample_size=int(selection["sample_size"]),
+            )
+        )
+        actual_selected_ids = {
+            str(row["item_id"]) for row in rows if row["audit_sample_member"] is True
+        }
+        if actual_selected_ids != selected_ids:
+            raise ValueError("sample membership disagrees with deterministic selection")
+
+        source_contract = {
+            "source_key": descriptor["source_key"],
+            "source_revision": descriptor["source_revision"],
+            "split": descriptor["upstream_split"],
+        }
+        for index, row in enumerate(rows):
+            for field, expected in source_contract.items():
+                if row.get(field) != expected:
+                    raise ValueError(f"row {index}: source {field} disagrees with descriptor")
+
+        derived_exclusions = sorted(
+            (
+                {
+                    "upstream_index": row["upstream_index"],
+                    "item_id": row["item_id"],
+                    "reason": row["paired_ineligibility_reason"],
+                }
+                for row in rows
+                if row["paired_eligible"] is False
+            ),
+            key=lambda exclusion: (
+                int(exclusion["upstream_index"]),
+                str(exclusion["item_id"]),
+                str(exclusion["reason"]),
+            ),
+        )
+        descriptor_exclusions = descriptor["exclusions"]
+        assert isinstance(descriptor_exclusions, Sequence)
+        exclusion_identities = [
+            (exclusion["upstream_index"], exclusion["item_id"])
+            for exclusion in descriptor_exclusions
+            if isinstance(exclusion, Mapping)
+        ]
+        derived_identities = [
+            (exclusion["upstream_index"], exclusion["item_id"]) for exclusion in derived_exclusions
+        ]
+        if len(exclusion_identities) != len(set(exclusion_identities)) or len(
+            derived_identities
+        ) != len(set(derived_identities)):
+            raise ValueError("exclusion ledger contains duplicate identities")
+        if list(descriptor_exclusions) != derived_exclusions:
+            raise ValueError("exclusion ledger disagrees with paired-ineligible rows")
 
         sampled_count = 0
         visual_counts: Counter[str] = Counter()
@@ -2381,7 +2462,7 @@ def reconcile_manifest(
     active_path: Path,
     generation_root: Path,
     expected_indices: Iterable[int] = range(EXPECTED_ROW_COUNT),
-) -> dict[str, int]:
+) -> dict[str, object]:
     """Reconcile all expected indices only after active-generation resolution succeeds."""
 
     descriptor, rows = resolve_active_manifest(
@@ -2401,12 +2482,29 @@ def reconcile_manifest(
             f"unexpected indices={unexpected}",
             committed=True,
         )
-    return {
+    report: dict[str, object] = {
         "row_count": len(rows),
         "processed": sum(row["processing_status"] == "processed" for row in rows),
         "failed": sum(row["processing_status"] == "failed" for row in rows),
         "paired_eligible": sum(row["paired_eligible"] is True for row in rows),
     }
+    if descriptor["schema_version"] == 2:
+        report.update(
+            {
+                "generation_id": descriptor["generation_id"],
+                "records_sha256": descriptor["records_sha256"],
+                "benchmark_state": descriptor["benchmark_state"],
+                "exclusion_count": len(descriptor["exclusions"]),
+                "source_group_count": len(
+                    {
+                        row["source_group_id"]
+                        for row in rows
+                        if isinstance(row["source_group_id"], str) and row["source_group_id"]
+                    }
+                ),
+            }
+        )
+    return report
 
 
 def _manifest_recovery_limits() -> tuple[int, int]:

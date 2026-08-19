@@ -184,6 +184,7 @@ def _compact_v2_descriptor(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "schema_version": 2,
         "record_type": "manifest-descriptor",
         "manifest_id": "smb-evaluation-v2",
+        "generation_id": "0" * 64,
         "generation_algorithm": {
             "algorithm": "sha256",
             "version": 2,
@@ -316,12 +317,13 @@ def test_v2_review_preparation_separates_population_sample_and_pair_evidence() -
 
     kinds = Counter(row["review_kind"] for row in prepared)
     assert kinds == {"item_policy": 685, "visual_item": 64, "duplicate_pair": 1}
-    assert {row["item_id"] for row in prepared if row["review_kind"] == "visual_item"} == {
-        f"smb-test-{index:06d}" for index in range(64)
-    }
+    expected_sample = set(smb_audit.select_visual_sample(rows, seed=17, sample_size=64))
+    assert {
+        row["item_id"] for row in prepared if row["review_kind"] == "visual_item"
+    } == expected_sample
+    unsampled = next(row["item_id"] for row in rows if row["item_id"] not in expected_sample)
     assert not any(
-        row["review_kind"] == "visual_item" and row["item_id"] == "smb-test-000064"
-        for row in prepared
+        row["review_kind"] == "visual_item" and row["item_id"] == unsampled for row in prepared
     )
 
 
