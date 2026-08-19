@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -8,6 +10,7 @@ from typing import Any
 import pytest
 import yaml
 
+import score_super_resolution.smb_audit as smb_audit
 from score_super_resolution.benchmark_policy import (
     AUDIT_PURPOSES,
     FINAL_EVALUATION_PURPOSES,
@@ -174,26 +177,122 @@ def _freeze_control(control_id: str) -> dict[str, Any]:
     }
 
 
+def _manifest_rows() -> list[dict[str, Any]]:
+    fixture_path = Path(__file__).parent / "fixtures" / "smb" / "records.json"
+    template = json.loads(fixture_path.read_text(encoding="utf-8"))["normal_row"]
+    rows: list[dict[str, Any]] = []
+    for index in range(685):
+        row = copy.deepcopy(template)
+        row["upstream_index"] = index
+        row["item_id"] = f"smb-test-{index:06d}"
+        row["original_score"] = {
+            "raw": f"synthetic-score-{index:03d}",
+            "normalized": f"synthetic-score-{index:03d}",
+        }
+        row["source_group_id"] = f"synthetic-score-{index:03d}"
+        row["audit_sample_member"] = index < 64
+        rows.append(row)
+    return rows
+
+
+def _manifest_descriptor() -> dict[str, Any]:
+    fixture_path = Path(__file__).parent / "fixtures" / "smb" / "records.json"
+    return copy.deepcopy(
+        json.loads(fixture_path.read_text(encoding="utf-8"))["manifest_descriptor"]
+    )
+
+
+def _write_control(path: Path, control: dict[str, Any]) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = (json.dumps(control, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    path.write_bytes(payload)
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _synthetic_evaluation_gate(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], Path, Path]:
+    project_root = tmp_path / "project"
+    active_path = project_root / "data" / "manifests" / "smb-evaluation-v1.yaml"
+    generation_root = project_root / "artifacts" / "smb-manifests" / "generations"
+    smb_audit.publish_manifest_generation(
+        active_path=active_path,
+        generation_root=generation_root,
+        descriptor=_manifest_descriptor(),
+        rows=_manifest_rows(),
+    )
+    pointer = yaml.safe_load(active_path.read_text(encoding="utf-8"))
+    record = _artifact_backed_unlock()
+    manifest_reference = record["prerequisites"]["evaluation_manifest_frozen"]
+    manifest_reference.update(
+        {
+            "artifact_path": active_path.relative_to(project_root).as_posix(),
+            "artifact_sha256": hashlib.sha256(active_path.read_bytes()).hexdigest(),
+            "expected_generation_id": pointer["generation_id"],
+            "expected_row_count": pointer["row_count"],
+            "expected_records_sha256": pointer["records_sha256"],
+            "expected_benchmark_state": "AUDITED_LOCKED",
+        }
+    )
+
+    for prerequisite_id in _PRECEDING_PREREQUISITES:
+        if prerequisite_id == "evaluation_manifest_frozen":
+            continue
+        control = _freeze_control(prerequisite_id)
+        if prerequisite_id == "smb_audit_complete":
+            control["content"].update(
+                {
+                    "active_generation_id": pointer["generation_id"],
+                    "row_count": pointer["row_count"],
+                    "records_sha256": pointer["records_sha256"],
+                }
+            )
+        relative = Path("controls") / f"{prerequisite_id}.json"
+        digest = _write_control(project_root / relative, control)
+        reference = record["prerequisites"][prerequisite_id]
+        reference["artifact_path"] = relative.as_posix()
+        reference["artifact_sha256"] = digest
+
+    human_control = _freeze_control("human_unlock_recorded")
+    human_control["content"]["prerequisite_digests"] = {
+        prerequisite_id: record["prerequisites"][prerequisite_id]["artifact_sha256"]
+        for prerequisite_id in _PRECEDING_PREREQUISITES
+    }
+    human_relative = Path("controls") / "human_unlock_recorded.json"
+    human_digest = _write_control(project_root / human_relative, human_control)
+    human_reference = record["prerequisites"]["human_unlock_recorded"]
+    human_reference["artifact_path"] = human_relative.as_posix()
+    human_reference["artifact_sha256"] = human_digest
+    return record, project_root, generation_root
+
+
+def _assert_gate_rejected(
+    *,
+    record: dict[str, Any],
+    project_root: Path,
+    generation_root: Path,
+) -> None:
+    calls: list[str] = []
+    with pytest.raises(BenchmarkPolicyError):
+        assert_smb_purpose_allowed(
+            source_descriptor=_smb_descriptor(),
+            purpose=BenchmarkPurpose.METRIC,
+            state=BenchmarkState.EVALUATION_UNLOCKED,
+            unlock_record=record,
+            project_root=project_root,
+            manifest_generation_root=generation_root,
+            callback=lambda: calls.append("called"),
+        )
+    assert calls == []
+
+
 def _smb_descriptor() -> dict[str, Any]:
     path = Path(__file__).parents[1] / "data" / "sources" / "smb.yaml"
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def _reviewed_unlock() -> dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "record_type": "smb-evaluation-unlock",
-        "review_status": "reviewed",
-        "reviewer": "accountable-reviewer",
-        "reviewed_at": "2026-08-18",
-        "methods": ["methods-v1@sha256:methods"],
-        "checkpoints": ["checkpoints-v1@sha256:checkpoints"],
-        "degradations": ["degradations-v1@sha256:degradations"],
-        "metrics": ["metrics-v1@sha256:metrics"],
-        "exclusions": ["exclusions-v1@sha256:exclusions"],
-        "sample": ["qualitative-sample-v1@sha256:sample"],
-        "interpretation": ["interpretation-v1@sha256:interpretation"],
-    }
+    return _artifact_backed_unlock()
 
 
 def test_purpose_partition_is_exhaustive_and_disjoint() -> None:
@@ -237,14 +336,17 @@ def test_locked_smb_rejects_each_non_audit_purpose_before_callback(
 
 @pytest.mark.parametrize("purpose", sorted(FINAL_EVALUATION_PURPOSES, key=lambda item: item.value))
 def test_complete_reviewed_unlock_permits_each_final_evaluation_purpose(
-    purpose: BenchmarkPurpose,
+    purpose: BenchmarkPurpose, tmp_path: Path
 ) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
     assert (
         assert_smb_purpose_allowed(
             source_descriptor=_smb_descriptor(),
             purpose=purpose,
             state=BenchmarkState.EVALUATION_UNLOCKED,
-            unlock_record=_reviewed_unlock(),
+            unlock_record=record,
+            project_root=project_root,
+            manifest_generation_root=generation_root,
             callback=lambda: "executed",
         )
         == "executed"
@@ -305,17 +407,11 @@ def test_missing_or_unknown_purpose_fails_closed(purpose: object) -> None:
         ("review_status", "pending"),
         ("reviewer", ""),
         ("reviewed_at", "not-a-date"),
-        ("methods", []),
-        ("checkpoints", None),
-        ("degradations", [""]),
-        ("metrics", "metrics-v1"),
-        ("exclusions", ["duplicate", "duplicate"]),
-        ("sample", []),
-        ("interpretation", [1]),
+        ("prerequisites", "accepted"),
     ),
 )
 def test_incomplete_or_malformed_unlock_record_fails_before_callback(
-    field: str, invalid_value: object
+    field: str, invalid_value: object, tmp_path: Path
 ) -> None:
     record = _reviewed_unlock()
     record[field] = invalid_value
@@ -327,6 +423,8 @@ def test_incomplete_or_malformed_unlock_record_fails_before_callback(
             purpose=BenchmarkPurpose.METRIC,
             state=BenchmarkState.EVALUATION_UNLOCKED,
             unlock_record=record,
+            project_root=tmp_path,
+            manifest_generation_root=tmp_path,
             callback=lambda: calls.append("called"),
         )
 
@@ -334,7 +432,7 @@ def test_incomplete_or_malformed_unlock_record_fails_before_callback(
 
 
 @pytest.mark.parametrize("field", tuple(_reviewed_unlock()))
-def test_unlock_record_rejects_every_missing_field(field: str) -> None:
+def test_unlock_record_rejects_every_missing_field(field: str, tmp_path: Path) -> None:
     record = _reviewed_unlock()
     del record[field]
 
@@ -344,10 +442,12 @@ def test_unlock_record_rejects_every_missing_field(field: str) -> None:
             purpose=BenchmarkPurpose.SR_OUTPUT,
             state=BenchmarkState.EVALUATION_UNLOCKED,
             unlock_record=record,
+            project_root=tmp_path,
+            manifest_generation_root=tmp_path,
         )
 
 
-def test_unlock_record_rejects_unknown_fields() -> None:
+def test_unlock_record_rejects_unknown_fields(tmp_path: Path) -> None:
     record = _reviewed_unlock()
     record["unknown"] = "must not be ignored"
 
@@ -357,6 +457,8 @@ def test_unlock_record_rejects_unknown_fields() -> None:
             purpose=BenchmarkPurpose.DEGRADATION,
             state=BenchmarkState.EVALUATION_UNLOCKED,
             unlock_record=record,
+            project_root=tmp_path,
+            manifest_generation_root=tmp_path,
         )
 
 
@@ -550,3 +652,209 @@ def test_non_manifest_freeze_controls_reject_empty_mismatched_or_incomplete_cont
 
     with pytest.raises(ContractValidationError):
         validate_instance("smb-freeze-control", control)
+
+
+def test_legacy_arbitrary_string_unlock_never_reaches_metric_callback(tmp_path: Path) -> None:
+    legacy_record = {
+        "schema_version": 1,
+        "record_type": "smb-evaluation-unlock",
+        "review_status": "reviewed",
+        "reviewer": "accountable-reviewer",
+        "reviewed_at": "2026-08-18",
+        "methods": ["fabricated-method"],
+        "checkpoints": ["fabricated-checkpoint"],
+        "degradations": ["fabricated-degradation"],
+        "metrics": ["fabricated-metric"],
+        "exclusions": ["fabricated-exclusion"],
+        "sample": ["fabricated-sample"],
+        "interpretation": ["fabricated-interpretation"],
+    }
+    calls: list[str] = []
+
+    with pytest.raises(BenchmarkPolicyError):
+        assert_smb_purpose_allowed(
+            source_descriptor=_smb_descriptor(),
+            purpose=BenchmarkPurpose.METRIC,
+            state=BenchmarkState.EVALUATION_UNLOCKED,
+            unlock_record=legacy_record,
+            project_root=tmp_path,
+            manifest_generation_root=tmp_path,
+            callback=lambda: calls.append("called"),
+        )
+
+    assert calls == []
+
+
+@pytest.mark.parametrize("prerequisite_id", tuple(_PREREQUISITE_CONTRACTS))
+def test_runtime_gate_rejects_each_missing_prerequisite_artifact(
+    prerequisite_id: str, tmp_path: Path
+) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
+    reference = record["prerequisites"][prerequisite_id]
+    (project_root / reference["artifact_path"]).unlink()
+
+    _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
+
+
+@pytest.mark.parametrize("prerequisite_id", tuple(_PREREQUISITE_CONTRACTS))
+def test_runtime_gate_rejects_each_wrong_prerequisite_digest(
+    prerequisite_id: str, tmp_path: Path
+) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
+    record["prerequisites"][prerequisite_id]["artifact_sha256"] = "0" * 64
+
+    _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda reference: reference.__setitem__("artifact_path", "/etc/hostname"),
+        lambda reference: reference.__setitem__("artifact_path", "../outside.json"),
+    ),
+)
+def test_runtime_gate_rejects_absolute_and_traversal_paths_before_callback(
+    mutation: Callable[[dict[str, Any]], object], tmp_path: Path
+) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
+    mutation(record["prerequisites"]["methods_frozen"])
+
+    _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
+
+
+def test_runtime_gate_rejects_symlinked_artifact(tmp_path: Path) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
+    reference = record["prerequisites"]["methods_frozen"]
+    original = project_root / reference["artifact_path"]
+    external = tmp_path / "external-methods.json"
+    external.write_bytes(original.read_bytes())
+    symlink = project_root / "controls" / "symlink-methods.json"
+    symlink.symlink_to(external)
+    reference["artifact_path"] = symlink.relative_to(project_root).as_posix()
+    reference["artifact_sha256"] = hashlib.sha256(external.read_bytes()).hexdigest()
+
+    _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
+
+
+def test_runtime_gate_rejects_non_regular_artifact(tmp_path: Path) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
+    reference = record["prerequisites"]["methods_frozen"]
+    directory = project_root / "controls" / "directory-artifact"
+    directory.mkdir()
+    reference["artifact_path"] = directory.relative_to(project_root).as_posix()
+    reference["artifact_sha256"] = _HEX_A
+
+    _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("artifact_kind", "metrics_control"),
+        ("schema_id", "model-descriptor"),
+        ("schema_version", 2),
+    ),
+)
+def test_runtime_gate_rejects_caller_declared_contract_substitution(
+    field: str, value: object, tmp_path: Path
+) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
+    record["prerequisites"]["methods_frozen"][field] = value
+
+    _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
+
+
+def test_runtime_gate_rejects_cross_key_valid_artifact_substitution(tmp_path: Path) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
+    methods = record["prerequisites"]["methods_frozen"]
+    metrics = record["prerequisites"]["metrics_frozen"]
+    methods["artifact_path"] = metrics["artifact_path"]
+    methods["artifact_sha256"] = metrics["artifact_sha256"]
+
+    _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
+
+
+def test_runtime_gate_rejects_semantically_invalid_correctly_hashed_artifact(
+    tmp_path: Path,
+) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
+    reference = record["prerequisites"]["methods_frozen"]
+    artifact_path = project_root / reference["artifact_path"]
+    control = json.loads(artifact_path.read_text(encoding="utf-8"))
+    control["content"]["methods"] = []
+    reference["artifact_sha256"] = _write_control(artifact_path, control)
+
+    _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
+
+
+def test_manifest_pointer_hash_is_insufficient_when_generation_is_absent(tmp_path: Path) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
+    reference = record["prerequisites"]["evaluation_manifest_frozen"]
+    pointer = yaml.safe_load((project_root / reference["artifact_path"]).read_text())
+    descriptor = generation_root / pointer["generation_id"] / "manifest-descriptor.yaml"
+    descriptor.unlink()
+
+    _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("expected_generation_id", "0" * 64),
+        ("expected_records_sha256", "0" * 64),
+        ("expected_row_count", 684),
+    ),
+)
+def test_manifest_resolution_must_match_expected_identity(
+    field: str, value: object, tmp_path: Path
+) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
+    record["prerequisites"]["evaluation_manifest_frozen"][field] = value
+
+    _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
+
+
+def test_not_yet_installed_manifest_contract_version_fails_closed(tmp_path: Path) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
+    record["prerequisites"]["evaluation_manifest_frozen"]["schema_version"] = 2
+
+    _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
+
+
+def test_manifest_resolution_rejects_non_locked_descriptor(tmp_path: Path) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
+    reference = record["prerequisites"]["evaluation_manifest_frozen"]
+    pointer = yaml.safe_load((project_root / reference["artifact_path"]).read_text())
+    descriptor_path = generation_root / pointer["generation_id"] / "manifest-descriptor.yaml"
+    descriptor = yaml.safe_load(descriptor_path.read_text(encoding="utf-8"))
+    descriptor["benchmark_state"] = "EVALUATION_UNLOCKED"
+    descriptor_path.write_text(yaml.safe_dump(descriptor, sort_keys=True), encoding="utf-8")
+
+    _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
+
+
+def test_human_approval_must_digest_every_preceding_artifact(tmp_path: Path) -> None:
+    record, project_root, generation_root = _synthetic_evaluation_gate(tmp_path)
+    reference = record["prerequisites"]["human_unlock_recorded"]
+    artifact_path = project_root / reference["artifact_path"]
+    control = json.loads(artifact_path.read_text(encoding="utf-8"))
+    control["content"]["prerequisite_digests"]["methods_frozen"] = "0" * 64
+    reference["artifact_sha256"] = _write_control(artifact_path, control)
+
+    _assert_gate_rejected(record=record, project_root=project_root, generation_root=generation_root)
+
+
+def test_evaluation_unlock_requires_explicit_roots(tmp_path: Path) -> None:
+    record, _, _ = _synthetic_evaluation_gate(tmp_path)
+    calls: list[str] = []
+
+    with pytest.raises(BenchmarkPolicyError):
+        assert_smb_purpose_allowed(
+            source_descriptor=_smb_descriptor(),
+            purpose=BenchmarkPurpose.METRIC,
+            state=BenchmarkState.EVALUATION_UNLOCKED,
+            unlock_record=record,
+            callback=lambda: calls.append("called"),
+        )
+
+    assert calls == []
