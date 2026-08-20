@@ -70,6 +70,7 @@ EXPECTED_ROW_COUNT = 685
 DEFAULT_SAMPLE_SIZE = 64
 DEFAULT_MAX_ENCODED_BYTES = 64 * 1024 * 1024
 DEFAULT_MAX_PIXELS = 100_000_000
+IMAGE_READ_CHUNK_SIZE = 64 * 1024
 BBOX_PERCENT_MAX = 100.0
 # SMB publishes percentage coordinates. This absolute percentage-point tolerance absorbs only
 # binary floating-point round-off (observed at <= 1.42e-14 in the pinned revision), while the
@@ -146,6 +147,8 @@ _IMAGE_PATH_FAILURE_CODES = frozenset(
         "image_path_outside_trusted_cache",
         "image_path_symlink",
         "image_path_unavailable",
+        "encoded_image_too_large",
+        "image_path_changed",
     }
 )
 
@@ -273,7 +276,12 @@ def _path_failure_from_os_error(error: OSError) -> _ImageIngestionError:
     return _ImageIngestionError("image_path_unavailable")
 
 
-def _read_trusted_regular_file(raw_path: str, trusted_cache_roots: Sequence[Path]) -> bytes:
+def _read_trusted_regular_file(
+    raw_path: str,
+    trusted_cache_roots: Sequence[Path],
+    *,
+    max_encoded_bytes: int,
+) -> bytes:
     if "\0" in raw_path:
         raise _ImageIngestionError("image_path_invalid")
     candidate = Path(raw_path)
@@ -327,9 +335,22 @@ def _read_trusted_regular_file(raw_path: str, trusted_cache_roots: Sequence[Path
         opened = os.fstat(file_fd)
         if not stat.S_ISREG(opened.st_mode):
             raise _ImageIngestionError("image_path_not_regular")
-        with os.fdopen(file_fd, "rb", closefd=True) as handle:
-            file_fd = None
-            return handle.read()
+        if opened.st_size > max_encoded_bytes:
+            raise _ImageIngestionError("encoded_image_too_large")
+        chunks: list[bytes] = []
+        consumed = 0
+        while True:
+            remaining = max_encoded_bytes - consumed
+            chunk = os.read(file_fd, min(IMAGE_READ_CHUNK_SIZE, remaining + 1))
+            if not chunk:
+                break
+            if len(chunk) > remaining:
+                raise _ImageIngestionError("encoded_image_too_large")
+            chunks.append(chunk)
+            consumed += len(chunk)
+        if consumed != opened.st_size:
+            raise _ImageIngestionError("image_path_changed")
+        return b"".join(chunks)
     except _ImageIngestionError:
         raise
     except OSError as error:
@@ -341,7 +362,12 @@ def _read_trusted_regular_file(raw_path: str, trusted_cache_roots: Sequence[Path
             os.close(directory_fd)
 
 
-def _encoded_image(record: Mapping[str, object], *, trusted_cache_roots: Sequence[Path]) -> bytes:
+def _encoded_image(
+    record: Mapping[str, object],
+    *,
+    trusted_cache_roots: Sequence[Path],
+    max_encoded_bytes: int,
+) -> bytes:
     image = record.get("image")
     if isinstance(image, bytes):
         return image
@@ -355,7 +381,11 @@ def _encoded_image(record: Mapping[str, object], *, trusted_cache_roots: Sequenc
             return bytes(encoded)
         raw_path = image.get("path")
         if isinstance(raw_path, str) and raw_path:
-            return _read_trusted_regular_file(raw_path, trusted_cache_roots)
+            return _read_trusted_regular_file(
+                raw_path,
+                trusted_cache_roots,
+                max_encoded_bytes=max_encoded_bytes,
+            )
     raise ValueError("image_bytes_unavailable")
 
 
@@ -571,9 +601,14 @@ def _audit_after_guard(
     row = _base_row(record, upstream_index)
     row["source_revision"] = source_revision
     try:
-        encoded = _encoded_image(record, trusted_cache_roots=trusted_cache_roots)
+        encoded = _encoded_image(
+            record,
+            trusted_cache_roots=trusted_cache_roots,
+            max_encoded_bytes=max_encoded_bytes,
+        )
     except _ImageIngestionError as error:
-        return _mark_failure(row, error.code), None
+        quality_flag = "oversized" if error.code == "encoded_image_too_large" else "unprocessable"
+        return _mark_failure(row, error.code, quality_flag=quality_flag), None
     except ValueError:
         return _mark_failure(row, "image_bytes_unavailable"), None
     row["byte_count"] = len(encoded)
