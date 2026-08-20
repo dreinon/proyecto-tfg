@@ -442,10 +442,7 @@ def _regions_valid(regions: object) -> tuple[int, bool, bool, list[str]]:
             continue
         if not (
             -BBOX_PERCENT_TOLERANCE <= left < right <= BBOX_PERCENT_MAX + BBOX_PERCENT_TOLERANCE
-            and -BBOX_PERCENT_TOLERANCE
-            <= top
-            < bottom
-            <= BBOX_PERCENT_MAX + BBOX_PERCENT_TOLERANCE
+            and -BBOX_PERCENT_TOLERANCE <= top < bottom <= BBOX_PERCENT_MAX + BBOX_PERCENT_TOLERANCE
         ):
             bbox_failures.append(f"region_{index}_out_of_bounds")
     failures = [*bbox_failures, *text_failures]
@@ -2126,8 +2123,7 @@ def migrate_authoritative_decisions(
         field: candidate_report[field]
         for field in ("row_count", "processed", "failed", "paired_eligible")
     } != {
-        field: counts[field]
-        for field in ("row_count", "processed", "failed", "paired_eligible")
+        field: counts[field] for field in ("row_count", "processed", "failed", "paired_eligible")
     }:
         raise ValueError("candidate v2 generation reconciliation failed")
     candidate_review = read_review(stage_paths["candidate_review"])
@@ -2158,8 +2154,7 @@ def migrate_authoritative_decisions(
         field: final_report[field]
         for field in ("row_count", "processed", "failed", "paired_eligible")
     } != {
-        field: counts[field]
-        for field in ("row_count", "processed", "failed", "paired_eligible")
+        field: counts[field] for field in ("row_count", "processed", "failed", "paired_eligible")
     }:
         raise ValueError("final v2 generation reconciliation failed")
     return counts

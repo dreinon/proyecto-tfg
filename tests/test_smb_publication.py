@@ -1596,9 +1596,7 @@ def test_publication_active_parent_swap_stays_on_retained_inode(tmp_path: Path) 
     "boundary",
     ("active_parent_anchored", "generation_root_anchored", "selected_generation_anchored"),
 )
-def test_active_resolution_retains_every_directory_authority(
-    tmp_path: Path, boundary: str
-) -> None:
+def test_active_resolution_retains_every_directory_authority(tmp_path: Path, boundary: str) -> None:
     active_path, generation_root = _publish(tmp_path, _full_rows())
     pointer = yaml.safe_load(active_path.read_text(encoding="utf-8"))
     generation_id = pointer["generation_id"]

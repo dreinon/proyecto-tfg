@@ -161,7 +161,7 @@ def test_canonical_review_rejects_duplicate_stable_review_keys() -> None:
     first, second = (row.copy() for row in _safe_rows()[:2])
     second["review_key"] = first["review_key"]
 
-    with pytest.raises(ReviewEvidenceError, match="review_key.*duplicate"):
+    with pytest.raises(ReviewEvidenceError, match=r"review_key.*duplicate"):
         canonical_review_csv((first, second))
 
 
@@ -390,7 +390,7 @@ def test_apply_policy_rejects_unsupported_legacy_item_ui_without_write(
 
     monkeypatch.setattr(session, "write_rows", unexpected_write)
 
-    with pytest.raises(ReviewEvidenceError, match="legacy.*unsupported|unsupported.*legacy"):
+    with pytest.raises(ReviewEvidenceError, match=r"legacy.*unsupported|unsupported.*legacy"):
         session.apply_policy("Daniel Reinón García")
 
     assert review_path.read_bytes() == canonical_review_csv((row,))
@@ -562,9 +562,7 @@ def test_unique_same_directory_temps_do_not_reuse_fixed_collision(tmp_path: Path
     "boundary",
     ("review_before_cas_read", "review_before_temp_create", "review_before_replace"),
 )
-def test_review_save_parent_swap_stays_on_retained_directory(
-    tmp_path: Path, boundary: str
-) -> None:
+def test_review_save_parent_swap_stays_on_retained_directory(tmp_path: Path, boundary: str) -> None:
     review_parent = tmp_path / "review-parent"
     review_parent.mkdir()
     review_path = review_parent / "smb-review-v1.csv"

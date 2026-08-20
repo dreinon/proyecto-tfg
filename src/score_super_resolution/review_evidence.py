@@ -12,7 +12,7 @@ import stat
 import tempfile
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -544,7 +544,7 @@ def _retained_review_parent(path: Path) -> object:
 
 def _review_lock_path(parent_fd: int, basename: str) -> Path:
     parent = os.fstat(parent_fd)
-    raw_identity = f"{parent.st_dev}:{parent.st_ino}:{basename}".encode("utf-8")
+    raw_identity = f"{parent.st_dev}:{parent.st_ino}:{basename}".encode()
     identity = hashlib.sha256(raw_identity).hexdigest()
     user_id = os.getuid() if hasattr(os, "getuid") else 0
     return Path(tempfile.gettempdir()) / f"score-sr-review-{user_id}-{identity}.lock"
@@ -677,10 +677,8 @@ def save_review(
                     _save_boundary("review_parent_fsynced", boundary_hook)
             finally:
                 if temporary is not None:
-                    try:
+                    with suppress(FileNotFoundError):
                         os.unlink(temporary, dir_fd=parent_fd)
-                    except FileNotFoundError:
-                        pass
     except (ReviewEvidenceError, ReviewPersistenceError):
         raise
     except Exception as error:
