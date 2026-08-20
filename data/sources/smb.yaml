@@ -1,0 +1,52 @@
+schema_version: 1
+key: smb
+name: Sheet Music Benchmark
+role: evaluation_benchmark
+
+provider: hugging_face
+repository_id: PRAIG/SMB
+url: https://huggingface.co/datasets/PRAIG/SMB
+project_url: https://grfia.dlsi.ua.es/smb/
+revision: 96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb
+upstream_updated_at: 2026-04-19T16:06:17Z
+metadata_reviewed_at: 2026-08-14
+
+access:
+  gated: manual
+  authentication_environment_variable: HF_TOKEN
+  store_credentials_in_repository: false
+
+license:
+  id: CC-BY-NC-4.0
+  url: https://creativecommons.org/licenses/by-nc/4.0/
+
+citation:
+  title: "Sheet Music Benchmark: Standardized Optical Music Recognition Evaluation"
+  venue: Proceedings of the 26th International Society for Music Information Retrieval Conference
+  year: 2025
+  doi: 10.5281/zenodo.17811446
+
+upstream_splits:
+  test:
+    examples: 685
+
+features:
+  - image
+  - id
+  - original_width
+  - original_height
+  - regions
+  - page_texture
+  - page
+  - original_score
+
+loading:
+  library: datasets
+  call: load_dataset
+  config: default
+
+constraints:
+  - Preserve the official test split for evaluation.
+  - Do not use SMB for model selection, hyperparameter tuning, or fine-tuning by default.
+  - Use the pinned revision in every local and Kaggle run.
+  - Record any exclusions in a versioned manifest.
