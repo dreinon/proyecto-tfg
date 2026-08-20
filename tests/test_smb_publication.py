@@ -1031,11 +1031,21 @@ def test_v2_review_application_preserves_audited_source_groups() -> None:
     assert [row["source_group_id"] for row in updated] == original_groups
 
 
+def _tracked_active_recovery_paths(project_root: Path) -> tuple[Path, Path]:
+    manifest_root = project_root / "data" / "manifests"
+    pointer = yaml.safe_load((manifest_root / "smb-evaluation-v1.yaml").read_text(encoding="utf-8"))
+    assert isinstance(pointer, dict)
+    validate_instance("manifest-active", pointer, version=int(pointer["schema_version"]))
+    return (
+        project_root / str(pointer["recovery_descriptor_path"]),
+        project_root / str(pointer["recovery_records_path"]),
+    )
+
+
 def test_tracked_active_recovery_retains_260_canonical_source_groups(tmp_path: Path) -> None:
     project_root = Path(__file__).resolve().parents[1]
     manifest_root = project_root / "data" / "manifests"
-    recovery_descriptor = manifest_root / "smb-evaluation-v1-recovery.yaml"
-    recovery_records = manifest_root / "smb-evaluation-v1-recovery.jsonl.gz"
+    recovery_descriptor, recovery_records = _tracked_active_recovery_paths(project_root)
     active_path = tmp_path / "smb-evaluation-v1.yaml"
     active_path.write_bytes((manifest_root / "smb-evaluation-v1.yaml").read_bytes())
     generation_root = tmp_path / "generations"
@@ -1698,6 +1708,92 @@ def test_install_candidate_is_idempotent_and_rejects_third_digest_cas(tmp_path: 
 
     assert active_path.read_bytes() == third_digest_bytes
     assert lock_path.stat().st_ino == lock_inode
+
+
+def _assert_install_interruption_restart(
+    tmp_path: Path,
+    *,
+    boundary: str,
+) -> None:
+    active_path, generation_root = _publish(tmp_path, _full_rows())
+    old_pointer = yaml.safe_load(active_path.read_text(encoding="utf-8"))
+    stage = tmp_path / "stage"
+    candidate_pointer = _write_install_candidate_stage(
+        stage,
+        expected_active_bytes=active_path.read_bytes(),
+        rows=_compact_v2_rows(),
+    )
+    code = """
+from pathlib import Path
+import sys
+from score_super_resolution.smb_audit import install_candidate
+
+install_candidate(
+    stage_root=Path(sys.argv[1]),
+    generation_root=Path(sys.argv[2]),
+    active_path=Path(sys.argv[3]),
+    expected_active_sha256_from_stage=True,
+)
+"""
+    environment = os.environ.copy()
+    environment["SCORE_SR_SMB_INSTALL_FAILPOINT"] = f"{boundary}:exit"
+
+    interrupted = subprocess.run(
+        [sys.executable, "-c", code, str(stage), str(generation_root), str(active_path)],
+        check=False,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+
+    assert interrupted.returncode == 92, interrupted.stderr
+    observed_descriptor, observed_rows = smb_audit.resolve_active_manifest(
+        active_path=active_path,
+        generation_root=generation_root,
+    )
+    assert observed_descriptor["generation_id"] in {
+        old_pointer["generation_id"],
+        candidate_pointer["generation_id"],
+    }
+    assert len(observed_rows) == 685
+
+    restarted = smb_audit.install_candidate(
+        stage_root=stage,
+        generation_root=generation_root,
+        active_path=active_path,
+        expected_active_sha256_from_stage=True,
+    )
+
+    assert restarted["status"] in {"installed", "idempotent"}
+    final_pointer = yaml.safe_load(active_path.read_text(encoding="utf-8"))
+    assert final_pointer == candidate_pointer
+    recovery_descriptor = tmp_path / final_pointer["recovery_descriptor_path"]
+    recovery_records = tmp_path / final_pointer["recovery_records_path"]
+    empty_root = tmp_path / "recovered-after-restart"
+    smb_audit.recover_active_manifest(
+        active_path=active_path,
+        recovery_descriptor_path=recovery_descriptor,
+        recovery_records_path=recovery_records,
+        generation_root=empty_root,
+    )
+    recovered_descriptor, recovered_rows = smb_audit.resolve_active_manifest(
+        active_path=active_path,
+        generation_root=empty_root,
+    )
+    assert recovered_descriptor["generation_id"] == candidate_pointer["generation_id"]
+    assert len(recovered_rows) == 685
+
+
+def test_installation_interruption_recovery_smoke(tmp_path: Path) -> None:
+    _assert_install_interruption_restart(tmp_path, boundary="install_cas_read")
+
+
+@pytest.mark.parametrize("boundary", smb_audit.INSTALL_BOUNDARIES)
+def test_install_candidate_interruption_restart_preserves_complete_public_tuple(
+    tmp_path: Path,
+    boundary: str,
+) -> None:
+    _assert_install_interruption_restart(tmp_path, boundary=boundary)
 
 
 def test_permanent_flock_kernel_release_and_live_waiter_cannot_be_displaced(
@@ -2597,8 +2693,7 @@ def test_recover_active_from_source_controlled_tree_with_empty_generation_root(
 ) -> None:
     project_root = Path(__file__).resolve().parents[1]
     active_path = project_root / "data" / "manifests" / "smb-evaluation-v1.yaml"
-    recovery_descriptor = project_root / "data" / "manifests" / "smb-evaluation-v1-recovery.yaml"
-    recovery_records = project_root / "data" / "manifests" / "smb-evaluation-v1-recovery.jsonl.gz"
+    recovery_descriptor, recovery_records = _tracked_active_recovery_paths(project_root)
     if not recovery_descriptor.is_file() or not recovery_records.is_file():
         pytest.skip("tracked recovery pair is produced by Plan 01-20 Task 2")
     recovery = yaml.safe_load(recovery_descriptor.read_text(encoding="utf-8"))

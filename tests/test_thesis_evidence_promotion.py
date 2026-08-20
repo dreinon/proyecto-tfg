@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import shutil
 from collections import Counter
 from copy import deepcopy
 from datetime import date
+from itertools import combinations
 from pathlib import Path
 
 import pytest
@@ -17,8 +19,6 @@ ROOT = Path(__file__).parents[1]
 CLAIM_PATH = ROOT / "docs" / "claim-evidence.csv"
 MATRIX_PATH = ROOT / "docs" / "literature" / "sota-matrix.csv"
 ACTIVE_MANIFEST_PATH = ROOT / "data" / "manifests" / "smb-evaluation-v1.yaml"
-RECOVERY_DESCRIPTOR_PATH = ROOT / "data" / "manifests" / "smb-evaluation-v1-recovery.yaml"
-RECOVERY_RECORDS_PATH = ROOT / "data" / "manifests" / "smb-evaluation-v1-recovery.jsonl.gz"
 AUDIT_PATH = ROOT / "data" / "audits" / "smb-audit-v1.yaml"
 SAMPLE_PATH = ROOT / "data" / "audits" / "smb-visual-sample-v1.csv"
 REVIEW_PATH = ROOT / "data" / "audits" / "smb-review-v1.csv"
@@ -45,6 +45,9 @@ PROMOTED_CLAIM_IDS = {
     "SOTA-PERCEPTION-DISTORTION",
     "SOTA-TRANSFORMER-PROGRESSION",
 }
+EXPECTED_GENERATION_ID = "058f5d469b25e1abf1417f9ce196128bb3b46814d793b067a82fb06322bf91fb"
+EXPECTED_RECORDS_SHA256 = "351364aecf6e99894a997910cc04e7adc8eb5707234d9dca29364d4baf1e20f0"
+EXPECTED_RECOVERY_BUNDLE_ID = "6a481bae3852296bada7402662c520ba264ab771048b7b4865dbd27ff29d6ccb"
 
 FORBIDDEN_SMB_OVERCLAIMS = (
     "685 páginas revisadas visualmente",
@@ -99,17 +102,33 @@ def _promotable_claims(
     return promoted
 
 
+def _active_pointer_and_recovery_paths() -> tuple[dict[str, object], Path, Path]:
+    pointer = yaml.safe_load(ACTIVE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert isinstance(pointer, dict)
+    validate_instance("manifest-active", pointer, version=2)
+    project_root = ROOT.resolve()
+    selected: list[Path] = []
+    for field in ("recovery_descriptor_path", "recovery_records_path"):
+        relative = Path(str(pointer[field]))
+        assert not relative.is_absolute() and ".." not in relative.parts
+        resolved = (ROOT / relative).resolve()
+        assert resolved.is_relative_to(project_root) and resolved.is_file()
+        selected.append(resolved)
+    return pointer, selected[0], selected[1]
+
+
 def _resolved_tracked_smb_evidence(
     tmp_path: Path,
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
+    _, recovery_descriptor_path, recovery_records_path = _active_pointer_and_recovery_paths()
     active_copy = tmp_path / "smb-evaluation-v1.yaml"
     shutil.copyfile(ACTIVE_MANIFEST_PATH, active_copy)
     generation_root = tmp_path / "recovered-generations"
 
     smb_audit.recover_active_manifest(
         active_path=active_copy,
-        recovery_descriptor_path=RECOVERY_DESCRIPTOR_PATH,
-        recovery_records_path=RECOVERY_RECORDS_PATH,
+        recovery_descriptor_path=recovery_descriptor_path,
+        recovery_records_path=recovery_records_path,
         generation_root=generation_root,
     )
     return smb_audit.resolve_active_manifest(
@@ -129,13 +148,10 @@ def _assert_bounded_smb_narrative(text: str) -> None:
         "64 páginas",
         "621 páginas",
         "14 pares",
-        "ningún par exacto",
         "CC BY-NC 4.0",
         "procedencia por elemento no está disponible",
         "redistribución no queda establecida",
         "reproducción de figuras permanece prohibida",
-        "881d576e604ec9faef73ae1a302222cd21575116505f2146bfe2b1f45ffcde38",
-        "59c038b4105b0df81878b1feec30155b52602371ace48a9044a7f7c8edad6e30",
         "AUDITED\\_LOCKED",
         "ACAD-03",
     )
@@ -147,8 +163,9 @@ def _assert_bounded_smb_narrative(text: str) -> None:
 
 def test_data_chapter_matches_recoverable_smb_v2_evidence(tmp_path: Path) -> None:
     descriptor, rows = _resolved_tracked_smb_evidence(tmp_path)
+    pointer, recovery_descriptor_path, recovery_records_path = _active_pointer_and_recovery_paths()
     audit = yaml.safe_load(AUDIT_PATH.read_text(encoding="utf-8"))
-    recovery = yaml.safe_load(RECOVERY_DESCRIPTOR_PATH.read_text(encoding="utf-8"))
+    recovery = yaml.safe_load(recovery_descriptor_path.read_text(encoding="utf-8"))
     _, sample_rows = _csv_rows(SAMPLE_PATH)
     _, review_rows = _csv_rows(REVIEW_PATH)
 
@@ -157,11 +174,33 @@ def test_data_chapter_matches_recoverable_smb_v2_evidence(tmp_path: Path) -> Non
     paired_reasons = Counter(
         str(row["paired_ineligibility_reason"]) for row in rows if row["paired_eligible"] is False
     )
-    exact_pairs = {
+    represented_exact_pairs = {
+        tuple(relation["item_ids"])
+        for row in rows
+        for relation in row["duplicate_relations"]
+        if relation["candidate_type"] == "exact"
+    }
+    exact_relation_occurrences = Counter(
         relation["pair_id"]
         for row in rows
         for relation in row["duplicate_relations"]
         if relation["candidate_type"] == "exact"
+    )
+    exact_relations = {
+        relation["pair_id"]: relation
+        for row in rows
+        for relation in row["duplicate_relations"]
+        if relation["candidate_type"] == "exact"
+    }
+    by_framed_hash: dict[str, list[str]] = {}
+    for row in rows:
+        if row["processing_status"] != "processed":
+            continue
+        pixel_sha256 = row["image"]["pixel_sha256"]
+        assert isinstance(pixel_sha256, str)
+        by_framed_hash.setdefault(pixel_sha256, []).append(str(row["item_id"]))
+    derived_exact_pairs = {
+        pair for item_ids in by_framed_hash.values() for pair in combinations(sorted(item_ids), 2)
     }
     perceptual_pairs = {
         relation["pair_id"]: relation["disposition"]
@@ -171,8 +210,19 @@ def test_data_chapter_matches_recoverable_smb_v2_evidence(tmp_path: Path) -> Non
     }
     review_kinds = Counter(row["review_kind"] for row in review_rows)
 
-    assert descriptor["generation_id"] == recovery["generation_id"]
-    assert descriptor["records_sha256"] == recovery["records_sha256"]
+    assert pointer["generation_id"] == descriptor["generation_id"] == recovery["generation_id"]
+    assert pointer["records_sha256"] == descriptor["records_sha256"] == recovery["records_sha256"]
+    assert descriptor["generation_id"] == EXPECTED_GENERATION_ID
+    assert descriptor["records_sha256"] == EXPECTED_RECORDS_SHA256
+    assert recovery["bundle_id"] == EXPECTED_RECOVERY_BUNDLE_ID
+    assert (
+        pointer["recovery_descriptor_sha256"]
+        == hashlib.sha256(recovery_descriptor_path.read_bytes()).hexdigest()
+    )
+    assert (
+        pointer["recovery_records_sha256"]
+        == hashlib.sha256(recovery_records_path.read_bytes()).hexdigest()
+    )
     assert descriptor["source_revision"] == recovery["source_revision"]
     assert descriptor["source_provenance"] == recovery["source_provenance"]
     assert descriptor["benchmark_state"] == recovery["benchmark_state"] == "AUDITED_LOCKED"
@@ -184,7 +234,13 @@ def test_data_chapter_matches_recoverable_smb_v2_evidence(tmp_path: Path) -> Non
     assert len({row["source_group_id"] for row in rows}) == 260
     assert visual == {"sampled_human_reviewed": 64, "not_visually_reviewed": 621}
     assert sum(row["audit_sample_member"] is True for row in rows) == len(sample_rows) == 64
-    assert exact_pairs == set()
+    assert represented_exact_pairs == derived_exact_pairs
+    assert set(exact_relation_occurrences.values()) <= {2}
+    assert all(
+        relation["reviewer"] is None and relation["reviewed_at"] is None
+        for relation in exact_relations.values()
+    )
+    assert descriptor["review_inference"]["exact_pair_automated_count"] == len(derived_exact_pairs)
     assert len(perceptual_pairs) == 14
     assert set(perceptual_pairs.values()) == {"distinct"}
     assert review_kinds == {"item_policy": 685, "visual_item": 64, "duplicate_pair": 14}

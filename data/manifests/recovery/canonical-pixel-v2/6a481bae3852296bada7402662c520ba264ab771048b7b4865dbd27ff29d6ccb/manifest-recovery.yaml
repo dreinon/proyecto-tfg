@@ -1,0 +1,72 @@
+active_pointer_path: data/manifests/smb-evaluation-v1.yaml
+audit_version: smb-audit-v2
+benchmark_state: AUDITED_LOCKED
+bundle_id: 6a481bae3852296bada7402662c520ba264ab771048b7b4865dbd27ff29d6ccb
+compressed_sha256: 9beb56f382642512fec06b15b1f372c156aa86e96c7ed1b0667381a396986344
+compressed_size_bytes: 163945
+compression:
+  algorithm: gzip
+  compresslevel: 9
+  filename: ''
+  format_version: 1
+  mtime: 0
+descriptor_path: 058f5d469b25e1abf1417f9ce196128bb3b46814d793b067a82fb06322bf91fb/manifest-descriptor.yaml
+descriptor_sha256: 537bbacc602c27a1ef71bacb2d16ec3ce2bcef6d5afe26bbf3efaba1bf2136df
+descriptor_yaml: "audit_version: smb-audit-v2\nbenchmark_state: AUDITED_LOCKED\ncreation_command:\
+  \ uv run python -m score_super_resolution.smb_audit build-canonical-pixel-rehash-candidate\n\
+  deterministic_seed: 20260818\nduplicate_provenance:\n  exact:\n    algorithm: canonical-pixel-sha256\n\
+  \    version: 2\n  near:\n    algorithm: phash\n    hash_size: 8\n    highfreq_factor:\
+  \ 4\n    library: ImageHash\n    library_version: 4.3.2\n    maximum_hamming_distance:\
+  \ 6\n    version: 1\nexclusions:\n- item_id: smb-test-000146\n  reason: invalid_region_annotation\n\
+  \  upstream_index: 146\n- item_id: smb-test-000284\n  reason: invalid_region_annotation\n\
+  \  upstream_index: 284\n- item_id: smb-test-000539\n  reason: invalid_region_annotation\n\
+  \  upstream_index: 539\n- item_id: smb-test-000674\n  reason: invalid_region_annotation\n\
+  \  upstream_index: 674\ngeneration_algorithm:\n  algorithm: sha256\n  descriptor_canonicalization:\
+  \ yaml-safe-sort-keys-utf8-v1\n  domain_separator: smb-manifest-generation-v2\n\
+  \  records_canonicalization: jsonl-utf8-sorted-keys-v1\n  version: 2\ngeneration_id:\
+  \ 058f5d469b25e1abf1417f9ce196128bb3b46814d793b067a82fb06322bf91fb\ngrouping_unit:\
+  \ source_score\nhash_provenance:\n  encoded:\n    algorithm: sha256\n    canonicalization:\
+  \ encoded-bytes-v1\n    version: 1\n  pixels:\n    algorithm: sha256\n    alpha_policy:\
+  \ retain-alpha-and-underlying-rgb\n    canonicalization: canonical-rgba-frame-v2\n\
+  \    decoder_library: Pillow\n    decoder_version: 12.3.0\n    domain_separator:\
+  \ smb-canonical-rgba-frame-v2\n    failure_policy: safe-explicit-failure-no-digest\n\
+  \    max_encoded_bytes: 67108864\n    max_pixels: 100000000\n    metadata_policy:\
+  \ ignore-non-raster-metadata\n    orientation_policy: stored-raster-ignore-exif\n\
+  \    output_mode: RGBA8\n    version: 2\nmanifest_id: smb-evaluation-v2\nproject_split:\
+  \ evaluation\nrecord_type: manifest-descriptor\nrecords_sha256: 351364aecf6e99894a997910cc04e7adc8eb5707234d9dca29364d4baf1e20f0\n\
+  review_inference:\n  automated_population_audit_count: 685\n  exact_pair_automated_count:\
+  \ 0\n  inference_scope: sample_observation_only\n  not_applicable_visual_review_count:\
+  \ 0\n  not_visually_reviewed_count: 621\n  perceptual_pair_count: 14\n  perceptual_pair_human_review_count:\
+  \ 14\n  perceptual_pair_pending_count: 0\n  population_prevalence_inference: not_supported\n\
+  \  sampled_human_review_count: 64\n  targeted_human_review_count: 0\n  unavailable_visual_review_count:\
+  \ 0\nrow_count: 685\nrow_schema_id: manifest-row\nrow_schema_version: 2\nsample_selection:\n\
+  \  algorithm: sha256-rank\n  identity_fields:\n  - upstream_index\n  - item_id\n\
+  \  population_size: 685\n  sample_size: 64\n  seed: 20260818\n  selection_state:\
+  \ pre-review\n  version: 1\nschema_version: 2\nsource_key: smb\nsource_provenance:\n\
+  \  algorithm: sha256\n  dirty: true\n  lock_sha256: 495acdabff917633bea25232181401def9e44ec8600c87221cce45fc9f379dce\n\
+  \  patch_sha256: 811f7e19b5f2de07697b7096db6d39e6a60b1f81abf84a74aa57685e8f0c9bea\n\
+  \  revision: 9000bf9a3d592201bea248cb5e5372615cea2785\n  source_set_version: 1\n\
+  \  source_tree_sha256: d75111cc431b07b0d099a3cd50808a64624341aee92ba5f43141f6bd59d4ae68\n\
+  source_revision: 96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb\nupstream_split: test\n"
+generation_id: 058f5d469b25e1abf1417f9ce196128bb3b46814d793b067a82fb06322bf91fb
+manifest_id: smb-evaluation-v2
+metadata_sha256: 6e79642bd71e7abf36e42e756393e14eac104702c7c76740fec441e8655c1963
+record_type: manifest-recovery
+records_path: 058f5d469b25e1abf1417f9ce196128bb3b46814d793b067a82fb06322bf91fb/manifest-records.jsonl
+records_sha256: 351364aecf6e99894a997910cc04e7adc8eb5707234d9dca29364d4baf1e20f0
+recovery_descriptor_path: data/manifests/recovery/canonical-pixel-v2/6a481bae3852296bada7402662c520ba264ab771048b7b4865dbd27ff29d6ccb/manifest-recovery.yaml
+recovery_records_path: data/manifests/recovery/canonical-pixel-v2/6a481bae3852296bada7402662c520ba264ab771048b7b4865dbd27ff29d6ccb/manifest-records.jsonl.gz
+row_count: 685
+row_schema_id: manifest-row
+row_schema_version: 2
+schema_version: 2
+source_provenance:
+  algorithm: sha256
+  dirty: true
+  lock_sha256: 495acdabff917633bea25232181401def9e44ec8600c87221cce45fc9f379dce
+  patch_sha256: 811f7e19b5f2de07697b7096db6d39e6a60b1f81abf84a74aa57685e8f0c9bea
+  revision: 9000bf9a3d592201bea248cb5e5372615cea2785
+  source_set_version: 1
+  source_tree_sha256: d75111cc431b07b0d099a3cd50808a64624341aee92ba5f43141f6bd59d4ae68
+source_revision: 96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb
+uncompressed_size_bytes: 1559335
