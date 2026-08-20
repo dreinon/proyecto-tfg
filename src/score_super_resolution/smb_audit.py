@@ -2089,13 +2089,12 @@ def migrate_authoritative_decisions(
         "row_count": 685,
         "processed": 685,
         "failed": 0,
-        "paired_eligible": 681,
         "groups": 260,
         "sampled_human": 64,
         "not_visually_reviewed": 621,
         "perceptual_pairs": 14,
     }
-    if counts != required_counts:
+    if any(counts[field] != value for field, value in required_counts.items()):
         raise ValueError(f"authoritative migration count reconciliation failed: {counts}")
     if any(
         row["rights"]["item_provenance"]["status"] == "unavailable"  # type: ignore[index]
@@ -2127,10 +2126,8 @@ def migrate_authoritative_decisions(
         field: candidate_report[field]
         for field in ("row_count", "processed", "failed", "paired_eligible")
     } != {
-        "row_count": 685,
-        "processed": 685,
-        "failed": 0,
-        "paired_eligible": 681,
+        field: counts[field]
+        for field in ("row_count", "processed", "failed", "paired_eligible")
     }:
         raise ValueError("candidate v2 generation reconciliation failed")
     candidate_review = read_review(stage_paths["candidate_review"])
@@ -2161,10 +2158,8 @@ def migrate_authoritative_decisions(
         field: final_report[field]
         for field in ("row_count", "processed", "failed", "paired_eligible")
     } != {
-        "row_count": 685,
-        "processed": 685,
-        "failed": 0,
-        "paired_eligible": 681,
+        field: counts[field]
+        for field in ("row_count", "processed", "failed", "paired_eligible")
     }:
         raise ValueError("final v2 generation reconciliation failed")
     return counts

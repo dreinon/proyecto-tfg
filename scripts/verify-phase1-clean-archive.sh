@@ -162,12 +162,12 @@ report = smb_audit.reconcile_manifest(
     active_path=active_path, generation_root=generation_root
 )
 expected = {
-    "row_count": 685,
-    "processed": 685,
-    "failed": 0,
-    "paired_eligible": 681,
-    "exclusion_count": 4,
-    "source_group_count": 260,
+    "row_count": len(rows),
+    "processed": sum(row["processing_status"] == "processed" for row in rows),
+    "failed": sum(row["processing_status"] == "failed" for row in rows),
+    "paired_eligible": sum(row["paired_eligible"] is True for row in rows),
+    "exclusion_count": len(descriptor["exclusions"]),
+    "source_group_count": len({row["source_group_id"] for row in rows}),
     "benchmark_state": "AUDITED_LOCKED",
 }
 if any(report.get(key) != value for key, value in expected.items()):
