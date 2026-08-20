@@ -3249,12 +3249,22 @@ def _join_protected_candidate_evidence(
     if len(legacy_by_id) != len(legacy_rows) or set(fresh_by_id) != set(legacy_by_id):
         raise ValueError("protected stable item identities changed during canonical rehash")
 
-    stable_fields = ("audit_sample_member", "source_group_id", "source_identity", "rights")
+    stable_fields = ("audit_sample_member", "source_group_id", "source_identity")
     for item_id, legacy in legacy_by_id.items():
         fresh = fresh_by_id[item_id]
         for field in stable_fields:
             if fresh.get(field) != legacy.get(field):
                 raise ValueError(f"protected {field} evidence changed during canonical rehash")
+        legacy_rights = legacy.get("rights")
+        fresh_rights = fresh.get("rights")
+        neutral_rights = copy.deepcopy(legacy_rights)
+        if isinstance(neutral_rights, dict):
+            neutral_rights["item_provenance"] = {
+                "status": "pending",
+                "rationale": "Per-item provenance has not been established.",
+            }
+        if fresh_rights != legacy_rights and fresh_rights != neutral_rights:
+            raise ValueError("protected rights evidence changed during canonical rehash")
         if fresh.get("paired_eligible") != legacy.get("paired_eligible") or fresh.get(
             "paired_ineligibility_reason"
         ) != legacy.get("paired_ineligibility_reason"):
@@ -3272,12 +3282,17 @@ def _join_protected_candidate_evidence(
     if set(fresh_perceptual) != set(legacy_perceptual):
         raise ValueError("protected perceptual pair identities changed during canonical rehash")
     human_fields = ("disposition", "reviewer", "reviewed_at", "rationale")
-    identity_fields = ("pair_id", "candidate_type", "item_ids", "evidence_basis", "evidence")
+    identity_fields = ("pair_id", "candidate_type", "item_ids", "evidence")
     for pair_id, legacy_relation in legacy_perceptual.items():
         fresh_relation = fresh_perceptual[pair_id]
         if any(
             fresh_relation.get(field) != legacy_relation.get(field) for field in identity_fields
         ):
+            raise ValueError("protected perceptual pair evidence changed during canonical rehash")
+        if fresh_relation.get("evidence_basis") not in {
+            "perceptual_hash_candidate",
+            legacy_relation.get("evidence_basis"),
+        }:
             raise ValueError("protected perceptual pair evidence changed during canonical rehash")
         if fresh_relation.get("disposition") != "pending" and any(
             fresh_relation.get(field) != legacy_relation.get(field) for field in human_fields
@@ -3290,6 +3305,7 @@ def _join_protected_candidate_evidence(
         legacy = legacy_by_id[item_id]
         row = copy.deepcopy(dict(fresh))
         row["visual_review"] = copy.deepcopy(legacy["visual_review"])
+        row["rights"] = copy.deepcopy(legacy["rights"])
         legacy_relations = legacy.get("duplicate_relations")
         if not isinstance(legacy_relations, Sequence):
             raise ValueError("protected perceptual relations are malformed")

@@ -2214,7 +2214,7 @@ def test_canonical_rehash_candidate_rejects_protected_evidence_drift(
         )
 
 
-def test_verify_authoritative_determinism_materializes_only_verified_bytes(
+def test_candidate_verify_authoritative_determinism_materializes_only_verified_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[Path] = []
@@ -2244,7 +2244,54 @@ def test_verify_authoritative_determinism_materializes_only_verified_bytes(
     assert calls[0] != calls[1]
 
 
-def test_verify_authoritative_determinism_rejects_independent_byte_drift(
+def test_candidate_determinism_migrates_protected_rights_from_neutral_audit(
+    tmp_path: Path,
+) -> None:
+    active_path, _, _ = _legacy_recovery_bundle(tmp_path)
+    _, legacy_rows = smb_audit.resolve_active_manifest(
+        active_path=active_path,
+        generation_root=tmp_path / "legacy-generations",
+    )
+    fresh_rows = copy.deepcopy(legacy_rows)
+    for row in fresh_rows:
+        row["rights"]["item_provenance"] = {
+            "status": "pending",
+            "rationale": "Per-item provenance has not been established.",
+        }
+
+    migrated = smb_audit._join_protected_candidate_evidence(fresh_rows, legacy_rows)
+
+    assert [row["rights"] for row in migrated] == [row["rights"] for row in legacy_rows]
+
+
+def test_candidate_determinism_migrates_pending_perceptual_evidence_by_stable_pair(
+    tmp_path: Path,
+) -> None:
+    active_path, _, _ = _legacy_recovery_bundle(tmp_path)
+    _, legacy_rows = smb_audit.resolve_active_manifest(
+        active_path=active_path,
+        generation_root=tmp_path / "legacy-generations",
+    )
+    fresh_rows = copy.deepcopy(legacy_rows)
+    for row in fresh_rows:
+        for relation in row["duplicate_relations"]:
+            if relation["candidate_type"] == "perceptual":
+                relation.update(
+                    evidence_basis="perceptual_hash_candidate",
+                    disposition="pending",
+                    reviewer=None,
+                    reviewed_at=None,
+                    rationale="",
+                )
+
+    migrated = smb_audit._join_protected_candidate_evidence(fresh_rows, legacy_rows)
+
+    assert [row["duplicate_relations"] for row in migrated] == [
+        row["duplicate_relations"] for row in legacy_rows
+    ]
+
+
+def test_candidate_verify_authoritative_determinism_rejects_independent_byte_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     call_count = 0
