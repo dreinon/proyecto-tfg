@@ -55,10 +55,17 @@ for path in "${recovery_paths[@]}"; do
   git ls-files --error-unmatch -- "$path" >/dev/null
 done
 
-tracked_paths=$(git ls-files)
 forbidden_path_pattern='^(data/(raw|interim|processed)|artifacts/smb-manifests/generations|runs|checkpoints|models|outputs|metrics|rankings)/|\.(ckpt|pt|pth|safetensors|png|jpe?g|tiff?|bmp|webp)$|(^|/)(\.env($|\.)|kaggle\.json|credentials?\.json|secrets?\.json|tokens?\.json)$'
+head_paths=$(git ls-tree -r --name-only HEAD)
+if printf '%s\n' "$head_paths" | rg -i "$forbidden_path_pattern"; then
+  echo "forbidden raw, cache, credential, model, checkpoint, outcome, or run path is committed in HEAD" >&2
+  exit 1
+fi
+
+# The index and worktree are diagnostics only; the archive gate above is rooted in immutable HEAD.
+tracked_paths=$(git ls-files)
 if printf '%s\n' "$tracked_paths" | rg -i "$forbidden_path_pattern"; then
-  echo "forbidden raw, cache, credential, model, checkpoint, outcome, or run path is tracked" >&2
+  echo "forbidden raw, cache, credential, model, checkpoint, outcome, or run path is present in the index" >&2
   exit 1
 fi
 if git grep -nEI 'hf_[A-Za-z0-9]{20,}|-----BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}' HEAD -- .; then
@@ -87,6 +94,10 @@ archive_path="$temporary_root/proyecto-head.tar"
 archive_root="$temporary_root/proyecto"
 mkdir -p "$archive_root"
 git archive --format=tar --output="$archive_path" HEAD
+if tar -tf "$archive_path" | rg -i "$forbidden_path_pattern"; then
+  echo "forbidden raw, cache, credential, model, checkpoint, outcome, or run path entered the committed archive" >&2
+  exit 1
+fi
 if tar -tf "$archive_path" | rg -qx "$lock_path"; then
   echo "runtime install lock entered the committed archive" >&2
   exit 1
