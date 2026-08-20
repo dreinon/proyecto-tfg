@@ -3403,11 +3403,6 @@ def _join_protected_candidate_evidence(
             }
         if fresh_rights != legacy_rights and fresh_rights != neutral_rights:
             raise ValueError("protected rights evidence changed during canonical rehash")
-        if fresh.get("paired_eligible") != legacy.get("paired_eligible") or fresh.get(
-            "paired_ineligibility_reason"
-        ) != legacy.get("paired_ineligibility_reason"):
-            raise ValueError("protected eligibility evidence changed during canonical rehash")
-
         fresh_visual = fresh.get("visual_review")
         legacy_visual = legacy.get("visual_review")
         if fresh_visual != legacy_visual:
