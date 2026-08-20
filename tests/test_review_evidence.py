@@ -146,6 +146,25 @@ def test_canonical_review_accepts_emitted_pending_and_unavailable_state_unions()
     assert canonical_review_csv((policy, visual, pair))
 
 
+@pytest.mark.parametrize("reviewed_at", ("not-a-date", "2026-02-30", "2026-8-20"))
+def test_canonical_review_rejects_noncanonical_or_impossible_review_dates(
+    reviewed_at: str,
+) -> None:
+    row = _safe_rows()[0]
+    row["reviewed_at"] = reviewed_at
+
+    with pytest.raises(ReviewEvidenceError, match="reviewed_at"):
+        canonical_review_csv((row,))
+
+
+def test_canonical_review_rejects_duplicate_stable_review_keys() -> None:
+    first, second = (row.copy() for row in _safe_rows()[:2])
+    second["review_key"] = first["review_key"]
+
+    with pytest.raises(ReviewEvidenceError, match="review_key.*duplicate"):
+        canonical_review_csv((first, second))
+
+
 @pytest.mark.parametrize(
     ("review_kind", "updates", "match"),
     (
@@ -307,6 +326,74 @@ def test_candidate_save_rejects_non_pair_kind_without_mutating_or_persisting(
     assert review_path.read_bytes() == before_bytes
     assert session.expected_sha256 == before_sha256
     assert session.read_rows() == before_rows
+
+
+def test_summary_counts_unavailable_as_terminal_not_pending(tmp_path: Path) -> None:
+    review_path = tmp_path / "smb-review-v1.csv"
+    rows = _safe_rows()
+    pair = next(row for row in rows if row["review_kind"] == "duplicate_pair")
+    pair.update(
+        {
+            "review_status": "unavailable",
+            "reviewer": "",
+            "reviewed_at": "",
+            "rationale": "Perceptual comparison evidence is unavailable.",
+            "duplicate_disposition": "unavailable",
+        }
+    )
+    _write_rows(review_path, rows)
+    session = _session(review_path)
+    session.visual_item_ids = [
+        row["item_id"] for row in rows if row["review_kind"] == "visual_item"
+    ]
+    session.sample_ids = session.visual_item_ids.copy()
+    session.candidate_keys = [
+        row["review_key"] for row in rows if row["review_kind"] == "duplicate_pair"
+    ]
+
+    summary = session.summary()
+
+    assert summary["reviewed"] == len(rows) - 1
+    assert summary["unavailable"] == 1
+    assert summary["completed"] == len(rows)
+    assert summary["pending"] == 0
+
+
+def test_apply_policy_rejects_unsupported_legacy_item_ui_without_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = next(row.copy() for row in _safe_rows() if row["review_kind"] == "item_policy")
+    row.update(
+        {
+            "review_kind": "item",
+            "review_key": row["item_id"],
+            "review_status": "pending",
+            "reviewer": "",
+            "reviewed_at": "",
+            "rationale": "",
+            "quality_disposition": "",
+            "suitability_disposition": "pending",
+            "duplicate_disposition": "pending",
+            "dataset_licence_status": "pending",
+            "item_provenance_status": "pending",
+            "access_status": "pending",
+            "redistribution_status": "pending",
+            "figure_reproduction_status": "pending",
+        }
+    )
+    review_path = tmp_path / "legacy-review.csv"
+    _write_rows(review_path, [row])
+    session = _session(review_path)
+
+    def unexpected_write(_rows: list[dict[str, str]]) -> None:
+        raise AssertionError("unsupported legacy policy reached persistence")
+
+    monkeypatch.setattr(session, "write_rows", unexpected_write)
+
+    with pytest.raises(ReviewEvidenceError, match="legacy.*unsupported|unsupported.*legacy"):
+        session.apply_policy("Daniel Reinón García")
+
+    assert review_path.read_bytes() == canonical_review_csv((row,))
 
 
 @pytest.mark.parametrize(

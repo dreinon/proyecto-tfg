@@ -2300,7 +2300,6 @@ def test_canonical_rehash_candidate_is_deterministic_and_never_activates(
         "source_group",
         "rights",
         "source_identity",
-        "eligibility",
         "benchmark_state",
     ),
 )
@@ -2329,9 +2328,6 @@ def test_canonical_rehash_candidate_rejects_protected_evidence_drift(
         target["rights"]["figure_reproduction"]["status"] = "permitted"
     elif protected_family == "source_identity":
         target["source_identity"]["page_normalized"] = "changed"
-    elif protected_family == "eligibility":
-        target["paired_eligible"] = False
-        target["paired_ineligibility_reason"] = "changed"
     else:
         monkeypatch.setattr(
             smb_audit,
@@ -2357,6 +2353,21 @@ def test_canonical_rehash_candidate_rejects_protected_evidence_drift(
             legacy_recovery_records_path=recovery_records,
             staging_root=tmp_path / "candidate",
         )
+
+
+def test_protected_candidate_join_accepts_corrected_automated_eligibility() -> None:
+    legacy_rows = _compact_v2_rows()
+    fresh_rows = copy.deepcopy(legacy_rows)
+    fresh_rows[0]["paired_eligible"] = False
+    fresh_rows[0]["paired_ineligibility_reason"] = "missing_required_region_text"
+    fresh_rows[0]["annotations"]["required_text_present"] = False
+    fresh_rows[0]["annotations"]["failures"] = ["region_0_missing_kern"]
+
+    migrated = smb_audit._join_protected_candidate_evidence(fresh_rows, legacy_rows)
+
+    assert migrated[0]["paired_eligible"] is False
+    assert migrated[0]["paired_ineligibility_reason"] == "missing_required_region_text"
+    assert migrated[0]["annotations"]["required_text_present"] is False
 
 
 def test_candidate_verify_authoritative_determinism_materializes_only_verified_bytes(

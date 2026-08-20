@@ -22,6 +22,7 @@ ACTIVE_PATH = ROOT / "data" / "manifests" / "smb-evaluation-v1.yaml"
 SOURCE_PATH = ROOT / "data" / "sources" / "smb.yaml"
 SAMPLE_PATH = ROOT / "data" / "audits" / "smb-visual-sample-v1.csv"
 REVIEW_PATH = ROOT / "data" / "audits" / "smb-review-v1.csv"
+ARCHIVE_SCRIPT = ROOT / "scripts" / "verify-phase1-clean-archive.sh"
 
 EXPECTED_REVISION = "96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb"
 RECOVERY_PREFIX = "data/manifests/recovery/canonical-pixel-v2"
@@ -150,6 +151,7 @@ def test_active_phase1_gap_closure_reconciles(tmp_path: Path) -> None:
     assert descriptor["upstream_split"] == "test"
     assert descriptor["project_split"] == "evaluation"
     assert descriptor["benchmark_state"] == recovery_report["benchmark_state"] == "AUDITED_LOCKED"
+    assert descriptor["source_provenance"]["dirty"] is False
     assert report == {
         "row_count": 685,
         "processed": 685,
@@ -319,3 +321,11 @@ def test_active_phase1_gap_closure_reconciles(tmp_path: Path) -> None:
     }
     assert forbidden_outcome_fields.isdisjoint(descriptor)
     assert all(forbidden_outcome_fields.isdisjoint(row) for row in rows)
+
+
+def test_clean_archive_scans_head_and_tar_listing_with_the_same_forbidden_policy() -> None:
+    script = ARCHIVE_SCRIPT.read_text(encoding="utf-8")
+
+    assert "git ls-tree -r --name-only HEAD" in script
+    assert 'tar -tf "$archive_path"' in script
+    assert 'tar -tf "$archive_path" | rg -i "$forbidden_path_pattern"' in script
