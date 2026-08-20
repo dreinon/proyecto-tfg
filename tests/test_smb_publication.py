@@ -1585,6 +1585,55 @@ def test_publication_active_parent_swap_stays_on_retained_inode(tmp_path: Path) 
     assert retained_pointer["generation_id"] != old_generation_id
 
 
+@pytest.mark.parametrize(
+    "boundary",
+    ("active_parent_anchored", "generation_root_anchored", "selected_generation_anchored"),
+)
+def test_active_resolution_retains_every_directory_authority(
+    tmp_path: Path, boundary: str
+) -> None:
+    active_path, generation_root = _publish(tmp_path, _full_rows())
+    pointer = yaml.safe_load(active_path.read_text(encoding="utf-8"))
+    generation_id = pointer["generation_id"]
+    original_descriptor, original_rows = smb_audit.resolve_active_manifest(
+        active_path=active_path,
+        generation_root=generation_root,
+    )
+    outside = tmp_path / f"outside-{boundary}"
+    outside.mkdir()
+    swapped = False
+
+    def hook(observed: str) -> None:
+        nonlocal swapped
+        if observed != boundary:
+            return
+        if boundary == "active_parent_anchored":
+            retained = tmp_path / "retained-active-parent"
+            active_path.parent.rename(retained)
+            active_path.parent.symlink_to(outside, target_is_directory=True)
+            (outside / active_path.name).write_text("outside: true\n", encoding="utf-8")
+        elif boundary == "generation_root_anchored":
+            retained = tmp_path / "retained-generation-root"
+            generation_root.rename(retained)
+            generation_root.symlink_to(outside, target_is_directory=True)
+        else:
+            selected = generation_root / generation_id
+            retained = generation_root / f"{generation_id}.retained"
+            selected.rename(retained)
+            selected.symlink_to(outside, target_is_directory=True)
+        swapped = True
+
+    resolved_descriptor, resolved_rows = smb_audit.resolve_active_manifest(
+        active_path=active_path,
+        generation_root=generation_root,
+        boundary_hook=hook,
+    )
+
+    assert swapped is True
+    assert resolved_descriptor == original_descriptor
+    assert resolved_rows == original_rows
+
+
 def test_install_candidate_surface_and_permanent_lock_ignore_are_declared() -> None:
     project_root = Path(__file__).parents[1]
     lock_path = project_root / "data/manifests/.smb-evaluation-v1.install.lock"

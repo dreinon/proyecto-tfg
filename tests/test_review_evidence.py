@@ -471,6 +471,48 @@ def test_unique_same_directory_temps_do_not_reuse_fixed_collision(tmp_path: Path
     assert not any(path.exists() for path in observed)
 
 
+@pytest.mark.parametrize(
+    "boundary",
+    ("review_before_cas_read", "review_before_temp_create", "review_before_replace"),
+)
+def test_review_save_parent_swap_stays_on_retained_directory(
+    tmp_path: Path, boundary: str
+) -> None:
+    review_parent = tmp_path / "review-parent"
+    review_parent.mkdir()
+    review_path = review_parent / "smb-review-v1.csv"
+    _write_rows(review_path, _safe_rows())
+    before = read_review(review_path)
+    changed = _changed_rows(rationale=f"guardado confinado en {boundary}")
+    changed_bytes = canonical_review_csv(changed)
+    retained_parent = tmp_path / f"retained-{boundary}"
+    outside_parent = tmp_path / f"outside-{boundary}"
+    outside_parent.mkdir()
+    outside_review = outside_parent / review_path.name
+    outside_review.write_bytes(before.canonical_bytes)
+    swapped = False
+
+    def hook(observed: str) -> None:
+        nonlocal swapped
+        if observed == boundary:
+            review_parent.rename(retained_parent)
+            review_parent.symlink_to(outside_parent, target_is_directory=True)
+            swapped = True
+
+    new_sha256 = save_review(
+        review_path,
+        changed,
+        expected_sha256=before.sha256,
+        boundary_hook=hook,
+    )
+
+    assert swapped is True
+    assert outside_review.read_bytes() == before.canonical_bytes
+    retained_review = retained_parent / review_path.name
+    assert retained_review.read_bytes() == changed_bytes
+    assert new_sha256 == read_review(retained_review).sha256
+
+
 @pytest.mark.parametrize("boundary", REVIEW_SAVE_BOUNDARIES)
 def test_ordinary_failure_boundaries_leave_complete_old_or_new(
     tmp_path: Path, boundary: str
