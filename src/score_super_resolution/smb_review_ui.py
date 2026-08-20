@@ -14,9 +14,19 @@ from IPython.display import clear_output
 
 from score_super_resolution.benchmark_policy import BenchmarkPurpose
 from score_super_resolution.review_evidence import (
+    HUMAN_PAIR_CHOICES,
+    ITEM_REVIEW_KINDS,
+    LEGACY_SUITABILITY_CHOICES,
+    PAIR_REVIEW_KINDS,
+    QUALITY_FLAG_CHOICES,
+    VISUAL_SUITABILITY_CHOICES,
     read_review,
     save_review,
+    validate_duplicate_disposition,
     validate_human_cell,
+    validate_quality_flags,
+    validate_review_kind,
+    validate_suitability_disposition,
 )
 from score_super_resolution.smb import load_smb
 
@@ -166,9 +176,25 @@ class SMBReviewSession:
             raise ValueError("Revisor y justificación son obligatorios")
         validate_human_cell(reviewer, field="reviewer", review_key=item_id)
         validate_human_cell(rationale, field="rationale", review_key=item_id)
+        quality_flags = validate_quality_flags(quality_flags, review_key=item_id)
         rows = self.read_rows()
         visual_key = f"visual:{item_id}"
-        row = next(row for row in rows if row["review_key"] in {item_id, visual_key})
+        row = next(
+            (row for row in rows if row["review_key"] in {item_id, visual_key}),
+            None,
+        )
+        kind = validate_review_kind(
+            "" if row is None else row["review_kind"],
+            review_key=item_id,
+            allowed=ITEM_REVIEW_KINDS,
+        )
+        validate_suitability_disposition(
+            suitability,
+            review_kind=kind,
+            review_status="reviewed",
+            review_key=item_id,
+        )
+        assert row is not None
         if row["review_kind"] == "visual_item":
             policy = next(policy for policy in rows if policy["review_key"] == f"policy:{item_id}")
             if policy["review_status"] != "reviewed":
@@ -185,9 +211,7 @@ class SMBReviewSession:
         )
         if any(not policy[field] or policy[field] == "pending" for field in policy_fields):
             raise ValueError("Aplica primero la política general")
-        row["quality_disposition"] = (
-            ";".join(sorted(set(quality_flags))) if quality_flags else "acceptable"
-        )
+        row["quality_disposition"] = ";".join(quality_flags) if quality_flags else "acceptable"
         row["suitability_disposition"] = suitability
         row["review_status"] = "reviewed"
         row["reviewer"] = reviewer
@@ -210,7 +234,19 @@ class SMBReviewSession:
         validate_human_cell(reviewer, field="reviewer", review_key=review_key)
         validate_human_cell(rationale, field="rationale", review_key=review_key)
         rows = self.read_rows()
-        row = next(row for row in rows if row["review_key"] == review_key)
+        row = next((row for row in rows if row["review_key"] == review_key), None)
+        kind = validate_review_kind(
+            "" if row is None else row["review_kind"],
+            review_key=review_key,
+            allowed=PAIR_REVIEW_KINDS,
+        )
+        validate_duplicate_disposition(
+            disposition,
+            review_kind=kind,
+            review_status="reviewed",
+            review_key=review_key,
+        )
+        assert row is not None
         row["review_status"] = "reviewed"
         row["reviewer"] = reviewer
         row["reviewed_at"] = date.today().isoformat()
@@ -494,12 +530,15 @@ class SMBReviewSession:
     def item_widget(self) -> widgets.Widget:
         item_selector = widgets.Dropdown(options=[], description="Marcada:")
         quality = {
-            flag: widgets.Checkbox(value=False, description=flag)
-            for flag in ("blurred", "low_contrast", "oversized", "skewed", "unprocessable")
+            flag: widgets.Checkbox(value=False, description=flag) for flag in QUALITY_FLAG_CHOICES
         }
-        suitability = widgets.Dropdown(
-            options=["suitable", "unsuitable", "unavailable"], description="Idoneidad:"
+        review_kinds = {row["review_kind"] for row in self.read_rows()}
+        suitability_choices = (
+            VISUAL_SUITABILITY_CHOICES
+            if "visual_item" in review_kinds
+            else LEGACY_SUITABILITY_CHOICES
         )
+        suitability = widgets.Dropdown(options=suitability_choices, description="Idoneidad:")
         rationale = widgets.Textarea(
             description="Justificación:", layout=widgets.Layout(width="900px", height="80px")
         )
@@ -603,7 +642,7 @@ class SMBReviewSession:
             continuous_update=False,
         )
         disposition = widgets.Dropdown(
-            options=["distinct", "related", "duplicate", "unavailable"],
+            options=HUMAN_PAIR_CHOICES,
             description="Relación:",
         )
         rationale = widgets.Textarea(

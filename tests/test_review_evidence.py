@@ -254,9 +254,7 @@ def test_invalid_pair_enum_save_leaves_file_digest_and_session_rows_unchanged(
     _write_rows(review_path, _safe_rows())
     session = _session(review_path)
     review_key = next(
-        row["review_key"]
-        for row in session.read_rows()
-        if row["review_kind"] == "duplicate_pair"
+        row["review_key"] for row in session.read_rows() if row["review_kind"] == "duplicate_pair"
     )
     before_bytes = review_path.read_bytes()
     before_sha256 = session.expected_sha256

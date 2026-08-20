@@ -39,11 +39,17 @@ REVIEW_FIELDS = (
 LEGACY_REVIEW_KINDS = frozenset({"item", "candidate"})
 V2_REVIEW_KINDS = frozenset({"item_policy", "visual_item", "duplicate_pair"})
 REVIEW_KINDS = LEGACY_REVIEW_KINDS | V2_REVIEW_KINDS
+ITEM_REVIEW_KINDS = frozenset({"item", "visual_item"})
+PAIR_REVIEW_KINDS = frozenset({"candidate", "duplicate_pair"})
 REVIEW_STATUSES = frozenset({"pending", "reviewed", "unavailable"})
-QUALITY_FLAGS = frozenset({"blurred", "low_contrast", "oversized", "skewed", "unprocessable"})
-LEGACY_SUITABILITY_DISPOSITIONS = frozenset({"suitable", "unsuitable", "unavailable"})
-VISUAL_SUITABILITY_DISPOSITIONS = frozenset({"suitable", "unsuitable", "uncertain", "not_assessed"})
-HUMAN_PAIR_DISPOSITIONS = frozenset({"distinct", "duplicate", "related"})
+QUALITY_FLAG_CHOICES = ("blurred", "low_contrast", "oversized", "skewed", "unprocessable")
+QUALITY_FLAGS = frozenset(QUALITY_FLAG_CHOICES)
+LEGACY_SUITABILITY_CHOICES = ("suitable", "unsuitable", "unavailable")
+LEGACY_SUITABILITY_DISPOSITIONS = frozenset(LEGACY_SUITABILITY_CHOICES)
+VISUAL_SUITABILITY_CHOICES = ("suitable", "unsuitable", "uncertain", "not_assessed")
+VISUAL_SUITABILITY_DISPOSITIONS = frozenset(VISUAL_SUITABILITY_CHOICES)
+HUMAN_PAIR_CHOICES = ("distinct", "related", "duplicate")
+HUMAN_PAIR_DISPOSITIONS = frozenset(HUMAN_PAIR_CHOICES)
 DATASET_LICENCE_STATUSES = frozenset({"confirmed", "restricted"})
 ITEM_PROVENANCE_STATUSES = frozenset({"confirmed", "unavailable"})
 ACCESS_STATUSES = frozenset({"confirmed", "restricted"})
@@ -119,6 +125,16 @@ def _require_domain_value(row: Mapping[str, str], field: str, allowed: frozenset
     value = row[field]
     if value not in allowed:
         raise _cell_error(field=field, review_key=row["review_key"], reason="is invalid")
+    return value
+
+
+def validate_review_kind(
+    value: str, *, review_key: str, allowed: frozenset[str] = REVIEW_KINDS
+) -> str:
+    """Validate a review kind against the canonical vocabulary and caller subset."""
+
+    if value not in REVIEW_KINDS or value not in allowed:
+        raise _cell_error(field="review_kind", review_key=review_key, reason="is invalid")
     return value
 
 
