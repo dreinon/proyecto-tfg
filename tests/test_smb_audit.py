@@ -513,6 +513,47 @@ def test_descendant_symlink_swap_before_open_never_reads_outside(
     assert hashlib.sha256(outside_bytes).hexdigest() not in json.dumps(row, sort_keys=True)
 
 
+def test_disjoint_trusted_roots_preserve_candidate_selection(tmp_path: Path) -> None:
+    first_root = tmp_path / "first-cache"
+    second_root = tmp_path / "second-cache"
+    first_root.mkdir()
+    second_root.mkdir()
+    candidate = second_root / "image.png"
+    encoded = _audit_records()[0]["image"]
+    candidate.write_bytes(encoded)
+
+    row = audit_item(
+        _path_record(candidate),
+        upstream_index=0,
+        source_descriptor=_source_descriptor(),
+        trusted_cache_roots=(first_root, second_root),
+    )
+
+    assert row["processing_status"] == "processed"
+    assert row["encoded_sha256"] == hashlib.sha256(encoded).hexdigest()
+
+
+def test_nested_trusted_roots_remain_fail_closed_when_selection_is_ambiguous(
+    tmp_path: Path,
+) -> None:
+    outer_root = tmp_path / "cache"
+    inner_root = outer_root / "nested"
+    inner_root.mkdir(parents=True)
+    candidate = inner_root / "image.png"
+    candidate.write_bytes(_audit_records()[0]["image"])
+
+    row = audit_item(
+        _path_record(candidate),
+        upstream_index=0,
+        source_descriptor=_source_descriptor(),
+        trusted_cache_roots=(outer_root, inner_root),
+    )
+
+    assert row["processing_status"] == "failed"
+    assert row["unprocessable_reason"] == "image_path_outside_trusted_cache"
+    assert row["encoded_sha256"] is None
+
+
 def test_audit_requires_an_explicit_non_empty_trusted_cache_root() -> None:
     with pytest.raises(ValueError, match="trusted_cache_roots"):
         audit_dataset(

@@ -26,6 +26,7 @@ import warnings
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from datetime import date
 from itertools import combinations
 from pathlib import Path, PurePosixPath
@@ -161,6 +162,22 @@ _IMAGE_PATH_FAILURE_CODES = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class _TrustedCacheComponent:
+    name: str
+    device: int
+    inode: int
+
+
+@dataclass(frozen=True)
+class _TrustedCacheRoot:
+    path: Path
+    anchor: str
+    anchor_device: int
+    anchor_inode: int
+    components: tuple[_TrustedCacheComponent, ...]
+
+
 class ManifestPublicationError(RuntimeError):
     """Report a generation integrity/publication failure and pointer commit state."""
 
@@ -257,10 +274,12 @@ def _nullable_positive_integer(value: object) -> int | None:
     return value
 
 
-def _normalized_trusted_cache_roots(trusted_cache_roots: Sequence[Path]) -> tuple[Path, ...]:
+def _normalized_trusted_cache_roots(
+    trusted_cache_roots: Sequence[Path],
+) -> tuple[_TrustedCacheRoot, ...]:
     if isinstance(trusted_cache_roots, (str, bytes, bytearray)) or not trusted_cache_roots:
         raise ValueError("trusted_cache_roots must be a non-empty sequence")
-    normalized: list[Path] = []
+    normalized: list[_TrustedCacheRoot] = []
     for raw_root in trusted_cache_roots:
         root = Path(raw_root)
         if not root.is_absolute():
@@ -269,10 +288,36 @@ def _normalized_trusted_cache_roots(trusted_cache_roots: Sequence[Path]) -> tupl
             resolved = root.resolve(strict=True)
         except (OSError, RuntimeError) as error:
             raise ValueError("trusted_cache_roots must contain existing directories") from error
-        if not resolved.is_dir():
-            raise ValueError("trusted_cache_roots must contain only directories")
-        if resolved not in normalized:
-            normalized.append(resolved)
+        try:
+            anchor = resolved.anchor
+            anchor_stat = os.stat(anchor, follow_symlinks=False)
+            if not stat.S_ISDIR(anchor_stat.st_mode):
+                raise ValueError("trusted_cache_roots must contain only directories")
+            current = Path(anchor)
+            components: list[_TrustedCacheComponent] = []
+            for name in resolved.parts[1:]:
+                current /= name
+                opened = os.stat(current, follow_symlinks=False)
+                if not stat.S_ISDIR(opened.st_mode):
+                    raise ValueError("trusted_cache_roots must contain only directories")
+                components.append(
+                    _TrustedCacheComponent(
+                        name=name,
+                        device=opened.st_dev,
+                        inode=opened.st_ino,
+                    )
+                )
+        except OSError as error:
+            raise ValueError("trusted_cache_roots must contain existing directories") from error
+        trusted_root = _TrustedCacheRoot(
+            path=resolved,
+            anchor=anchor,
+            anchor_device=anchor_stat.st_dev,
+            anchor_inode=anchor_stat.st_ino,
+            components=tuple(components),
+        )
+        if all(existing.path != trusted_root.path for existing in normalized):
+            normalized.append(trusted_root)
     if not normalized:
         raise ValueError("trusted_cache_roots must contain at least one directory")
     return tuple(normalized)
@@ -284,9 +329,54 @@ def _path_failure_from_os_error(error: OSError) -> _ImageIngestionError:
     return _ImageIngestionError("image_path_unavailable")
 
 
+def _open_trusted_cache_root(trusted_root: _TrustedCacheRoot) -> int:
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory_only = getattr(os, "O_DIRECTORY", 0)
+    close_on_exec = getattr(os, "O_CLOEXEC", 0)
+    if no_follow == 0 or directory_only == 0 or not _OS_OPEN_SUPPORTS_DIR_FD:
+        raise RuntimeError("secure no-follow file access is unavailable")
+    directory_fd: int | None = None
+    try:
+        directory_fd = os.open(
+            trusted_root.anchor,
+            os.O_RDONLY | directory_only | no_follow | close_on_exec,
+        )
+        anchor_stat = os.fstat(directory_fd)
+        if (anchor_stat.st_dev, anchor_stat.st_ino) != (
+            trusted_root.anchor_device,
+            trusted_root.anchor_inode,
+        ):
+            raise _ImageIngestionError("image_path_unavailable")
+        for component in trusted_root.components:
+            next_fd: int | None = None
+            try:
+                next_fd = os.open(
+                    component.name,
+                    os.O_RDONLY | directory_only | no_follow | close_on_exec,
+                    dir_fd=directory_fd,
+                )
+                opened = os.fstat(next_fd)
+                if not stat.S_ISDIR(opened.st_mode) or (opened.st_dev, opened.st_ino) != (
+                    component.device,
+                    component.inode,
+                ):
+                    raise _ImageIngestionError("image_path_unavailable")
+            except Exception:
+                if next_fd is not None:
+                    os.close(next_fd)
+                raise
+            os.close(directory_fd)
+            directory_fd = next_fd
+        return directory_fd
+    except Exception:
+        if directory_fd is not None:
+            os.close(directory_fd)
+        raise
+
+
 def _read_trusted_regular_file(
     raw_path: str,
-    trusted_cache_roots: Sequence[Path],
+    trusted_cache_roots: Sequence[_TrustedCacheRoot],
     *,
     max_encoded_bytes: int,
 ) -> bytes:
@@ -295,20 +385,16 @@ def _read_trusted_regular_file(
     candidate = Path(raw_path)
     if not candidate.is_absolute() or ".." in candidate.parts:
         raise _ImageIngestionError("image_path_invalid")
-    try:
-        resolved_candidate = candidate.resolve(strict=False)
-    except (OSError, RuntimeError) as error:
-        raise _ImageIngestionError("image_path_unavailable") from error
     matching_roots = [
         root
         for root in trusted_cache_roots
-        if resolved_candidate != root and resolved_candidate.is_relative_to(root)
+        if candidate != root.path and candidate.is_relative_to(root.path)
     ]
     if len(matching_roots) != 1:
         raise _ImageIngestionError("image_path_outside_trusted_cache")
     trusted_root = matching_roots[0]
     try:
-        relative = candidate.relative_to(trusted_root)
+        relative = candidate.relative_to(trusted_root.path)
     except ValueError as error:
         raise _ImageIngestionError("image_path_outside_trusted_cache") from error
     if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
@@ -320,20 +406,20 @@ def _read_trusted_regular_file(
     non_blocking = getattr(os, "O_NONBLOCK", 0)
     if no_follow == 0 or directory_only == 0:
         raise RuntimeError("secure no-follow file access is unavailable")
+    trusted_root_fd: int | None = None
     directory_fd: int | None = None
+    descendant_fds: list[int] = []
     file_fd: int | None = None
     try:
-        directory_fd = os.open(
-            trusted_root,
-            os.O_RDONLY | directory_only | no_follow | close_on_exec,
-        )
+        trusted_root_fd = _open_trusted_cache_root(trusted_root)
+        directory_fd = trusted_root_fd
         for component in relative.parts[:-1]:
             next_fd = os.open(
                 component,
                 os.O_RDONLY | directory_only | no_follow | close_on_exec,
                 dir_fd=directory_fd,
             )
-            os.close(directory_fd)
+            descendant_fds.append(next_fd)
             directory_fd = next_fd
         file_fd = os.open(
             relative.parts[-1],
@@ -366,14 +452,16 @@ def _read_trusted_regular_file(
     finally:
         if file_fd is not None:
             os.close(file_fd)
-        if directory_fd is not None:
-            os.close(directory_fd)
+        for descendant_fd in reversed(descendant_fds):
+            os.close(descendant_fd)
+        if trusted_root_fd is not None:
+            os.close(trusted_root_fd)
 
 
 def _encoded_image(
     record: Mapping[str, object],
     *,
-    trusted_cache_roots: Sequence[Path],
+    trusted_cache_roots: Sequence[_TrustedCacheRoot],
     max_encoded_bytes: int,
 ) -> bytes:
     image = record.get("image")
@@ -598,7 +686,7 @@ def _audit_after_guard(
     *,
     upstream_index: int,
     source_revision: str,
-    trusted_cache_roots: Sequence[Path],
+    trusted_cache_roots: Sequence[_TrustedCacheRoot],
     max_encoded_bytes: int,
     max_pixels: int,
     detailed_limit_failures: bool = False,
