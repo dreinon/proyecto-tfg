@@ -14,6 +14,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 REVIEW_FIELDS = (
@@ -258,6 +259,16 @@ def validate_review_row_domains(row: Mapping[str, str]) -> None:
         for field in ("reviewer", "reviewed_at", "rationale"):
             if not row[field].strip():
                 raise _cell_error(field=field, review_key=key, reason="is required")
+        try:
+            reviewed_date = date.fromisoformat(row["reviewed_at"])
+        except ValueError as error:
+            raise _cell_error(
+                field="reviewed_at", review_key=key, reason="must be a canonical ISO date"
+            ) from error
+        if reviewed_date.isoformat() != row["reviewed_at"]:
+            raise _cell_error(
+                field="reviewed_at", review_key=key, reason="must be a canonical ISO date"
+            )
     elif row["reviewed_at"]:
         raise _cell_error(
             field="review_status",
@@ -425,6 +436,7 @@ def validate_review_rows(
     """Validate the exact review shape and every cell without normalizing its contents."""
 
     validated: list[dict[str, str]] = []
+    seen_keys: set[str] = set()
     expected_fields = set(REVIEW_FIELDS)
     for index, supplied in enumerate(rows):
         if set(supplied) != expected_fields:
@@ -436,6 +448,9 @@ def validate_review_rows(
             if not isinstance(value, str):
                 raise _cell_error(field=field, review_key=key, reason="must be text")
             row[field] = validate_human_cell(value, field=field, review_key=key)
+        if row["review_key"] in seen_keys:
+            raise _cell_error(field="review_key", review_key=key, reason="is duplicate")
+        seen_keys.add(row["review_key"])
         validate_review_row_domains(row)
         validated.append(row)
     return validated
