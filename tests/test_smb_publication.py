@@ -1267,7 +1267,7 @@ def test_validate_review_is_strictly_read_only(tmp_path: Path) -> None:
     ("mutation", "match"),
     (
         ("missing", "missing review key"),
-        ("duplicate", "duplicate review key"),
+        ("duplicate", "review_key is duplicate"),
         ("unknown", "unknown review key"),
         ("pending", "must be reviewed"),
         ("missing_reviewer", "reviewer"),

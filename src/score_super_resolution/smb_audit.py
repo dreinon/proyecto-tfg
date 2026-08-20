@@ -126,6 +126,9 @@ PUBLICATION_BOUNDARIES = (
     "pointer_fsynced",
     "pointer_replaced",
     "active_parent_fsynced",
+)
+RESOLUTION_BOUNDARIES = (
+    "active_parent_anchored",
     "generation_root_anchored",
     "selected_generation_anchored",
 )
@@ -2161,7 +2164,7 @@ def migrate_authoritative_decisions(
 
 
 def _publication_boundary(name: str, hook: Callable[[str], None] | None) -> None:
-    if name not in PUBLICATION_BOUNDARIES:
+    if name not in PUBLICATION_BOUNDARIES and name not in RESOLUTION_BOUNDARIES:
         raise ValueError(f"unknown publication boundary: {name}")
     if hook is not None:
         hook(name)
