@@ -406,6 +406,113 @@ def test_path_swap_between_validation_and_open_is_rejected(
     assert row["encoded_sha256"] is None
 
 
+@pytest.mark.parametrize("component_index", range(3), ids=("top", "middle", "root"))
+@pytest.mark.parametrize("replacement_kind", ("symlink", "directory"))
+def test_each_trusted_root_component_swap_after_normalization_never_reads_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    component_index: int,
+    replacement_kind: str,
+) -> None:
+    trusted_components = ["trusted-top", "trusted-middle", "cache"]
+    cache_root = tmp_path.joinpath(*trusted_components)
+    cache_root.mkdir(parents=True)
+    candidate = cache_root / "image.png"
+    original_bytes = _audit_records()[0]["image"]
+    candidate.write_bytes(original_bytes)
+    outside_buffer = io.BytesIO()
+    Image.new("RGB", (2, 2), color=(255, 0, 255)).save(outside_buffer, format="PNG")
+    outside_bytes = outside_buffer.getvalue()
+    target = tmp_path.joinpath(*trusted_components[: component_index + 1])
+    suffix = trusted_components[component_index + 1 :]
+    outside_target = tmp_path / f"outside-{component_index}-{replacement_kind}"
+    outside_candidate = outside_target.joinpath(*suffix, candidate.name)
+    outside_candidate.parent.mkdir(parents=True)
+    outside_candidate.write_bytes(outside_bytes)
+    retained = tmp_path / f"retained-{component_index}-{replacement_kind}"
+    original_open = os.open
+    swapped = False
+
+    def swap_before_root_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        whole_root_open = dir_fd is None and Path(path) == cache_root
+        anchored_root_open = dir_fd is not None and path == trusted_components[0]
+        if not swapped and (whole_root_open or anchored_root_open):
+            target.rename(retained)
+            if replacement_kind == "symlink":
+                target.symlink_to(outside_target, target_is_directory=True)
+            else:
+                replacement_candidate = target.joinpath(*suffix, candidate.name)
+                replacement_candidate.parent.mkdir(parents=True)
+                replacement_candidate.write_bytes(outside_bytes)
+            swapped = True
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(smb_audit.os, "open", swap_before_root_open)
+    row = _audit_path(candidate, trusted_cache_root=cache_root)
+
+    assert swapped is True
+    assert row["encoded_sha256"] != hashlib.sha256(outside_bytes).hexdigest()
+    assert (
+        row["processing_status"] == "failed"
+        or row["encoded_sha256"] == hashlib.sha256(original_bytes).hexdigest()
+    )
+
+
+@pytest.mark.parametrize("descendant_index", (0, 1), ids=("first", "second"))
+def test_descendant_symlink_swap_before_open_never_reads_outside(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    descendant_index: int,
+) -> None:
+    cache_root = tmp_path / "cache"
+    descendants = ["dataset", "images"]
+    candidate = cache_root.joinpath(*descendants, "image.png")
+    candidate.parent.mkdir(parents=True)
+    original_bytes = _audit_records()[0]["image"]
+    candidate.write_bytes(original_bytes)
+    outside_buffer = io.BytesIO()
+    Image.new("RGB", (2, 2), color=(0, 255, 255)).save(outside_buffer, format="PNG")
+    outside_bytes = outside_buffer.getvalue()
+    target = cache_root.joinpath(*descendants[: descendant_index + 1])
+    suffix = descendants[descendant_index + 1 :]
+    outside_target = tmp_path / f"outside-descendant-{descendant_index}"
+    outside_candidate = outside_target.joinpath(*suffix, candidate.name)
+    outside_candidate.parent.mkdir(parents=True)
+    outside_candidate.write_bytes(outside_bytes)
+    retained = cache_root / f"retained-descendant-{descendant_index}"
+    original_open = os.open
+    swapped = False
+
+    def swap_before_descendant_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if not swapped and dir_fd is not None and path == descendants[descendant_index]:
+            target.rename(retained)
+            target.symlink_to(outside_target, target_is_directory=True)
+            swapped = True
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(smb_audit.os, "open", swap_before_descendant_open)
+    row = _audit_path(candidate, trusted_cache_root=cache_root)
+
+    assert swapped is True
+    assert row["processing_status"] == "failed"
+    assert row["encoded_sha256"] is None
+    assert hashlib.sha256(outside_bytes).hexdigest() not in json.dumps(row, sort_keys=True)
+
+
 def test_audit_requires_an_explicit_non_empty_trusted_cache_root() -> None:
     with pytest.raises(ValueError, match="trusted_cache_roots"):
         audit_dataset(
