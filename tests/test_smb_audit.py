@@ -554,6 +554,45 @@ def test_nested_trusted_roots_remain_fail_closed_when_selection_is_ambiguous(
     assert row["encoded_sha256"] is None
 
 
+@pytest.mark.parametrize("symlink_position", ("ancestor", "root"))
+def test_symlinked_trusted_root_is_rejected_before_any_file_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    symlink_position: str,
+) -> None:
+    physical_parent = tmp_path / "physical-parent"
+    physical_root = physical_parent / "cache"
+    physical_root.mkdir(parents=True)
+    encoded = _audit_records()[0]["image"]
+    (physical_root / "image.png").write_bytes(encoded)
+    if symlink_position == "root":
+        supplied_root = tmp_path / "cache-link"
+        supplied_root.symlink_to(physical_root, target_is_directory=True)
+    else:
+        supplied_parent = tmp_path / "parent-link"
+        supplied_parent.symlink_to(physical_parent, target_is_directory=True)
+        supplied_root = supplied_parent / "cache"
+    candidate = supplied_root / "image.png"
+    read_attempted = False
+
+    def unexpected_read(_descriptor: int, _size: int) -> bytes:
+        nonlocal read_attempted
+        read_attempted = True
+        raise AssertionError("symlinked trusted root reached file read")
+
+    monkeypatch.setattr(smb_audit.os, "read", unexpected_read)
+
+    with pytest.raises(ValueError, match="trusted_cache_roots.*symlink"):
+        audit_item(
+            _path_record(candidate),
+            upstream_index=0,
+            source_descriptor=_source_descriptor(),
+            trusted_cache_roots=(supplied_root,),
+        )
+
+    assert read_attempted is False
+
+
 def test_audit_requires_an_explicit_non_empty_trusted_cache_root() -> None:
     with pytest.raises(ValueError, match="trusted_cache_roots"):
         audit_dataset(
