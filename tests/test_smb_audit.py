@@ -115,8 +115,8 @@ def test_fixture_audit_preserves_every_input_and_candidate_state() -> None:
     assert rows[5]["processing_status"] == "failed"
     assert rows[5]["unprocessable_reason"] == "image_too_large"
     assert rows[6]["processing_status"] == "processed"
-    assert rows[6]["required_text_present"] is False
-    assert rows[6]["paired_eligible"] is False
+    assert rows[6]["required_text_present"] is True
+    assert rows[6]["paired_eligible"] is True
     assert rows[7]["item_id"] == "smb-test-000007"
     assert "unsafe_upstream_id" in rows[7]["annotation_failures"]
     assert rows[7]["bbox_valid"] is False
@@ -136,7 +136,14 @@ def test_fixture_audit_preserves_every_input_and_candidate_state() -> None:
 
 def test_audit_accepts_smb_xywh_region_mapping() -> None:
     record = _audit_records()[0]
-    record["regions"] = [{"bbox": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}}]
+    record["regions"] = [
+        {
+            "bbox": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0},
+            "raw": "raw",
+            "kern": "**kern",
+            "ekern": "ekern",
+        }
+    ]
 
     row = audit_item(
         record,

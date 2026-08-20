@@ -12,6 +12,7 @@ import hashlib
 import importlib.metadata
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -69,6 +70,12 @@ EXPECTED_ROW_COUNT = 685
 DEFAULT_SAMPLE_SIZE = 64
 DEFAULT_MAX_ENCODED_BYTES = 64 * 1024 * 1024
 DEFAULT_MAX_PIXELS = 100_000_000
+BBOX_PERCENT_MAX = 100.0
+# SMB publishes percentage coordinates. This absolute percentage-point tolerance absorbs only
+# binary floating-point round-off (observed at <= 1.42e-14 in the pinned revision), while the
+# smallest observed substantive boundary defect is more than four orders of magnitude larger.
+BBOX_PERCENT_TOLERANCE = 1e-9
+REQUIRED_REGION_TEXT_FIELDS = ("raw", "kern", "ekern")
 HASH_SIZE = 8
 HIGHFREQ_FACTOR = 4
 MAXIMUM_HAMMING_DISTANCE = 6
@@ -352,18 +359,33 @@ def _encoded_image(record: Mapping[str, object], *, trusted_cache_roots: Sequenc
     raise ValueError("image_bytes_unavailable")
 
 
-def _regions_valid(regions: object, width: int, height: int) -> tuple[int, bool, list[str]]:
+def _regions_valid(regions: object) -> tuple[int, bool, bool, list[str]]:
+    """Validate SMB regions in their documented 0..100 percentage coordinate domain."""
+
     if not isinstance(regions, Sequence) or isinstance(regions, (str, bytes, bytearray)):
-        return 0, False, ["regions_not_sequence"]
-    failures: list[str] = []
+        return 0, False, False, ["regions_not_sequence"]
+    bbox_failures: list[str] = []
+    text_failures: list[str] = []
     for index, region in enumerate(regions):
         bbox = region.get("bbox") if isinstance(region, Mapping) else None
+        if isinstance(region, Mapping):
+            for field in REQUIRED_REGION_TEXT_FIELDS:
+                value = region.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    text_failures.append(f"region_{index}_missing_{field}")
+        else:
+            text_failures.extend(
+                f"region_{index}_missing_{field}" for field in REQUIRED_REGION_TEXT_FIELDS
+            )
         if isinstance(bbox, Mapping) and set(bbox) == {"x", "y", "width", "height"}:
             values = tuple(bbox[field] for field in ("x", "y", "width", "height"))
             if any(
-                isinstance(value, bool) or not isinstance(value, (int, float)) for value in values
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                for value in values
             ):
-                failures.append(f"region_{index}_invalid_bbox")
+                bbox_failures.append(f"region_{index}_invalid_bbox")
                 continue
             left, top, box_width, box_height = values
             right = left + box_width
@@ -373,16 +395,26 @@ def _regions_valid(regions: object, width: int, height: int) -> tuple[int, bool,
             and not isinstance(bbox, (str, bytes, bytearray))
             and len(bbox) == 4
             and all(
-                not isinstance(value, bool) and isinstance(value, (int, float)) for value in bbox
+                not isinstance(value, bool)
+                and isinstance(value, (int, float))
+                and math.isfinite(value)
+                for value in bbox
             )
         ):
             left, top, right, bottom = bbox
         else:
-            failures.append(f"region_{index}_invalid_bbox")
+            bbox_failures.append(f"region_{index}_invalid_bbox")
             continue
-        if not (0 <= left < right <= width and 0 <= top < bottom <= height):
-            failures.append(f"region_{index}_out_of_bounds")
-    return len(regions), not failures, failures
+        if not (
+            -BBOX_PERCENT_TOLERANCE <= left < right <= BBOX_PERCENT_MAX + BBOX_PERCENT_TOLERANCE
+            and -BBOX_PERCENT_TOLERANCE
+            <= top
+            < bottom
+            <= BBOX_PERCENT_MAX + BBOX_PERCENT_TOLERANCE
+        ):
+            bbox_failures.append(f"region_{index}_out_of_bounds")
+    failures = [*bbox_failures, *text_failures]
+    return len(regions), not bbox_failures, not text_failures, failures
 
 
 def _rights(*, item_provenance: str = "pending") -> dict[str, str]:
@@ -591,23 +623,21 @@ def _audit_after_guard(
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError, MemoryError):
         return _mark_failure(row, "decode_failed"), None
 
-    region_count, bbox_valid, region_failures = _regions_valid(record.get("regions"), width, height)
+    region_count, bbox_valid, required_text_present, region_failures = _regions_valid(
+        record.get("regions")
+    )
     row["region_count"] = region_count
     row["bbox_valid"] = bbox_valid
     row["annotation_failures"] = sorted(
         set([*row["annotation_failures"], *region_failures])  # type: ignore[arg-type]
     )
-    required_text_present = all(
-        metadata["normalized"] is not None
-        for metadata in (row["original_score"], row["page"], row["page_texture"])
-    )
     row["required_text_present"] = required_text_present
     row["processing_status"] = "processed"
     row["unprocessable_reason"] = None
-    if not required_text_present:
-        paired_reason = "missing_required_metadata"
-    elif not bbox_valid:
+    if not bbox_valid:
         paired_reason = "invalid_region_annotation"
+    elif not required_text_present:
+        paired_reason = "missing_required_region_text"
     else:
         paired_reason = None
     row["paired_eligible"] = paired_reason is None

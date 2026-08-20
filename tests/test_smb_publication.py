@@ -84,7 +84,14 @@ def _audit_record(encoded: bytes, *, index: int = 0) -> dict[str, Any]:
         "image": encoded,
         "original_width": 2,
         "original_height": 2,
-        "regions": [{"bbox": {"x": 0, "y": 0, "width": 1, "height": 1}}],
+        "regions": [
+            {
+                "bbox": {"x": 0, "y": 0, "width": 1, "height": 1},
+                "raw": f"raw-{index}",
+                "kern": f"**kern-{index}",
+                "ekern": f"ekern-{index}",
+            }
+        ],
         "original_score": f"score-{index}_p0",
         "page": str(index),
         "page_texture": "clean",
