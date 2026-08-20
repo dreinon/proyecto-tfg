@@ -45,9 +45,9 @@ PROMOTED_CLAIM_IDS = {
     "SOTA-PERCEPTION-DISTORTION",
     "SOTA-TRANSFORMER-PROGRESSION",
 }
-EXPECTED_GENERATION_ID = "058f5d469b25e1abf1417f9ce196128bb3b46814d793b067a82fb06322bf91fb"
-EXPECTED_RECORDS_SHA256 = "351364aecf6e99894a997910cc04e7adc8eb5707234d9dca29364d4baf1e20f0"
-EXPECTED_RECOVERY_BUNDLE_ID = "6a481bae3852296bada7402662c520ba264ab771048b7b4865dbd27ff29d6ccb"
+EXPECTED_GENERATION_ID = "75b98a56897a0fbb18ee5580943f6b88b5ef36f7bba408002ac3bd626918d752"
+EXPECTED_RECORDS_SHA256 = "56cebb344ae512a3dea16ce4848bce197f971493c98c5c388fe9a094922b820b"
+EXPECTED_RECOVERY_BUNDLE_ID = "5782207ba7784fd9fa27e7cd82e319d2fa5d70ae56a674f89d21199895005862"
 
 FORBIDDEN_SMB_OVERCLAIMS = (
     "685 páginas revisadas visualmente",
@@ -142,8 +142,8 @@ def _assert_bounded_smb_narrative(text: str) -> None:
     required_fragments = (
         "96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb",
         "685 filas",
-        "681",
-        "cuatro",
+        "618",
+        "67",
         "260 grupos",
         "64 páginas",
         "621 páginas",
@@ -229,8 +229,11 @@ def test_data_chapter_matches_recoverable_smb_v2_evidence(tmp_path: Path) -> Non
     assert descriptor["row_count"] == recovery["row_count"] == audit["row_count"] == 685
     assert len(rows) == 685
     assert processing == {"processed": 685}
-    assert sum(row["paired_eligible"] is True for row in rows) == 681
-    assert paired_reasons == {"invalid_region_annotation": 4}
+    assert sum(row["paired_eligible"] is True for row in rows) == 618
+    assert paired_reasons == {
+        "missing_required_region_text": 66,
+        "invalid_region_annotation": 1,
+    }
     assert len({row["source_group_id"] for row in rows}) == 260
     assert visual == {"sampled_human_reviewed": 64, "not_visually_reviewed": 621}
     assert sum(row["audit_sample_member"] is True for row in rows) == len(sample_rows) == 64

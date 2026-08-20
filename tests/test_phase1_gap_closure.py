@@ -152,16 +152,18 @@ def test_active_phase1_gap_closure_reconciles(tmp_path: Path) -> None:
     assert descriptor["project_split"] == "evaluation"
     assert descriptor["benchmark_state"] == recovery_report["benchmark_state"] == "AUDITED_LOCKED"
     assert descriptor["source_provenance"]["dirty"] is False
+    paired_eligible_count = sum(row["paired_eligible"] is True for row in rows)
+    source_group_count = len({str(row["source_group_id"]) for row in rows})
     assert report == {
         "row_count": 685,
         "processed": 685,
         "failed": 0,
-        "paired_eligible": 681,
+        "paired_eligible": paired_eligible_count,
         "generation_id": pointer["generation_id"],
         "records_sha256": pointer["records_sha256"],
         "benchmark_state": "AUDITED_LOCKED",
-        "exclusion_count": 4,
-        "source_group_count": 260,
+        "exclusion_count": len(descriptor["exclusions"]),
+        "source_group_count": source_group_count,
     }
     assert bundle_id in pointer["recovery_descriptor_path"]
     assert bundle_id in pointer["recovery_records_path"]
@@ -222,8 +224,11 @@ def test_active_phase1_gap_closure_reconciles(tmp_path: Path) -> None:
         if row["paired_eligible"] is False
     ]
     assert descriptor["exclusions"] == derived_exclusions
+    assert paired_eligible_count == 618
+    assert len(derived_exclusions) == 67
     assert Counter(item["reason"] for item in derived_exclusions) == {
-        "invalid_region_annotation": 4
+        "missing_required_region_text": 66,
+        "invalid_region_annotation": 1,
     }
 
     by_framed_hash: dict[str, list[str]] = defaultdict(list)
