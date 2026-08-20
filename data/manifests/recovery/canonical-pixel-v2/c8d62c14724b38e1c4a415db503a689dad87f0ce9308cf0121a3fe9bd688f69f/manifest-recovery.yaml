@@ -1,0 +1,135 @@
+active_pointer_path: data/manifests/smb-evaluation-v1.yaml
+audit_version: smb-audit-v2
+benchmark_state: AUDITED_LOCKED
+bundle_id: c8d62c14724b38e1c4a415db503a689dad87f0ce9308cf0121a3fe9bd688f69f
+compressed_sha256: 524ba7b68e4e0bf8eac8d01367a3a2a529415418ed5baa91239e6eaa12f3be30
+compressed_size_bytes: 165145
+compression:
+  algorithm: gzip
+  compresslevel: 9
+  filename: ''
+  format_version: 1
+  mtime: 0
+descriptor_path: d97ac77f7ee672fca2c3d09b8d6fbf319719306d4ed8315e9cf8b56ec373e3fe/manifest-descriptor.yaml
+descriptor_sha256: f93f562ddedecbb57cb078592944559e95efcbd9b29e8d9fa60f16d636ae77a4
+descriptor_yaml: "audit_version: smb-audit-v2\nbenchmark_state: AUDITED_LOCKED\ncreation_command:\
+  \ uv run python -m score_super_resolution.smb_audit build-canonical-pixel-rehash-candidate\n\
+  deterministic_seed: 20260818\nduplicate_provenance:\n  exact:\n    algorithm: canonical-pixel-sha256\n\
+  \    version: 2\n  near:\n    algorithm: phash\n    hash_size: 8\n    highfreq_factor:\
+  \ 4\n    library: ImageHash\n    library_version: 4.3.2\n    maximum_hamming_distance:\
+  \ 6\n    version: 1\nexclusions:\n- item_id: smb-test-000000\n  reason: missing_required_region_text\n\
+  \  upstream_index: 0\n- item_id: smb-test-000007\n  reason: missing_required_region_text\n\
+  \  upstream_index: 7\n- item_id: smb-test-000008\n  reason: missing_required_region_text\n\
+  \  upstream_index: 8\n- item_id: smb-test-000023\n  reason: missing_required_region_text\n\
+  \  upstream_index: 23\n- item_id: smb-test-000041\n  reason: missing_required_region_text\n\
+  \  upstream_index: 41\n- item_id: smb-test-000055\n  reason: missing_required_region_text\n\
+  \  upstream_index: 55\n- item_id: smb-test-000069\n  reason: missing_required_region_text\n\
+  \  upstream_index: 69\n- item_id: smb-test-000074\n  reason: missing_required_region_text\n\
+  \  upstream_index: 74\n- item_id: smb-test-000075\n  reason: missing_required_region_text\n\
+  \  upstream_index: 75\n- item_id: smb-test-000078\n  reason: missing_required_region_text\n\
+  \  upstream_index: 78\n- item_id: smb-test-000082\n  reason: missing_required_region_text\n\
+  \  upstream_index: 82\n- item_id: smb-test-000101\n  reason: missing_required_region_text\n\
+  \  upstream_index: 101\n- item_id: smb-test-000103\n  reason: missing_required_region_text\n\
+  \  upstream_index: 103\n- item_id: smb-test-000104\n  reason: missing_required_region_text\n\
+  \  upstream_index: 104\n- item_id: smb-test-000105\n  reason: missing_required_region_text\n\
+  \  upstream_index: 105\n- item_id: smb-test-000106\n  reason: missing_required_region_text\n\
+  \  upstream_index: 106\n- item_id: smb-test-000108\n  reason: missing_required_region_text\n\
+  \  upstream_index: 108\n- item_id: smb-test-000110\n  reason: missing_required_region_text\n\
+  \  upstream_index: 110\n- item_id: smb-test-000116\n  reason: missing_required_region_text\n\
+  \  upstream_index: 116\n- item_id: smb-test-000125\n  reason: missing_required_region_text\n\
+  \  upstream_index: 125\n- item_id: smb-test-000145\n  reason: missing_required_region_text\n\
+  \  upstream_index: 145\n- item_id: smb-test-000147\n  reason: missing_required_region_text\n\
+  \  upstream_index: 147\n- item_id: smb-test-000154\n  reason: missing_required_region_text\n\
+  \  upstream_index: 154\n- item_id: smb-test-000159\n  reason: missing_required_region_text\n\
+  \  upstream_index: 159\n- item_id: smb-test-000162\n  reason: missing_required_region_text\n\
+  \  upstream_index: 162\n- item_id: smb-test-000183\n  reason: missing_required_region_text\n\
+  \  upstream_index: 183\n- item_id: smb-test-000199\n  reason: missing_required_region_text\n\
+  \  upstream_index: 199\n- item_id: smb-test-000214\n  reason: missing_required_region_text\n\
+  \  upstream_index: 214\n- item_id: smb-test-000223\n  reason: missing_required_region_text\n\
+  \  upstream_index: 223\n- item_id: smb-test-000235\n  reason: missing_required_region_text\n\
+  \  upstream_index: 235\n- item_id: smb-test-000238\n  reason: missing_required_region_text\n\
+  \  upstream_index: 238\n- item_id: smb-test-000274\n  reason: missing_required_region_text\n\
+  \  upstream_index: 274\n- item_id: smb-test-000301\n  reason: missing_required_region_text\n\
+  \  upstream_index: 301\n- item_id: smb-test-000302\n  reason: missing_required_region_text\n\
+  \  upstream_index: 302\n- item_id: smb-test-000326\n  reason: missing_required_region_text\n\
+  \  upstream_index: 326\n- item_id: smb-test-000327\n  reason: missing_required_region_text\n\
+  \  upstream_index: 327\n- item_id: smb-test-000337\n  reason: missing_required_region_text\n\
+  \  upstream_index: 337\n- item_id: smb-test-000347\n  reason: missing_required_region_text\n\
+  \  upstream_index: 347\n- item_id: smb-test-000368\n  reason: missing_required_region_text\n\
+  \  upstream_index: 368\n- item_id: smb-test-000370\n  reason: missing_required_region_text\n\
+  \  upstream_index: 370\n- item_id: smb-test-000372\n  reason: missing_required_region_text\n\
+  \  upstream_index: 372\n- item_id: smb-test-000373\n  reason: missing_required_region_text\n\
+  \  upstream_index: 373\n- item_id: smb-test-000378\n  reason: missing_required_region_text\n\
+  \  upstream_index: 378\n- item_id: smb-test-000399\n  reason: missing_required_region_text\n\
+  \  upstream_index: 399\n- item_id: smb-test-000416\n  reason: missing_required_region_text\n\
+  \  upstream_index: 416\n- item_id: smb-test-000417\n  reason: missing_required_region_text\n\
+  \  upstream_index: 417\n- item_id: smb-test-000421\n  reason: missing_required_region_text\n\
+  \  upstream_index: 421\n- item_id: smb-test-000445\n  reason: missing_required_region_text\n\
+  \  upstream_index: 445\n- item_id: smb-test-000500\n  reason: missing_required_region_text\n\
+  \  upstream_index: 500\n- item_id: smb-test-000526\n  reason: missing_required_region_text\n\
+  \  upstream_index: 526\n- item_id: smb-test-000539\n  reason: invalid_region_annotation\n\
+  \  upstream_index: 539\n- item_id: smb-test-000542\n  reason: missing_required_region_text\n\
+  \  upstream_index: 542\n- item_id: smb-test-000574\n  reason: missing_required_region_text\n\
+  \  upstream_index: 574\n- item_id: smb-test-000582\n  reason: missing_required_region_text\n\
+  \  upstream_index: 582\n- item_id: smb-test-000590\n  reason: missing_required_region_text\n\
+  \  upstream_index: 590\n- item_id: smb-test-000593\n  reason: missing_required_region_text\n\
+  \  upstream_index: 593\n- item_id: smb-test-000595\n  reason: missing_required_region_text\n\
+  \  upstream_index: 595\n- item_id: smb-test-000598\n  reason: missing_required_region_text\n\
+  \  upstream_index: 598\n- item_id: smb-test-000611\n  reason: missing_required_region_text\n\
+  \  upstream_index: 611\n- item_id: smb-test-000641\n  reason: missing_required_region_text\n\
+  \  upstream_index: 641\n- item_id: smb-test-000642\n  reason: missing_required_region_text\n\
+  \  upstream_index: 642\n- item_id: smb-test-000644\n  reason: missing_required_region_text\n\
+  \  upstream_index: 644\n- item_id: smb-test-000658\n  reason: missing_required_region_text\n\
+  \  upstream_index: 658\n- item_id: smb-test-000668\n  reason: missing_required_region_text\n\
+  \  upstream_index: 668\n- item_id: smb-test-000670\n  reason: missing_required_region_text\n\
+  \  upstream_index: 670\n- item_id: smb-test-000676\n  reason: missing_required_region_text\n\
+  \  upstream_index: 676\n- item_id: smb-test-000677\n  reason: missing_required_region_text\n\
+  \  upstream_index: 677\ngeneration_algorithm:\n  algorithm: sha256\n  descriptor_canonicalization:\
+  \ yaml-safe-sort-keys-utf8-v1\n  domain_separator: smb-manifest-generation-v2\n\
+  \  records_canonicalization: jsonl-utf8-sorted-keys-v1\n  version: 2\ngeneration_id:\
+  \ d97ac77f7ee672fca2c3d09b8d6fbf319719306d4ed8315e9cf8b56ec373e3fe\ngrouping_unit:\
+  \ source_score\nhash_provenance:\n  encoded:\n    algorithm: sha256\n    canonicalization:\
+  \ encoded-bytes-v1\n    version: 1\n  pixels:\n    algorithm: sha256\n    alpha_policy:\
+  \ retain-alpha-and-underlying-rgb\n    canonicalization: canonical-rgba-frame-v2\n\
+  \    decoder_library: Pillow\n    decoder_version: 12.3.0\n    domain_separator:\
+  \ smb-canonical-rgba-frame-v2\n    failure_policy: safe-explicit-failure-no-digest\n\
+  \    max_encoded_bytes: 67108864\n    max_pixels: 100000000\n    metadata_policy:\
+  \ ignore-non-raster-metadata\n    orientation_policy: stored-raster-ignore-exif\n\
+  \    output_mode: RGBA8\n    version: 2\nmanifest_id: smb-evaluation-v2\nproject_split:\
+  \ evaluation\nrecord_type: manifest-descriptor\nrecords_sha256: 56cebb344ae512a3dea16ce4848bce197f971493c98c5c388fe9a094922b820b\n\
+  review_inference:\n  automated_population_audit_count: 685\n  exact_pair_automated_count:\
+  \ 0\n  inference_scope: sample_observation_only\n  not_applicable_visual_review_count:\
+  \ 0\n  not_visually_reviewed_count: 621\n  perceptual_pair_count: 14\n  perceptual_pair_human_review_count:\
+  \ 14\n  perceptual_pair_pending_count: 0\n  population_prevalence_inference: not_supported\n\
+  \  sampled_human_review_count: 64\n  targeted_human_review_count: 0\n  unavailable_visual_review_count:\
+  \ 0\nrow_count: 685\nrow_schema_id: manifest-row\nrow_schema_version: 2\nsample_selection:\n\
+  \  algorithm: sha256-rank\n  identity_fields:\n  - upstream_index\n  - item_id\n\
+  \  population_size: 685\n  sample_size: 64\n  seed: 20260818\n  selection_state:\
+  \ pre-review\n  version: 1\nschema_version: 2\nsource_key: smb\nsource_provenance:\n\
+  \  algorithm: sha256\n  dirty: false\n  lock_sha256: 495acdabff917633bea25232181401def9e44ec8600c87221cce45fc9f379dce\n\
+  \  patch_sha256: 5c08e8f0a20d76f5ca41a97bcf746ab8f7f1a65af46418fbd8dd4e4e2e08d3da\n\
+  \  revision: 571ced1f383a5682ddc6a8b0d1585136a4cdc5e4\n  source_set_version: 1\n\
+  \  source_tree_sha256: 2bfcb234d927ad781cbcf0f6e393ab7b28dbeb2ad8e47ca50d5d54ba4c033f4a\n\
+  source_revision: 96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb\nupstream_split: test\n"
+generation_id: d97ac77f7ee672fca2c3d09b8d6fbf319719306d4ed8315e9cf8b56ec373e3fe
+manifest_id: smb-evaluation-v2
+metadata_sha256: eae2c596ffc8f2da03b8b4f13fa3bd3121c05f6fe02fe45122005e157d6f5cd6
+record_type: manifest-recovery
+records_path: d97ac77f7ee672fca2c3d09b8d6fbf319719306d4ed8315e9cf8b56ec373e3fe/manifest-records.jsonl
+records_sha256: 56cebb344ae512a3dea16ce4848bce197f971493c98c5c388fe9a094922b820b
+recovery_descriptor_path: data/manifests/recovery/canonical-pixel-v2/c8d62c14724b38e1c4a415db503a689dad87f0ce9308cf0121a3fe9bd688f69f/manifest-recovery.yaml
+recovery_records_path: data/manifests/recovery/canonical-pixel-v2/c8d62c14724b38e1c4a415db503a689dad87f0ce9308cf0121a3fe9bd688f69f/manifest-records.jsonl.gz
+row_count: 685
+row_schema_id: manifest-row
+row_schema_version: 2
+schema_version: 2
+source_provenance:
+  algorithm: sha256
+  dirty: false
+  lock_sha256: 495acdabff917633bea25232181401def9e44ec8600c87221cce45fc9f379dce
+  patch_sha256: 5c08e8f0a20d76f5ca41a97bcf746ab8f7f1a65af46418fbd8dd4e4e2e08d3da
+  revision: 571ced1f383a5682ddc6a8b0d1585136a4cdc5e4
+  source_set_version: 1
+  source_tree_sha256: 2bfcb234d927ad781cbcf0f6e393ab7b28dbeb2ad8e47ca50d5d54ba4c033f4a
+source_revision: 96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb
+uncompressed_size_bytes: 1564669
