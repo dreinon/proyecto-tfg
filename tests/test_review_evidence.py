@@ -199,6 +199,119 @@ def test_invalid_domain_save_fails_before_temporary_creation_and_preserves_bytes
 
 
 @pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("quality", ("invented-quality",)),
+        ("suitability", "invented-suitability"),
+    ),
+)
+def test_invalid_item_enum_save_leaves_file_digest_and_session_rows_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: tuple[str, ...] | str,
+) -> None:
+    review_path = tmp_path / "smb-review-v1.csv"
+    _write_rows(review_path, _safe_rows())
+    session = _session(review_path)
+    item_id = next(
+        row["item_id"] for row in session.read_rows() if row["review_kind"] == "visual_item"
+    )
+    before_bytes = review_path.read_bytes()
+    before_sha256 = session.expected_sha256
+    before_rows = session.read_rows()
+
+    def unexpected_write(_rows: list[dict[str, str]]) -> None:
+        raise AssertionError("invalid item enum reached persistence")
+
+    monkeypatch.setattr(session, "write_rows", unexpected_write)
+    quality_flags = value if field == "quality" else ()
+    suitability = value if field == "suitability" else "suitable"
+    assert isinstance(quality_flags, tuple)
+    assert isinstance(suitability, str)
+
+    with pytest.raises(ReviewEvidenceError, match=f"{field}.*disposition"):
+        session.save_item(
+            item_id=item_id,
+            reviewer="Daniel Reinón García",
+            quality_flags=quality_flags,
+            suitability=suitability,
+            rationale="La revisión válida no debe cambiar.",
+        )
+
+    assert review_path.read_bytes() == before_bytes
+    assert session.expected_sha256 == before_sha256
+    assert session.read_rows() == before_rows
+
+
+@pytest.mark.parametrize("disposition", ("invented-state", "unavailable"))
+def test_invalid_pair_enum_save_leaves_file_digest_and_session_rows_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    disposition: str,
+) -> None:
+    review_path = tmp_path / "smb-review-v1.csv"
+    _write_rows(review_path, _safe_rows())
+    session = _session(review_path)
+    review_key = next(
+        row["review_key"]
+        for row in session.read_rows()
+        if row["review_kind"] == "duplicate_pair"
+    )
+    before_bytes = review_path.read_bytes()
+    before_sha256 = session.expected_sha256
+    before_rows = session.read_rows()
+
+    def unexpected_write(_rows: list[dict[str, str]]) -> None:
+        raise AssertionError("invalid pair enum reached persistence")
+
+    monkeypatch.setattr(session, "write_rows", unexpected_write)
+
+    with pytest.raises(ReviewEvidenceError, match="duplicate_disposition"):
+        session.save_candidate(
+            review_key=review_key,
+            reviewer="Daniel Reinón García",
+            disposition=disposition,
+            rationale="La revisión válida no debe cambiar.",
+        )
+
+    assert review_path.read_bytes() == before_bytes
+    assert session.expected_sha256 == before_sha256
+    assert session.read_rows() == before_rows
+
+
+def test_candidate_save_rejects_non_pair_kind_without_mutating_or_persisting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    review_path = tmp_path / "smb-review-v1.csv"
+    _write_rows(review_path, _safe_rows())
+    session = _session(review_path)
+    review_key = next(
+        row["review_key"] for row in session.read_rows() if row["review_kind"] == "item_policy"
+    )
+    before_bytes = review_path.read_bytes()
+    before_sha256 = session.expected_sha256
+    before_rows = session.read_rows()
+
+    def unexpected_write(_rows: list[dict[str, str]]) -> None:
+        raise AssertionError("non-pair review kind reached persistence")
+
+    monkeypatch.setattr(session, "write_rows", unexpected_write)
+
+    with pytest.raises(ReviewEvidenceError, match="review_kind"):
+        session.save_candidate(
+            review_key=review_key,
+            reviewer="Daniel Reinón García",
+            disposition="distinct",
+            rationale="La revisión válida no debe cambiar.",
+        )
+
+    assert review_path.read_bytes() == before_bytes
+    assert session.expected_sha256 == before_sha256
+    assert session.read_rows() == before_rows
+
+
+@pytest.mark.parametrize(
     ("reviewer", "rationale"),
     (("=2+2", "Justificación segura"), ("Daniel Reinón García", "@SUM(1,1)")),
 )
