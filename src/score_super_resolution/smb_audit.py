@@ -285,7 +285,15 @@ def _normalized_trusted_cache_roots(
         if not root.is_absolute():
             raise ValueError("trusted_cache_roots must contain only absolute paths")
         try:
+            lexical_current = Path(root.anchor)
+            for name in root.parts[1:]:
+                lexical_current /= name
+                lexical_component = os.stat(lexical_current, follow_symlinks=False)
+                if stat.S_ISLNK(lexical_component.st_mode):
+                    raise ValueError("trusted_cache_roots must not contain symlinks")
             resolved = root.resolve(strict=True)
+        except ValueError:
+            raise
         except (OSError, RuntimeError) as error:
             raise ValueError("trusted_cache_roots must contain existing directories") from error
         try:

@@ -582,7 +582,7 @@ def test_symlinked_trusted_root_is_rejected_before_any_file_read(
 
     monkeypatch.setattr(smb_audit.os, "read", unexpected_read)
 
-    with pytest.raises(ValueError, match="trusted_cache_roots.*symlink"):
+    with pytest.raises(ValueError, match=r"trusted_cache_roots.*symlink"):
         audit_item(
             _path_record(candidate),
             upstream_index=0,
