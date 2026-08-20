@@ -36,6 +36,20 @@ REVIEW_FIELDS = (
     "figure_reproduction_status",
 )
 
+LEGACY_REVIEW_KINDS = frozenset({"item", "candidate"})
+V2_REVIEW_KINDS = frozenset({"item_policy", "visual_item", "duplicate_pair"})
+REVIEW_KINDS = LEGACY_REVIEW_KINDS | V2_REVIEW_KINDS
+REVIEW_STATUSES = frozenset({"pending", "reviewed", "unavailable"})
+QUALITY_FLAGS = frozenset({"blurred", "low_contrast", "oversized", "skewed", "unprocessable"})
+LEGACY_SUITABILITY_DISPOSITIONS = frozenset({"suitable", "unsuitable", "unavailable"})
+VISUAL_SUITABILITY_DISPOSITIONS = frozenset({"suitable", "unsuitable", "uncertain", "not_assessed"})
+HUMAN_PAIR_DISPOSITIONS = frozenset({"distinct", "duplicate", "related"})
+DATASET_LICENCE_STATUSES = frozenset({"confirmed", "restricted"})
+ITEM_PROVENANCE_STATUSES = frozenset({"confirmed", "unavailable"})
+ACCESS_STATUSES = frozenset({"confirmed", "restricted"})
+LEGACY_REUSE_STATUSES = frozenset({"permitted", "prohibited"})
+V2_REUSE_STATUSES = frozenset({"not_established", "permitted", "prohibited"})
+
 _FORMULA_PREFIXES = ("=", "+", "-", "@")
 _SAFE_REVIEW_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -101,6 +115,289 @@ def validate_human_cell(value: str, *, field: str, review_key: str) -> str:
     return value
 
 
+def _require_domain_value(row: Mapping[str, str], field: str, allowed: frozenset[str]) -> str:
+    value = row[field]
+    if value not in allowed:
+        raise _cell_error(field=field, review_key=row["review_key"], reason="is invalid")
+    return value
+
+
+def _require_empty_domains(row: Mapping[str, str], fields: Sequence[str]) -> None:
+    for field in fields:
+        if row[field]:
+            raise _cell_error(
+                field=field,
+                review_key=row["review_key"],
+                reason="does not apply to this review kind",
+            )
+
+
+def validate_quality_flags(flags: Sequence[str], *, review_key: str) -> tuple[str, ...]:
+    """Validate a unique, canonically ordered quality-flag sequence."""
+
+    if isinstance(flags, (str, bytes, bytearray)) or any(
+        not isinstance(flag, str) or flag not in QUALITY_FLAGS for flag in flags
+    ):
+        raise _cell_error(field="quality_disposition", review_key=review_key, reason="is invalid")
+    canonical = tuple(sorted(flags))
+    if len(canonical) != len(set(canonical)) or tuple(flags) != canonical:
+        raise _cell_error(
+            field="quality_disposition",
+            review_key=review_key,
+            reason="must be unique and canonical",
+        )
+    return canonical
+
+
+def review_quality_flags(value: str, *, review_key: str) -> tuple[str, ...]:
+    """Parse one canonical quality disposition into its shared flag vocabulary."""
+
+    if value == "acceptable":
+        return ()
+    if not value:
+        raise _cell_error(field="quality_disposition", review_key=review_key, reason="is invalid")
+    return validate_quality_flags(value.split(";"), review_key=review_key)
+
+
+def validate_suitability_disposition(
+    value: str, *, review_kind: str, review_status: str, review_key: str
+) -> str:
+    """Validate suitability against the state and kind where it is meaningful."""
+
+    if review_status == "pending":
+        allowed = frozenset({"pending"}) if review_kind == "item" else frozenset({""})
+    elif review_kind == "item":
+        allowed = LEGACY_SUITABILITY_DISPOSITIONS
+    elif review_kind == "visual_item":
+        allowed = VISUAL_SUITABILITY_DISPOSITIONS
+    else:
+        allowed = frozenset({""})
+    if value not in allowed:
+        raise _cell_error(
+            field="suitability_disposition", review_key=review_key, reason="is invalid"
+        )
+    return value
+
+
+def validate_duplicate_disposition(
+    value: str, *, review_kind: str, review_status: str, review_key: str
+) -> str:
+    """Validate human pair decisions and the sole non-human unavailable branch."""
+
+    if review_status == "pending":
+        allowed = (
+            frozenset({"pending"})
+            if review_kind in {"candidate", "duplicate_pair", "item"}
+            else frozenset({""})
+        )
+    elif review_status == "unavailable":
+        allowed = frozenset({"unavailable"}) if review_kind == "duplicate_pair" else frozenset()
+    elif review_kind in {"candidate", "duplicate_pair", "item"}:
+        allowed = HUMAN_PAIR_DISPOSITIONS
+    else:
+        allowed = frozenset({""})
+    if value not in allowed:
+        reason = (
+            "cannot use unavailable for a human-reviewed decision"
+            if value == "unavailable" and review_status == "reviewed"
+            else "is invalid"
+        )
+        raise _cell_error(field="duplicate_disposition", review_key=review_key, reason=reason)
+    return value
+
+
+def validate_review_row_domains(row: Mapping[str, str]) -> None:
+    """Enforce the exact state-aware enum union for one canonical review row."""
+
+    kind = _require_domain_value(row, "review_kind", REVIEW_KINDS)
+    status = _require_domain_value(row, "review_status", REVIEW_STATUSES)
+    key = row["review_key"]
+
+    if status == "unavailable":
+        if kind != "duplicate_pair":
+            raise _cell_error(
+                field="review_status",
+                review_key=key,
+                reason="unavailable is allowed only for duplicate_pair",
+            )
+        validate_duplicate_disposition(
+            row["duplicate_disposition"],
+            review_kind=kind,
+            review_status=status,
+            review_key=key,
+        )
+        if row["reviewer"] or row["reviewed_at"]:
+            field = "reviewer" if row["reviewer"] else "reviewed_at"
+            raise _cell_error(field=field, review_key=key, reason="must be empty when unavailable")
+        if not row["rationale"].strip():
+            raise _cell_error(
+                field="rationale", review_key=key, reason="is required when unavailable"
+            )
+    elif status == "reviewed":
+        for field in ("reviewer", "reviewed_at", "rationale"):
+            if not row[field].strip():
+                raise _cell_error(field=field, review_key=key, reason="is required")
+    elif row["reviewed_at"]:
+        raise _cell_error(
+            field="review_status",
+            review_key=key,
+            reason="must be reviewed when reviewed_at is populated",
+        )
+
+    if kind == "item":
+        if status == "pending":
+            if row["quality_disposition"]:
+                review_quality_flags(row["quality_disposition"], review_key=key)
+            validate_suitability_disposition(
+                row["suitability_disposition"],
+                review_kind=kind,
+                review_status=status,
+                review_key=key,
+            )
+            validate_duplicate_disposition(
+                row["duplicate_disposition"],
+                review_kind=kind,
+                review_status=status,
+                review_key=key,
+            )
+            _require_domain_value(row, "dataset_licence_status", frozenset({"pending"}))
+            _require_domain_value(
+                row,
+                "item_provenance_status",
+                frozenset({"pending", "unavailable"}),
+            )
+            _require_domain_value(row, "access_status", frozenset({"pending", "confirmed"}))
+            _require_domain_value(row, "redistribution_status", frozenset({"pending"}))
+            _require_domain_value(row, "figure_reproduction_status", frozenset({"pending"}))
+        else:
+            review_quality_flags(row["quality_disposition"], review_key=key)
+            validate_suitability_disposition(
+                row["suitability_disposition"],
+                review_kind=kind,
+                review_status=status,
+                review_key=key,
+            )
+            validate_duplicate_disposition(
+                row["duplicate_disposition"],
+                review_kind=kind,
+                review_status=status,
+                review_key=key,
+            )
+            _require_domain_value(row, "dataset_licence_status", DATASET_LICENCE_STATUSES)
+            _require_domain_value(row, "item_provenance_status", ITEM_PROVENANCE_STATUSES)
+            _require_domain_value(row, "access_status", ACCESS_STATUSES)
+            _require_domain_value(row, "redistribution_status", LEGACY_REUSE_STATUSES)
+            _require_domain_value(row, "figure_reproduction_status", LEGACY_REUSE_STATUSES)
+        _require_empty_domains(row, ("candidate_item_id",))
+        return
+
+    if kind == "candidate":
+        validate_duplicate_disposition(
+            row["duplicate_disposition"],
+            review_kind=kind,
+            review_status=status,
+            review_key=key,
+        )
+        _require_empty_domains(
+            row,
+            (
+                "source_group_id",
+                "quality_disposition",
+                "suitability_disposition",
+                "dataset_licence_status",
+                "item_provenance_status",
+                "access_status",
+                "redistribution_status",
+                "figure_reproduction_status",
+            ),
+        )
+        return
+
+    if kind == "item_policy":
+        if status == "pending":
+            for field in (
+                "dataset_licence_status",
+                "item_provenance_status",
+                "access_status",
+                "redistribution_status",
+                "figure_reproduction_status",
+            ):
+                _require_domain_value(row, field, frozenset({"pending"}))
+        else:
+            _require_domain_value(row, "dataset_licence_status", frozenset({"confirmed"}))
+            _require_domain_value(row, "item_provenance_status", ITEM_PROVENANCE_STATUSES)
+            _require_domain_value(row, "access_status", ACCESS_STATUSES)
+            _require_domain_value(row, "redistribution_status", V2_REUSE_STATUSES)
+            _require_domain_value(row, "figure_reproduction_status", V2_REUSE_STATUSES)
+            if row["item_provenance_status"] == "unavailable" and (
+                row["redistribution_status"] == "permitted"
+                or row["figure_reproduction_status"] == "permitted"
+            ):
+                raise _cell_error(
+                    field="item_provenance_status",
+                    review_key=key,
+                    reason="cannot infer reuse permission",
+                )
+        if not row["source_group_id"]:
+            raise _cell_error(field="source_group_id", review_key=key, reason="is required")
+        _require_empty_domains(
+            row,
+            (
+                "candidate_item_id",
+                "quality_disposition",
+                "suitability_disposition",
+                "duplicate_disposition",
+            ),
+        )
+        return
+
+    if kind == "visual_item":
+        if status == "pending":
+            _require_empty_domains(row, ("quality_disposition", "suitability_disposition"))
+        else:
+            review_quality_flags(row["quality_disposition"], review_key=key)
+            validate_suitability_disposition(
+                row["suitability_disposition"],
+                review_kind=kind,
+                review_status=status,
+                review_key=key,
+            )
+        _require_empty_domains(
+            row,
+            (
+                "candidate_item_id",
+                "source_group_id",
+                "duplicate_disposition",
+                "dataset_licence_status",
+                "item_provenance_status",
+                "access_status",
+                "redistribution_status",
+                "figure_reproduction_status",
+            ),
+        )
+        return
+
+    validate_duplicate_disposition(
+        row["duplicate_disposition"],
+        review_kind=kind,
+        review_status=status,
+        review_key=key,
+    )
+    _require_empty_domains(
+        row,
+        (
+            "source_group_id",
+            "quality_disposition",
+            "suitability_disposition",
+            "dataset_licence_status",
+            "item_provenance_status",
+            "access_status",
+            "redistribution_status",
+            "figure_reproduction_status",
+        ),
+    )
+
+
 def validate_review_rows(
     rows: Sequence[Mapping[str, object]],
 ) -> list[dict[str, str]]:
@@ -118,6 +415,7 @@ def validate_review_rows(
             if not isinstance(value, str):
                 raise _cell_error(field=field, review_key=key, reason="must be text")
             row[field] = validate_human_cell(value, field=field, review_key=key)
+        validate_review_row_domains(row)
         validated.append(row)
     return validated
 

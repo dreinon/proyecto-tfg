@@ -45,14 +45,23 @@ from score_super_resolution.contracts import (
     validate_instance,
 )
 from score_super_resolution.review_evidence import (
-    REVIEW_FIELDS as REVIEW_CSV_FIELDS,
-)
-from score_super_resolution.review_evidence import (
+    ACCESS_STATUSES,
+    DATASET_LICENCE_STATUSES,
+    HUMAN_PAIR_DISPOSITIONS,
+    ITEM_PROVENANCE_STATUSES,
+    LEGACY_REUSE_STATUSES,
+    LEGACY_SUITABILITY_DISPOSITIONS,
+    V2_REUSE_STATUSES,
+    VISUAL_SUITABILITY_DISPOSITIONS,
     ReviewEvidenceError,
     canonical_review_csv,
     read_review,
+    review_quality_flags,
     save_review,
     validate_review_rows,
+)
+from score_super_resolution.review_evidence import (
+    REVIEW_FIELDS as REVIEW_CSV_FIELDS,
 )
 from score_super_resolution.smb import _read_descriptor, load_smb
 
@@ -4432,39 +4441,6 @@ def _read_review_rows(review_path: Path) -> list[dict[str, str]]:
         raise _review_error(str(error)) from error
 
 
-_QUALITY_DISPOSITIONS = {
-    "blurred",
-    "low_contrast",
-    "oversized",
-    "skewed",
-    "unprocessable",
-}
-_SUITABILITY_DISPOSITIONS = {"suitable", "unsuitable", "unavailable"}
-_DUPLICATE_DISPOSITIONS = {"distinct", "duplicate", "related", "unavailable"}
-_DATASET_LICENCE_STATUSES = {"confirmed", "restricted"}
-_ITEM_PROVENANCE_STATUSES = {"confirmed", "unavailable"}
-_ACCESS_STATUSES = {"confirmed", "restricted"}
-_REDISTRIBUTION_STATUSES = {"permitted", "prohibited"}
-_FIGURE_REPRODUCTION_STATUSES = {"permitted", "prohibited"}
-_V2_REUSE_STATUSES = {"not_established", "permitted", "prohibited"}
-
-
-def _quality_flags(value: str, *, review_key: str) -> list[str]:
-    if value == "acceptable":
-        return []
-    flags = value.split(";")
-    if not flags or any(flag not in _QUALITY_DISPOSITIONS for flag in flags):
-        raise _review_error(f"{review_key}: invalid quality_disposition")
-    if flags != sorted(set(flags)):
-        raise _review_error(f"{review_key}: quality_disposition must be unique and canonical")
-    return flags
-
-
-def _require_enum(row: Mapping[str, str], field: str, allowed: set[str]) -> None:
-    if row[field] not in allowed:
-        raise _review_error(f"{row['review_key']}: invalid {field}")
-
-
 def _validated_review_rows(
     rows: Sequence[Mapping[str, object]], review_rows: Sequence[Mapping[str, str]]
 ) -> list[dict[str, str]]:
@@ -4508,7 +4484,8 @@ def _validated_review_rows(
             raise _review_error(f"{key}: reviewed_at must be an ISO date") from None
 
         if row["review_kind"] == "candidate":
-            _require_enum(row, "duplicate_disposition", _DUPLICATE_DISPOSITIONS)
+            if row["duplicate_disposition"] not in HUMAN_PAIR_DISPOSITIONS:
+                raise _review_error(f"{key}: invalid duplicate_disposition")
             irrelevant = (
                 "source_group_id",
                 "quality_disposition",
@@ -4522,14 +4499,19 @@ def _validated_review_rows(
             if any(row[field] for field in irrelevant):
                 raise _review_error(f"{key}: candidate row contains item-only dispositions")
         else:
-            _quality_flags(row["quality_disposition"], review_key=key)
-            _require_enum(row, "suitability_disposition", _SUITABILITY_DISPOSITIONS)
-            _require_enum(row, "duplicate_disposition", _DUPLICATE_DISPOSITIONS)
-            _require_enum(row, "dataset_licence_status", _DATASET_LICENCE_STATUSES)
-            _require_enum(row, "item_provenance_status", _ITEM_PROVENANCE_STATUSES)
-            _require_enum(row, "access_status", _ACCESS_STATUSES)
-            _require_enum(row, "redistribution_status", _REDISTRIBUTION_STATUSES)
-            _require_enum(row, "figure_reproduction_status", _FIGURE_REPRODUCTION_STATUSES)
+            review_quality_flags(row["quality_disposition"], review_key=key)
+            shared_domains = (
+                ("suitability_disposition", LEGACY_SUITABILITY_DISPOSITIONS),
+                ("duplicate_disposition", HUMAN_PAIR_DISPOSITIONS),
+                ("dataset_licence_status", DATASET_LICENCE_STATUSES),
+                ("item_provenance_status", ITEM_PROVENANCE_STATUSES),
+                ("access_status", ACCESS_STATUSES),
+                ("redistribution_status", LEGACY_REUSE_STATUSES),
+                ("figure_reproduction_status", LEGACY_REUSE_STATUSES),
+            )
+            for field, allowed in shared_domains:
+                if row[field] not in allowed:
+                    raise _review_error(f"{key}: invalid {field}")
             source_group_id = row["source_group_id"]
             if source_group_id and _SAFE_METADATA_PATTERN.fullmatch(source_group_id) is None:
                 raise _review_error(f"{key}: invalid source_group_id")
@@ -4615,11 +4597,16 @@ def _validated_v2_review_rows(
         if row["review_kind"] == "item_policy":
             if row["source_group_id"] != emitted["source_group_id"]:
                 raise _review_error(f"{key}: source_group_id does not match emitted audit evidence")
-            _require_enum(row, "dataset_licence_status", {"confirmed"})
-            _require_enum(row, "item_provenance_status", _ITEM_PROVENANCE_STATUSES)
-            _require_enum(row, "access_status", _ACCESS_STATUSES)
-            _require_enum(row, "redistribution_status", _V2_REUSE_STATUSES)
-            _require_enum(row, "figure_reproduction_status", _V2_REUSE_STATUSES)
+            shared_domains = (
+                ("dataset_licence_status", frozenset({"confirmed"})),
+                ("item_provenance_status", ITEM_PROVENANCE_STATUSES),
+                ("access_status", ACCESS_STATUSES),
+                ("redistribution_status", V2_REUSE_STATUSES),
+                ("figure_reproduction_status", V2_REUSE_STATUSES),
+            )
+            for field, allowed in shared_domains:
+                if row[field] not in allowed:
+                    raise _review_error(f"{key}: invalid {field}")
             if row["item_provenance_status"] == "unavailable" and (
                 row["redistribution_status"] == "permitted"
                 or row["figure_reproduction_status"] == "permitted"
@@ -4635,12 +4622,9 @@ def _validated_v2_review_rows(
             ):
                 raise _review_error(f"{key}: policy row contains visual or pair claims")
         elif row["review_kind"] == "visual_item":
-            _quality_flags(row["quality_disposition"], review_key=key)
-            _require_enum(
-                row,
-                "suitability_disposition",
-                {"suitable", "unsuitable", "uncertain", "not_assessed"},
-            )
+            review_quality_flags(row["quality_disposition"], review_key=key)
+            if row["suitability_disposition"] not in VISUAL_SUITABILITY_DISPOSITIONS:
+                raise _review_error(f"{key}: invalid suitability_disposition")
             irrelevant = (
                 "source_group_id",
                 "duplicate_disposition",
@@ -4660,11 +4644,8 @@ def _validated_v2_review_rows(
                     raise _review_error(
                         f"{key}: human-reviewed pair cannot use unavailable disposition"
                     )
-                _require_enum(
-                    row,
-                    "duplicate_disposition",
-                    {"distinct", "duplicate", "related"},
-                )
+                if row["duplicate_disposition"] not in HUMAN_PAIR_DISPOSITIONS:
+                    raise _review_error(f"{key}: invalid duplicate_disposition")
             irrelevant = (
                 "source_group_id",
                 "quality_disposition",
@@ -4737,8 +4718,10 @@ def _apply_v2_review_dispositions(
                 "reviewer": review["reviewer"],
                 "reviewed_at": review["reviewed_at"],
                 "rationale": review["rationale"],
-                "quality_flags": _quality_flags(
-                    review["quality_disposition"], review_key=review["review_key"]
+                "quality_flags": list(
+                    review_quality_flags(
+                        review["quality_disposition"], review_key=review["review_key"]
+                    )
                 ),
                 "suitability": review["suitability_disposition"],
             }
@@ -4796,8 +4779,10 @@ def apply_review_dispositions(
         quality.update(
             {
                 "review_status": "reviewed",
-                "flags": _quality_flags(
-                    review["quality_disposition"], review_key=review["review_key"]
+                "flags": list(
+                    review_quality_flags(
+                        review["quality_disposition"], review_key=review["review_key"]
+                    )
                 ),
                 "suitability_disposition": review["suitability_disposition"],
                 "notes": review["rationale"],
