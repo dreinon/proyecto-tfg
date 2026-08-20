@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import score_super_resolution.review_evidence as review_evidence
 from score_super_resolution.review_evidence import (
     REVIEW_FIELDS,
     REVIEW_SAVE_BOUNDARIES,
@@ -78,6 +79,123 @@ def test_existing_accented_review_round_trips_to_identical_canonical_bytes() -> 
     assert any(row["reviewer"] == "Daniel Reinón García" for row in document.rows)
     assert canonical_review_csv(document.rows) == TRACKED_REVIEW.read_bytes()
     assert document.canonical_bytes == TRACKED_REVIEW.read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("review_kind", "field", "invalid_value"),
+    (
+        ("item_policy", "review_kind", "invented-kind"),
+        ("item_policy", "review_status", "invented-status"),
+        ("visual_item", "quality_disposition", "invented-quality"),
+        ("visual_item", "suitability_disposition", "invented-suitability"),
+        ("duplicate_pair", "duplicate_disposition", "invented-pair-state"),
+        ("item_policy", "dataset_licence_status", "invented-licence"),
+        ("item_policy", "item_provenance_status", "invented-provenance"),
+        ("item_policy", "access_status", "invented-access"),
+        ("item_policy", "redistribution_status", "invented-redistribution"),
+        ("item_policy", "figure_reproduction_status", "invented-figure-policy"),
+    ),
+)
+def test_canonical_review_rejects_every_invalid_domain_enum(
+    review_kind: str,
+    field: str,
+    invalid_value: str,
+) -> None:
+    before = TRACKED_REVIEW.read_bytes()
+    rows = _safe_rows()
+    row = next(row for row in rows if row["review_kind"] == review_kind)
+    row[field] = invalid_value
+
+    with pytest.raises(ReviewEvidenceError, match=field):
+        canonical_review_csv(rows)
+
+    assert TRACKED_REVIEW.read_bytes() == before
+
+
+def test_canonical_review_accepts_emitted_pending_and_unavailable_state_unions() -> None:
+    rows = _safe_rows()
+    policy = next(row for row in rows if row["review_kind"] == "item_policy")
+    visual = next(row for row in rows if row["review_kind"] == "visual_item")
+    pair = next(row for row in rows if row["review_kind"] == "duplicate_pair")
+
+    for field in ("reviewer", "reviewed_at", "rationale"):
+        policy[field] = ""
+        visual[field] = ""
+    policy["review_status"] = "pending"
+    for field in (
+        "dataset_licence_status",
+        "item_provenance_status",
+        "access_status",
+        "redistribution_status",
+        "figure_reproduction_status",
+    ):
+        policy[field] = "pending"
+    visual["review_status"] = "pending"
+    visual["quality_disposition"] = ""
+    visual["suitability_disposition"] = ""
+    pair.update(
+        {
+            "review_status": "unavailable",
+            "reviewer": "",
+            "reviewed_at": "",
+            "rationale": "Perceptual comparison evidence is unavailable.",
+            "duplicate_disposition": "unavailable",
+        }
+    )
+
+    assert canonical_review_csv((policy, visual, pair))
+
+
+@pytest.mark.parametrize(
+    ("review_kind", "updates", "match"),
+    (
+        (
+            "visual_item",
+            {"review_status": "unavailable", "suitability_disposition": "unavailable"},
+            "review_status",
+        ),
+        ("duplicate_pair", {"quality_disposition": "acceptable"}, "quality_disposition"),
+        (
+            "duplicate_pair",
+            {"duplicate_disposition": "unavailable"},
+            "duplicate_disposition",
+        ),
+    ),
+)
+def test_canonical_review_rejects_state_or_kind_irrelevant_domains(
+    review_kind: str,
+    updates: dict[str, str],
+    match: str,
+) -> None:
+    row = next(row for row in _safe_rows() if row["review_kind"] == review_kind)
+    row.update(updates)
+
+    with pytest.raises(ReviewEvidenceError, match=match):
+        canonical_review_csv((row,))
+
+
+def test_invalid_domain_save_fails_before_temporary_creation_and_preserves_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    review_path = tmp_path / "smb-review-v1.csv"
+    _write_rows(review_path, _safe_rows())
+    before = read_review(review_path)
+    rows = [row.copy() for row in before.rows]
+    visual = next(row for row in rows if row["review_kind"] == "visual_item")
+    visual["quality_disposition"] = "invented-quality"
+
+    def unexpected_temp(_path: Path) -> tuple[Path, int]:
+        raise AssertionError("invalid review reached temporary creation")
+
+    monkeypatch.setattr(review_evidence, "_exclusive_review_temp", unexpected_temp)
+
+    with pytest.raises(ReviewEvidenceError, match="quality_disposition"):
+        save_review(review_path, rows, expected_sha256=before.sha256)
+
+    after = read_review(review_path)
+    assert review_path.read_bytes() == before.canonical_bytes
+    assert after.sha256 == before.sha256
+    assert after.rows == before.rows
 
 
 @pytest.mark.parametrize(
