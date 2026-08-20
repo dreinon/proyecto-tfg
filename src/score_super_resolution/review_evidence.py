@@ -60,11 +60,16 @@ _FORMULA_PREFIXES = ("=", "+", "-", "@")
 _SAFE_REVIEW_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 REVIEW_SAVE_BOUNDARIES = (
+    "review_before_cas_read",
+    "review_before_temp_create",
     "review_written",
     "review_fsynced",
+    "review_before_replace",
     "review_replaced",
     "review_parent_fsynced",
 )
+REVIEW_MAX_BYTES = 16 * 1024 * 1024
+REVIEW_READ_CHUNK_SIZE = 64 * 1024
 
 
 class ReviewEvidenceError(ValueError):
@@ -457,6 +462,15 @@ def read_review(path: Path) -> ReviewDocument:
 
     try:
         raw = path.read_bytes()
+    except ReviewEvidenceError:
+        raise
+    except OSError as error:
+        raise ReviewEvidenceError(f"cannot read review CSV: {type(error).__name__}") from error
+    return _review_document_from_bytes(raw)
+
+
+def _review_document_from_bytes(raw: bytes) -> ReviewDocument:
+    try:
         text = raw.decode("utf-8")
         reader = csv.DictReader(io.StringIO(text, newline=""))
         if tuple(reader.fieldnames or ()) != REVIEW_FIELDS:
@@ -464,7 +478,7 @@ def read_review(path: Path) -> ReviewDocument:
         rows = list(reader)
     except ReviewEvidenceError:
         raise
-    except (OSError, UnicodeError, csv.Error) as error:
+    except (UnicodeError, csv.Error) as error:
         raise ReviewEvidenceError(f"cannot read review CSV: {type(error).__name__}") from error
     if any(None in row or set(row) != set(REVIEW_FIELDS) for row in rows):
         raise ReviewEvidenceError("review CSV row does not match the exact header")
@@ -477,20 +491,57 @@ def read_review(path: Path) -> ReviewDocument:
     )
 
 
-def _review_lock_path(path: Path) -> Path:
-    resolved = path.expanduser().resolve(strict=False)
-    identity = hashlib.sha256(os.fsencode(resolved)).hexdigest()
+@contextmanager
+def _retained_review_parent(path: Path) -> object:
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory_only = getattr(os, "O_DIRECTORY", 0)
+    close_on_exec = getattr(os, "O_CLOEXEC", 0)
+    if no_follow == 0 or directory_only == 0 or os.open not in os.supports_dir_fd:
+        raise RuntimeError("review persistence requires no-follow directory access")
+    expanded = path.expanduser()
+    if expanded.is_absolute():
+        anchor = expanded.anchor
+        components = expanded.parts[1:]
+    else:
+        anchor = "."
+        components = expanded.parts
+    if not components or any(component in {"", ".", ".."} for component in components):
+        raise ReviewEvidenceError("review path must use safe components")
+    directory_fd: int | None = None
+    try:
+        directory_fd = os.open(
+            anchor,
+            os.O_RDONLY | directory_only | no_follow | close_on_exec,
+        )
+        for component in components[:-1]:
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | directory_only | no_follow | close_on_exec,
+                dir_fd=directory_fd,
+            )
+            os.close(directory_fd)
+            directory_fd = next_fd
+        yield directory_fd, components[-1]
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
+def _review_lock_path(parent_fd: int, basename: str) -> Path:
+    parent = os.fstat(parent_fd)
+    raw_identity = f"{parent.st_dev}:{parent.st_ino}:{basename}".encode("utf-8")
+    identity = hashlib.sha256(raw_identity).hexdigest()
     user_id = os.getuid() if hasattr(os, "getuid") else 0
     return Path(tempfile.gettempdir()) / f"score-sr-review-{user_id}-{identity}.lock"
 
 
 @contextmanager
-def _locked_review(path: Path) -> object:
+def _locked_review(parent_fd: int, basename: str) -> object:
     flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
     no_follow = getattr(os, "O_NOFOLLOW", 0)
     if no_follow == 0:
         raise RuntimeError("review locking requires no-follow file support")
-    descriptor = os.open(_review_lock_path(path), flags | no_follow, 0o600)
+    descriptor = os.open(_review_lock_path(parent_fd, basename), flags | no_follow, 0o600)
     try:
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode):
@@ -516,21 +567,52 @@ def _save_boundary(name: str, hook: Callable[[str], None] | None) -> None:
         os._exit(91)
 
 
-def _fsync_directory(path: Path) -> None:
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
-    descriptor = os.open(path, flags)
+def _read_review_at(parent_fd: int, basename: str) -> ReviewDocument:
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    close_on_exec = getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(
+        basename,
+        os.O_RDONLY | no_follow | close_on_exec | getattr(os, "O_NONBLOCK", 0),
+        dir_fd=parent_fd,
+    )
     try:
-        os.fsync(descriptor)
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ReviewEvidenceError("review CSV must be a regular file")
+        if opened.st_size > REVIEW_MAX_BYTES:
+            raise ReviewEvidenceError("review CSV exceeds its maximum size")
+        chunks: list[bytes] = []
+        consumed = 0
+        while True:
+            chunk = os.read(
+                descriptor,
+                min(REVIEW_READ_CHUNK_SIZE, REVIEW_MAX_BYTES + 1 - consumed),
+            )
+            if not chunk:
+                break
+            consumed += len(chunk)
+            if consumed > REVIEW_MAX_BYTES:
+                raise ReviewEvidenceError("review CSV exceeds its maximum size")
+            chunks.append(chunk)
+        if consumed != opened.st_size:
+            raise ReviewEvidenceError("review CSV changed while being read")
+        return _review_document_from_bytes(b"".join(chunks))
     finally:
         os.close(descriptor)
 
 
-def _exclusive_review_temp(path: Path) -> tuple[Path, int]:
-    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_CLOEXEC", 0)
+def _exclusive_review_temp(parent_fd: int, basename: str) -> tuple[str, int]:
+    flags = (
+        os.O_CREAT
+        | os.O_EXCL
+        | os.O_WRONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     for _attempt in range(16):
-        temporary = path.parent / f".{path.name}.tmp-{uuid.uuid4().hex}"
+        temporary = f".{basename}.tmp-{uuid.uuid4().hex}"
         try:
-            return temporary, os.open(temporary, flags, 0o600)
+            return temporary, os.open(temporary, flags, 0o600, dir_fd=parent_fd)
         except FileExistsError:
             continue
     raise FileExistsError("could not allocate a unique review temporary file")
@@ -549,25 +631,41 @@ def save_review(
         raise ValueError("expected_sha256 must be a lowercase SHA-256 digest")
     content = canonical_review_csv(rows)
     new_sha256 = hashlib.sha256(content).hexdigest()
-    temporary: Path | None = None
+    temporary: str | None = None
     committed = False
     try:
-        with _locked_review(path):
-            current = read_review(path)
-            if current.sha256 != expected_sha256:
-                raise StaleReviewError
-            temporary, descriptor = _exclusive_review_temp(path)
-            with os.fdopen(descriptor, "wb", closefd=True) as handle:
-                handle.write(content)
-                handle.flush()
-                _save_boundary("review_written", boundary_hook)
-                os.fsync(handle.fileno())
-                _save_boundary("review_fsynced", boundary_hook)
-            os.replace(temporary, path)
-            committed = True
-            _save_boundary("review_replaced", boundary_hook)
-            _fsync_directory(path.parent)
-            _save_boundary("review_parent_fsynced", boundary_hook)
+        with _retained_review_parent(path) as (parent_fd, basename):
+            try:
+                with _locked_review(parent_fd, basename):
+                    _save_boundary("review_before_cas_read", boundary_hook)
+                    current = _read_review_at(parent_fd, basename)
+                    if current.sha256 != expected_sha256:
+                        raise StaleReviewError
+                    _save_boundary("review_before_temp_create", boundary_hook)
+                    temporary, descriptor = _exclusive_review_temp(parent_fd, basename)
+                    with os.fdopen(descriptor, "wb", closefd=True) as handle:
+                        handle.write(content)
+                        handle.flush()
+                        _save_boundary("review_written", boundary_hook)
+                        os.fsync(handle.fileno())
+                        _save_boundary("review_fsynced", boundary_hook)
+                    _save_boundary("review_before_replace", boundary_hook)
+                    os.replace(
+                        temporary,
+                        basename,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                    )
+                    committed = True
+                    _save_boundary("review_replaced", boundary_hook)
+                    os.fsync(parent_fd)
+                    _save_boundary("review_parent_fsynced", boundary_hook)
+            finally:
+                if temporary is not None:
+                    try:
+                        os.unlink(temporary, dir_fd=parent_fd)
+                    except FileNotFoundError:
+                        pass
     except (ReviewEvidenceError, ReviewPersistenceError):
         raise
     except Exception as error:
@@ -577,7 +675,4 @@ def save_review(
             committed=committed,
             sha256=new_sha256 if committed else None,
         ) from error
-    finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
     return new_sha256
