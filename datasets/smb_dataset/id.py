@@ -1,1 +1,0 @@
-SMB_ID = "PRAIG/SMB"

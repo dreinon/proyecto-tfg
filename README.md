@@ -24,7 +24,8 @@ El flujo experimental básico puede representarse de la siguiente manera:
 
 El núcleo del TFG se centra en:
 
-* Seleccionar conjuntos de datos adecuados de partituras digitalizadas.
+* Auditar SMB como benchmark principal de evaluación y seleccionar otra fuente únicamente si el
+  ajuste fino llega a justificarse.
 * Diseñar uno o varios procesos controlados para generar imágenes de baja resolución.
 * Estudiar y seleccionar técnicas y modelos actuales de superresolución potencialmente adecuados para este dominio.
 * Aplicar modelos preentrenados como referencia inicial.
@@ -52,6 +53,72 @@ Además de métricas generales de reconstrucción de imagen, será especialmente
 * aparición de información inexistente en el original;
 * alteraciones en texto o cifras;
 * reconstrucciones visualmente plausibles pero musicalmente incorrectas.
+
+## Organización del trabajo
+
+El TFG se distribuye entre dos repositorios sincronizados con GitHub:
+
+* `proyecto`: implementación, preparación de datos, configuraciones, experimentos, métricas y artefactos reproducibles;
+* `memoria`: fuentes de la memoria académica, sincronizadas a su vez con el proyecto de Overleaf.
+
+Las normas y recomendaciones académicas consolidadas se documentan en `memoria/docs/tfg-guidance/`. El contrato experimental y los criterios de reproducibilidad específicos del proyecto se mantienen en [`docs/research-protocol.md`](docs/research-protocol.md).
+
+## Entorno de desarrollo
+
+El entorno local utiliza **Python 3.12.12** y [`uv`](https://docs.astral.sh/uv/) como gestor de Python, dependencias y entorno virtual. Las versiones resueltas se conservan en `uv.lock`.
+
+```bash
+uv sync --extra cpu --group dev --group notebooks --group kaggle
+uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+```
+
+El entorno local instala PyTorch para CPU y se utiliza para preparar datos, probar los pipelines, calcular métricas y ejecutar experimentos pequeños. Los entrenamientos o evaluaciones que necesiten aceleración se ejecutarán en Kaggle, registrando la revisión del *notebook*, el acelerador, el entorno, la configuración, las semillas y los artefactos de cada ejecución.
+
+La guía completa está en [`DEVELOPMENT.md`](DEVELOPMENT.md).
+
+## Estructura del repositorio
+
+* `src/score_super_resolution/`: código reutilizable del proyecto;
+* `tests/`: pruebas deterministas sobre datos pequeños;
+* `notebooks/`: exploración, análisis visual y comunicación de resultados;
+* `configs/`: configuraciones versionadas de experimentos;
+* `data/sources/`: descriptores versionados de las fuentes externas;
+* `data/manifests/`: particiones y selecciones reproducibles; las imágenes no se almacenan en Git;
+* `artifacts/`: convenciones para resultados y artefactos generados;
+* `docs/research-protocol.md`: protocolo experimental y reglas de reproducibilidad.
+
+## Reproducibilidad
+
+Cada resultado que se utilice en la memoria deberá poder relacionarse con:
+
+* una revisión concreta del código;
+* el origen, versión, licencia y partición del conjunto de datos;
+* la configuración de degradación y del modelo;
+* las semillas aleatorias;
+* una captura del entorno y del hardware;
+* las métricas por elemento y agregadas;
+* los logs y artefactos de salida.
+
+Cuando haya que crear particiones, se definirán por partitura, obra o documento fuente antes de
+generar páginas o parches, evitando que contenido relacionado aparezca simultáneamente en
+entrenamiento, validación y prueba. Los *splits* oficiales de un benchmark no se redistribuirán
+silenciosamente.
+
+## Fuente principal de evaluación
+
+La fuente principal será [Sheet Music Benchmark (SMB)](https://huggingface.co/datasets/PRAIG/SMB),
+consumida directamente con Hugging Face Datasets y una revisión concreta, sin duplicarla dentro
+del repositorio. El descriptor reproducible se encuentra en
+[`data/sources/smb.yaml`](data/sources/smb.yaml).
+
+El descriptor y la auditoría autenticada confirman que SMB requiere aprobación manual de acceso,
+usa licencia CC BY-NC 4.0 y, en la revisión fijada, publica 685 páginas en un único *split* oficial
+`test`. Por ese motivo se trata como **benchmark de evaluación**, no como conjunto de entrenamiento.
+El entrenamiento o *fine-tuning* necesitará otra fuente con procedencia y particiones adecuadas, o
+una decisión metodológica explícita que cancele o sustituya el protocolo v1 antes de utilizar SMB
+con otro rol.
 
 ## Posibles ampliaciones
 
@@ -114,4 +181,13 @@ Dependiendo de los resultados obtenidos durante el desarrollo, también podrán 
 
 Proyecto en desarrollo como parte de un Trabajo de Fin de Grado.
 
-El alcance principal está definido alrededor de la **selección, adaptación y evaluación de técnicas de superresolución aplicadas a partituras digitalizadas**. Las funcionalidades adicionales descritas en este documento representan posibles líneas de ampliación y su implementación dependerá de la evolución y los resultados del proyecto.
+La infraestructura inicial del repositorio ya está preparada: entorno reproducible con `uv`, Python 3.12.12, PyTorch local para CPU, soporte para Jupyter y Kaggle, pruebas, linting y captura del entorno de ejecución.
+
+SMB está seleccionado y auditado como fuente principal de evaluación en una revisión inmutable de
+Hugging Face. El inventario reproducible queda bloqueado para evaluación; el siguiente trabajo es
+fijar el protocolo de degradación y ejecutar los experimentos comparativos. Si se justifica
+*fine-tuning*, todavía deberá seleccionarse una fuente de entrenamiento adecuada. El alcance
+principal continúa centrado en la **selección, adaptación y evaluación de técnicas de
+superresolución aplicadas a partituras digitalizadas**. Las funcionalidades adicionales descritas
+en este documento representan posibles líneas de ampliación y su implementación dependerá de la
+evolución y los resultados del núcleo experimental.
