@@ -4,13 +4,16 @@ import base64
 import copy
 import csv
 import hashlib
+import io
 import json
 import os
+import stat
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+from PIL import Image
 
 import score_super_resolution.smb_audit as smb_audit
 from score_super_resolution.contracts import ContractValidationError, validate_instance
@@ -146,6 +149,114 @@ def test_audit_accepts_smb_xywh_region_mapping() -> None:
     assert row["bbox_valid"] is True
     assert row["paired_eligible"] is True
     assert row["paired_ineligibility_reason"] is None
+
+
+@pytest.mark.parametrize(
+    ("bbox", "texts", "bbox_valid", "required_text_present", "paired_reason"),
+    (
+        (
+            {"x": -5e-10, "y": 0.0, "width": 100.0000000005, "height": 100.0},
+            {"raw": "raw", "kern": "**kern", "ekern": "ekern"},
+            True,
+            True,
+            None,
+        ),
+        (
+            {"x": -4.802511908456821e-05, "y": 0.0, "width": 10.0, "height": 10.0},
+            {"raw": "raw", "kern": "**kern", "ekern": "ekern"},
+            False,
+            True,
+            "invalid_region_annotation",
+        ),
+        (
+            {"x": 150.0, "y": 0.0, "width": 1.0, "height": 1.0},
+            {"raw": "raw", "kern": "**kern", "ekern": "ekern"},
+            False,
+            True,
+            "invalid_region_annotation",
+        ),
+        (
+            {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0},
+            {"raw": "raw", "kern": None, "ekern": None},
+            True,
+            False,
+            "missing_required_region_text",
+        ),
+    ),
+)
+def test_region_annotation_contract_uses_percentage_domain_and_required_text(
+    bbox: dict[str, float],
+    texts: dict[str, str | None],
+    bbox_valid: bool,
+    required_text_present: bool,
+    paired_reason: str | None,
+) -> None:
+    output = io.BytesIO()
+    Image.new("RGB", (1000, 1000), "white").save(output, format="PNG")
+    record = {
+        **_audit_records()[0],
+        "image": output.getvalue(),
+        "original_width": 1000,
+        "original_height": 1000,
+        "regions": [{"bbox": bbox, **texts}],
+    }
+
+    row = audit_item(
+        record,
+        upstream_index=0,
+        source_descriptor=_source_descriptor(),
+        trusted_cache_roots=INLINE_TRUSTED_CACHE_ROOTS,
+    )
+
+    assert row["processing_status"] == "processed"
+    assert row["bbox_valid"] is bbox_valid
+    assert row["required_text_present"] is required_text_present
+    assert row["paired_eligible"] is (paired_reason is None)
+    assert row["paired_ineligibility_reason"] == paired_reason
+
+
+def test_cache_reader_bounds_growth_when_initial_size_lies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    encoded = _audit_records()[0]["image"]
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    cached_image = cache_root / "image.png"
+    cached_image.write_bytes(encoded)
+    limit = len(encoded) - 1
+    original_fstat = smb_audit.os.fstat
+    original_read = smb_audit.os.read
+    read_sizes: list[int] = []
+
+    def lying_fstat(descriptor: int) -> os.stat_result:
+        opened = original_fstat(descriptor)
+        if stat.S_ISREG(opened.st_mode) and opened.st_size == len(encoded):
+            values = list(opened)
+            values[6] = 0
+            return os.stat_result(values)
+        return opened
+
+    def bounded_read(descriptor: int, size: int) -> bytes:
+        read_sizes.append(size)
+        return original_read(descriptor, size)
+
+    monkeypatch.setattr(smb_audit.os, "fstat", lying_fstat)
+    monkeypatch.setattr(smb_audit.os, "read", bounded_read)
+
+    row = audit_item(
+        _path_record(cached_image),
+        upstream_index=0,
+        source_descriptor=_source_descriptor(),
+        trusted_cache_roots=(cache_root,),
+        max_encoded_bytes=limit,
+    )
+
+    assert row["processing_status"] == "failed"
+    assert row["unprocessable_reason"] == "encoded_image_too_large"
+    assert row["encoded_sha256"] is None
+    assert read_sizes
+    assert all(0 < size <= limit + 1 for size in read_sizes)
+    assert sum(read_sizes) <= limit + 1
 
 
 def _path_record(path: str | Path) -> dict[str, Any]:
