@@ -106,6 +106,9 @@ MANIFEST_DESCRIPTOR_FILENAME = "manifest-descriptor.yaml"
 MANIFEST_RECORDS_FILENAME = "manifest-records.jsonl"
 RECOVERY_RECORDS_FILENAME = "manifest-records.jsonl.gz"
 RECOVERY_READ_CHUNK_SIZE = 64 * 1024
+MANIFEST_POINTER_MAX_BYTES = 1024 * 1024
+MANIFEST_DESCRIPTOR_MAX_BYTES = 1024 * 1024
+MANIFEST_RECORDS_MAX_BYTES = 64 * 1024 * 1024
 _OS_OPEN_SUPPORTS_DIR_FD = os.open in getattr(os, "supports_dir_fd", set())
 _OS_STAT_SUPPORTS_DIR_FD = os.stat in getattr(os, "supports_dir_fd", set())
 AUTHORITATIVE_MIGRATION_STAGE = ".migrate-authoritative-v2"
@@ -123,6 +126,8 @@ PUBLICATION_BOUNDARIES = (
     "pointer_fsynced",
     "pointer_replaced",
     "active_parent_fsynced",
+    "generation_root_anchored",
+    "selected_generation_anchored",
 )
 INSTALL_BOUNDARIES = (
     "candidate_generation_installed",
@@ -2235,7 +2240,13 @@ def _write_fsynced_at(
         os.close(descriptor)
 
 
-def _read_regular_at(parent_fd: int, basename: str, *, label: str) -> bytes:
+def _read_regular_at(
+    parent_fd: int,
+    basename: str,
+    *,
+    label: str,
+    maximum_bytes: int | None = None,
+) -> bytes:
     no_follow, _, close_on_exec = _secure_dirfd_support()
     descriptor: int | None = None
     try:
@@ -2247,9 +2258,21 @@ def _read_regular_at(parent_fd: int, basename: str, *, label: str) -> bytes:
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode):
             raise _publication_error(f"{label} must be a regular file")
+        if maximum_bytes is not None and opened.st_size > maximum_bytes:
+            raise _publication_error(f"{label} exceeds its maximum size")
         chunks: list[bytes] = []
-        while chunk := os.read(descriptor, RECOVERY_READ_CHUNK_SIZE):
+        consumed = 0
+        while True:
+            request_size = RECOVERY_READ_CHUNK_SIZE
+            if maximum_bytes is not None:
+                request_size = min(request_size, maximum_bytes + 1 - consumed)
+            chunk = os.read(descriptor, request_size)
+            if not chunk:
+                break
             chunks.append(chunk)
+            consumed += len(chunk)
+            if maximum_bytes is not None and consumed > maximum_bytes:
+                raise _publication_error(f"{label} exceeds its maximum size")
         result = b"".join(chunks)
         if len(result) != opened.st_size:
             raise _publication_error(f"{label} changed while being read")
@@ -2852,48 +2875,98 @@ def _load_yaml_mapping(path: Path, *, label: str) -> dict[str, object]:
     return loaded
 
 
-def _resolved_named_path(root: Path, relative: object, *, expected: str) -> Path:
-    if relative != expected:
+def _load_yaml_bytes(content: bytes, *, label: str) -> dict[str, object]:
+    try:
+        loaded = yaml.safe_load(content.decode("utf-8"))
+    except (UnicodeError, yaml.YAMLError) as error:
         raise _publication_error(
-            "active pointer names a non-canonical generation path", committed=True
-        )
-    root = root.resolve()
-    resolved = (root / expected).resolve()
-    if not resolved.is_relative_to(root):
-        raise _publication_error("active pointer path escapes generation root", committed=True)
-    return resolved
+            f"cannot read {label}: {type(error).__name__}", committed=True
+        ) from error
+    if not isinstance(loaded, dict):
+        raise _publication_error(f"{label} must be a mapping", committed=True)
+    return loaded
 
 
 def resolve_active_manifest(
-    *, active_path: Path, generation_root: Path
+    *,
+    active_path: Path,
+    generation_root: Path,
+    boundary_hook: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
     """Resolve and validate exactly the generation named by the active pointer."""
 
-    pointer = _load_yaml_mapping(active_path, label="active pointer")
-    pointer_version = pointer.get("schema_version")
-    if isinstance(pointer_version, bool) or pointer_version not in {1, 2}:
-        raise _publication_error(
-            "active pointer names an unsupported schema version", committed=True
+    with _retained_parent_dirfd(active_path, label="active pointer") as (
+        active_parent_fd,
+        active_basename,
+    ):
+        _publication_boundary("active_parent_anchored", boundary_hook)
+        pointer = _load_yaml_bytes(
+            _read_regular_at(
+                active_parent_fd,
+                active_basename,
+                label="active pointer",
+                maximum_bytes=MANIFEST_POINTER_MAX_BYTES,
+            ),
+            label="active pointer",
         )
-    version = int(pointer_version)
-    validate_instance("manifest-active", pointer, version=version)
-    generation_id = str(pointer["generation_id"])
-    descriptor_relative = f"{generation_id}/manifest-descriptor.yaml"
-    records_relative = f"{generation_id}/manifest-records.jsonl"
-    descriptor_path = _resolved_named_path(
-        generation_root, pointer["descriptor_path"], expected=descriptor_relative
-    )
-    records_path = _resolved_named_path(
-        generation_root, pointer["records_path"], expected=records_relative
-    )
-    descriptor = _load_yaml_mapping(descriptor_path, label="generation descriptor")
+        pointer_version = pointer.get("schema_version")
+        if isinstance(pointer_version, bool) or pointer_version not in {1, 2}:
+            raise _publication_error(
+                "active pointer names an unsupported schema version", committed=True
+            )
+        version = int(pointer_version)
+        validate_instance("manifest-active", pointer, version=version)
+        generation_id = str(pointer["generation_id"])
+        if _SAFE_METADATA_PATTERN.fullmatch(generation_id) is None:
+            raise _publication_error("generation path escapes generation root", committed=True)
+        descriptor_relative = f"{generation_id}/{MANIFEST_DESCRIPTOR_FILENAME}"
+        records_relative = f"{generation_id}/{MANIFEST_RECORDS_FILENAME}"
+        if (
+            pointer["descriptor_path"] != descriptor_relative
+            or pointer["records_path"] != records_relative
+        ):
+            raise _publication_error(
+                "active pointer names a non-canonical generation path", committed=True
+            )
+
+        with _retained_directory_fd(
+            generation_root, label="generation root", create=False
+        ) as generation_root_fd:
+            _publication_boundary("generation_root_anchored", boundary_hook)
+            no_follow, directory_only, close_on_exec = _secure_dirfd_support()
+            try:
+                generation_fd = os.open(
+                    generation_id,
+                    os.O_RDONLY | directory_only | no_follow | close_on_exec,
+                    dir_fd=generation_root_fd,
+                )
+            except OSError as error:
+                raise _publication_error(
+                    "cannot access selected generation", committed=True
+                ) from error
+            try:
+                _publication_boundary("selected_generation_anchored", boundary_hook)
+                descriptor = _load_yaml_bytes(
+                    _read_regular_at(
+                        generation_fd,
+                        MANIFEST_DESCRIPTOR_FILENAME,
+                        label="generation descriptor",
+                        maximum_bytes=MANIFEST_DESCRIPTOR_MAX_BYTES,
+                    ),
+                    label="generation descriptor",
+                )
+                records_bytes = _read_regular_at(
+                    generation_fd,
+                    MANIFEST_RECORDS_FILENAME,
+                    label="generation records",
+                    maximum_bytes=MANIFEST_RECORDS_MAX_BYTES,
+                )
+            finally:
+                os.close(generation_fd)
+
     if descriptor.get("schema_version") != version:
         raise _publication_error("pointer and descriptor schema versions disagree", committed=True)
     validate_instance("manifest-descriptor", descriptor, version=version)
-    try:
-        records_bytes = records_path.read_bytes()
-    except OSError as error:
-        raise _publication_error("cannot read generation records", committed=True) from error
     records_sha256 = hashlib.sha256(records_bytes).hexdigest()
     if (
         records_sha256 != pointer["records_sha256"]
