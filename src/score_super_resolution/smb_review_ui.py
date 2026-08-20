@@ -105,13 +105,18 @@ class SMBReviewSession:
 
     def summary(self) -> dict[str, int]:
         rows = self.read_rows()
+        reviewed = sum(row["review_status"] == "reviewed" for row in rows)
+        unavailable = sum(row["review_status"] == "unavailable" for row in rows)
+        pending = sum(row["review_status"] == "pending" for row in rows)
         groups = {
             row["source_group_id"] for row in rows if row["review_kind"] in {"item", "item_policy"}
         }
         return {
             "rows": len(rows),
-            "reviewed": sum(row["review_status"] == "reviewed" for row in rows),
-            "pending": sum(row["review_status"] != "reviewed" for row in rows),
+            "reviewed": reviewed,
+            "unavailable": unavailable,
+            "completed": reviewed + unavailable,
+            "pending": pending,
             "visual_items": len(self.visual_item_ids),
             "sample_items": len(self.sample_ids),
             "candidates": len(self.candidate_keys),
@@ -369,7 +374,7 @@ class SMBReviewSession:
                     if not self.confirm_policy.value:
                         raise ValueError("Marca la confirmación antes de aplicar la política")
                     result = self.apply_policy(self.reviewer.value)
-                    progress = f"{result['reviewed']}/{result['rows']}"
+                    progress = f"{result['completed']}/{result['rows']}"
                     print(f"Política aplicada. {progress} filas; {result['groups']} grupos.")
                 except Exception as error:
                     print(f"No se guardó: {error}")
@@ -748,7 +753,9 @@ class SMBReviewSession:
             with output:
                 clear_output()
                 summary = self.summary()
-                print(f"Filas revisadas: {summary['reviewed']}/{summary['rows']}")
+                print(f"Filas completadas: {summary['completed']}/{summary['rows']}")
+                print(f"Revisadas: {summary['reviewed']}")
+                print(f"No disponibles: {summary['unavailable']}")
                 print(f"Pendientes: {summary['pending']}")
                 print(f"Grupos actuales: {summary['groups']} (objetivo de la política: 260)")
                 if not summary["pending"]:
