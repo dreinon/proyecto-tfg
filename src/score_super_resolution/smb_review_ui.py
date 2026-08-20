@@ -20,6 +20,7 @@ from score_super_resolution.review_evidence import (
     PAIR_REVIEW_KINDS,
     QUALITY_FLAG_CHOICES,
     VISUAL_SUITABILITY_CHOICES,
+    ReviewEvidenceError,
     read_review,
     save_review,
     validate_duplicate_disposition,
@@ -130,6 +131,10 @@ class SMBReviewSession:
             raise ValueError("Indica el nombre del revisor")
         validate_human_cell(reviewer, field="reviewer", review_key="session-policy")
         rows = self.read_rows()
+        if any(row["review_kind"] == "item" for row in rows):
+            raise ReviewEvidenceError(
+                "legacy item policy UI is unsupported; migrate review evidence to v2"
+            )
         today = date.today().isoformat()
         changed = 0
         for row in rows:
@@ -149,18 +154,6 @@ class SMBReviewSession:
                 row["figure_reproduction_status"] = "prohibited"
                 changed += 1
                 continue
-            if row["review_kind"] != "item" or row["review_status"] == "reviewed":
-                continue
-            row["source_group_id"] = PAGE_SUFFIX.sub("", row["source_group_id"])
-            row["quality_disposition"] = "acceptable"
-            row["suitability_disposition"] = "suitable"
-            row["duplicate_disposition"] = "distinct"
-            row["dataset_licence_status"] = "confirmed"
-            row["item_provenance_status"] = "unavailable"
-            row["access_status"] = "confirmed"
-            row["redistribution_status"] = "permitted"
-            row["figure_reproduction_status"] = "permitted"
-            changed += 1
         self.write_rows(rows)
         result = self.summary()
         result["changed"] = changed
