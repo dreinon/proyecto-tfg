@@ -439,6 +439,7 @@ def relocatable_preview_project(
     module = _degradation()
     project_root = tmp_path_factory.mktemp("relocatable-phase2-project")
     tracked_inputs = (
+        Path("pyproject.toml"),
         Path("configs/degradations/controlled-score-candidates.yaml"),
         Path("tests/fixtures/phase2/fixture-manifest-v1.yaml"),
         Path("notebooks/02-degradation-preview.ipynb"),

@@ -106,6 +106,35 @@ class DegradationResult:
     trace: dict[str, Any]
 
 
+_PROJECT_ROOT_MARKERS = (
+    Path("pyproject.toml"),
+    Path("configs/degradations/controlled-score-candidates.yaml"),
+    Path("notebooks/02-degradation-preview.ipynb"),
+)
+
+
+def _is_regular_non_symlink(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return False
+    return stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode)
+
+
+def _discover_project_root(start: Path) -> Path:
+    """Find the nearest checked-out project root without trusting the process cwd as that root."""
+
+    candidate = Path(start).absolute()
+    if _is_regular_non_symlink(candidate):
+        candidate = candidate.parent
+    for directory in (candidate, *candidate.parents):
+        if all(_is_regular_non_symlink(directory / marker) for marker in _PROJECT_ROOT_MARKERS):
+            return directory.resolve()
+    raise DegradationDecisionError(
+        "project root cannot be discovered from the notebook working directory"
+    )
+
+
 def _secret_like_key(path: tuple[str, ...], value: Any) -> str | None:
     if isinstance(value, Mapping):
         for raw_key, child in value.items():
@@ -1203,8 +1232,9 @@ def freeze_degradation_control(
 class DegradationPreviewSession:
     """Notebook-only helper for rendering panels and recording a human decision."""
 
-    def __init__(self, project_root: Path, artifact_root: Path | None = None) -> None:
-        self.project_root = Path(project_root).resolve()
+    def __init__(self, project_root: Path | None = None, artifact_root: Path | None = None) -> None:
+        discovery_start = Path.cwd() if project_root is None else Path(project_root)
+        self.project_root = _discover_project_root(discovery_start)
         configured = os.environ.get("SCORE_SR_PHASE2_PREVIEW_ROOT")
         self.artifact_root = (
             Path(artifact_root).resolve()
