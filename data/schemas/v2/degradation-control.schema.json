@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v2:degradation-control",
+  "title": "Controlled score degradation candidate registry v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "registry_id", "registry_policy", "candidates"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "record_type": {"const": "degradation-control"},
+    "registry_id": {"const": "controlled-score-candidates"},
+    "registry_policy": {"const": "append-only-monotonic-explicit"},
+    "candidates": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {"$ref": "#/$defs/candidate"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version", "candidate_id", "status", "claim_boundary", "master_seed",
+        "image_contract", "alignment", "runtime", "condition_order", "conditions"
+      ],
+      "properties": {
+        "version": {"type": "integer", "minimum": 1, "maximum": 32},
+        "candidate_id": {"type": "string", "pattern": "^controlled-score-v[1-9][0-9]*-candidate$"},
+        "status": {"const": "candidate"},
+        "claim_boundary": {"const": "controlled-synthetic-only"},
+        "master_seed": {"type": "integer", "minimum": 0},
+        "previous_candidate_sha256": {"$ref": "#/$defs/sha256"},
+        "image_contract": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode", "dtype", "range", "channel_degradation",
+            "restoration_preprocessing", "forbidden_transformations"
+          ],
+          "properties": {
+            "mode": {"const": "RGB"},
+            "dtype": {"const": "uint8"},
+            "range": {"const": [0, 255]},
+            "channel_degradation": {"const": "achromatic-equal"},
+            "restoration_preprocessing": {"const": "none"},
+            "forbidden_transformations": {
+              "const": ["grayscale", "background-whitening", "contrast-normalization", "binarization"]
+            }
+          }
+        },
+        "alignment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["divisibility_crop", "crop_edges", "border", "rounding"],
+          "properties": {
+            "divisibility_crop": {"const": "lower-right-remainder"},
+            "crop_edges": {"const": ["bottom", "right"]},
+            "border": {"const": "reflect-101"},
+            "rounding": {"const": "clip-0-255-rint-cast"}
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "library", "reduction_interpolation", "opencv_threads", "opencl",
+            "jpeg_colour_order", "jpeg_sampling_factor", "jpeg_progressive", "jpeg_optimize"
+          ],
+          "properties": {
+            "library": {"const": "opencv"},
+            "reduction_interpolation": {"const": "INTER_AREA"},
+            "opencv_threads": {"const": 1},
+            "opencl": {"const": false},
+            "jpeg_colour_order": {"const": "RGB-BGR-explicit"},
+            "jpeg_sampling_factor": {"const": "4:4:4"},
+            "jpeg_progressive": {"const": false},
+            "jpeg_optimize": {"const": false}
+          }
+        },
+        "condition_order": {
+          "const": ["x2-clean", "x2-moderate", "x2-strong", "x4-clean", "x4-moderate", "x4-strong"]
+        },
+        "conditions": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "items": {"$ref": "#/$defs/condition"}
+        }
+      }
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["condition_id", "scale", "severity", "operations", "reduction", "blur", "noise", "quantization", "jpeg"],
+      "properties": {
+        "condition_id": {"enum": ["x2-clean", "x2-moderate", "x2-strong", "x4-clean", "x4-moderate", "x4-strong"]},
+        "scale": {"enum": [2, 4]},
+        "severity": {"enum": ["clean", "moderate", "strong"]},
+        "operations": {
+          "oneOf": [
+            {"const": ["reduction"]},
+            {"const": ["blur", "reduction", "noise", "clip-round", "jpeg"]}
+          ]
+        },
+        "reduction": {
+          "type": "object", "additionalProperties": false, "required": ["interpolation"],
+          "properties": {"interpolation": {"const": "INTER_AREA"}}
+        },
+        "blur": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["type", "sigma", "kernel"],
+              "properties": {
+                "type": {"const": "gaussian"},
+                "sigma": {"enum": [0.8, 1.6]},
+                "kernel": {"enum": [7, 11]}
+              }
+            }
+          ]
+        },
+        "noise": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["type", "sigma"],
+              "properties": {"type": {"const": "gaussian"}, "sigma": {"enum": [3.0, 8.0]}}
+            }
+          ]
+        },
+        "quantization": {"const": "clip-0-255-rint-cast"},
+        "jpeg": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["quality", "sampling_factor", "progressive", "optimize"],
+              "properties": {
+                "quality": {"enum": [60, 85]},
+                "sampling_factor": {"const": "4:4:4"},
+                "progressive": {"const": false},
+                "optimize": {"const": false}
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

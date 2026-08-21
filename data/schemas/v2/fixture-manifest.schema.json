@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v2:fixture-manifest",
+  "title": "Project-authored analytical fixture manifest v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "manifest_id", "source_role", "content_policy", "limits", "items"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "record_type": {"const": "fixture-manifest"},
+    "manifest_id": {"const": "phase2-score-fixtures-v1"},
+    "source_role": {"const": "pipeline-validation-only"},
+    "content_policy": {"const": "project-authored-synthetic-no-smb"},
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["max_items", "max_width", "max_height", "max_pixels", "max_encoded_bytes"],
+      "properties": {
+        "max_items": {"const": 16},
+        "max_width": {"const": 2048},
+        "max_height": {"const": 2048},
+        "max_pixels": {"const": 4194304},
+        "max_encoded_bytes": {"const": 8388608}
+      }
+    },
+    "items": {
+      "type": "array", "minItems": 8, "maxItems": 16,
+      "items": {"$ref": "#/$defs/item"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "point": {
+      "type": "array", "prefixItems": [{"type": "integer", "minimum": 0}, {"type": "integer", "minimum": 0}],
+      "minItems": 2, "maxItems": 2
+    },
+    "colour": {
+      "type": "array", "prefixItems": [
+        {"type": "integer", "minimum": 0, "maximum": 255},
+        {"type": "integer", "minimum": 0, "maximum": 255},
+        {"type": "integer", "minimum": 0, "maximum": 255}
+      ], "minItems": 3, "maxItems": 3
+    },
+    "primitive": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {"enum": ["staff", "note", "line", "ellipse", "text", "impulse", "gradient", "border"]},
+        "origin": {"$ref": "#/$defs/point"},
+        "end": {"$ref": "#/$defs/point"},
+        "centre": {"$ref": "#/$defs/point"},
+        "axes": {"$ref": "#/$defs/point"},
+        "colour": {"$ref": "#/$defs/colour"},
+        "spacing": {"type": "integer", "minimum": 2, "maximum": 40},
+        "length": {"type": "integer", "minimum": 10, "maximum": 2000},
+        "count": {"type": "integer", "minimum": 1, "maximum": 20},
+        "thickness": {"type": "integer", "minimum": 1, "maximum": 8},
+        "radius": {"type": "integer", "minimum": 1, "maximum": 30},
+        "stem": {"enum": ["up", "down", "none"]},
+        "angle_start": {"type": "number", "minimum": 0, "maximum": 360},
+        "angle_end": {"type": "number", "minimum": 0, "maximum": 360},
+        "text": {"type": "string", "minLength": 1, "maxLength": 32},
+        "scale": {"type": "number", "exclusiveMinimum": 0, "maximum": 4},
+        "value_start": {"type": "integer", "minimum": -32, "maximum": 32},
+        "value_end": {"type": "integer", "minimum": -32, "maximum": 32}
+      }
+    },
+    "item": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "item_id", "source_group_id", "page_number", "source_role", "origin", "author", "license",
+        "relative_path", "width", "height", "background", "roi", "primitives", "generated_pixel_sha256"
+      ],
+      "properties": {
+        "item_id": {"type": "string", "pattern": "^fixture-work-[0-9]{2}-page-[0-9]{2}$"},
+        "source_group_id": {"type": "string", "pattern": "^fixture-work-[0-9]{2}$"},
+        "page_number": {"enum": [1, 2]},
+        "source_role": {"const": "pipeline-validation-only"},
+        "origin": {"const": "generated-by-score-super-resolution-project"},
+        "author": {"const": "TFG score-super-resolution project"},
+        "license": {"const": "CC0-1.0"},
+        "relative_path": {"type": "string", "pattern": "^images/[a-z0-9][a-z0-9-]*\\.png$"},
+        "width": {"type": "integer", "minimum": 128, "maximum": 2048},
+        "height": {"type": "integer", "minimum": 128, "maximum": 2048},
+        "background": {"$ref": "#/$defs/colour"},
+        "roi": {
+          "type": "object", "additionalProperties": false, "required": ["x", "y", "width", "height", "purpose"],
+          "properties": {
+            "x": {"type": "integer", "minimum": 0}, "y": {"type": "integer", "minimum": 0},
+            "width": {"type": "integer", "minimum": 16}, "height": {"type": "integer", "minimum": 16},
+            "purpose": {"enum": ["staff-symbol-detail", "join-separation-detail", "text-digit-detail", "border-gradient-detail"]}
+          }
+        },
+        "primitives": {"type": "array", "minItems": 4, "maxItems": 64, "items": {"$ref": "#/$defs/primitive"}},
+        "generated_pixel_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

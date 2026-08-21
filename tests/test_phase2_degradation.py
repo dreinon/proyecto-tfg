@@ -10,7 +10,6 @@ import numpy as np
 import pytest
 import yaml
 
-
 PROJECT_ROOT = Path(__file__).parents[1]
 CONTROL_PATH = PROJECT_ROOT / "configs/degradations/controlled-score-candidates.yaml"
 FIXTURE_MANIFEST_PATH = PROJECT_ROOT / "tests/fixtures/phase2/fixture-manifest-v1.yaml"
@@ -180,9 +179,7 @@ def test_fixture_manifest_records_authorship_licence_checksums_groups_pages_and_
         "changed-checksum",
     ),
 )
-def test_fixture_mutations_fail_before_generation(
-    tmp_path: Path, mutation: str
-) -> None:
+def test_fixture_mutations_fail_before_generation(tmp_path: Path, mutation: str) -> None:
     module = _degradation()
     manifest = _yaml(FIXTURE_MANIFEST_PATH)
     item = manifest["items"][0]
@@ -228,4 +225,3 @@ def test_fixture_symlink_manifest_and_changed_or_malformed_bytes_fail_closed(
     fixture_path.write_bytes(b"not an image")
     with pytest.raises(module.FixtureValidationError, match="digest"):
         module.generate_fixture_bundle(FIXTURE_MANIFEST_PATH, output)
-

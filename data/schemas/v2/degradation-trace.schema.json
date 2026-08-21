@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v2:degradation-trace",
+  "title": "Deterministic controlled degradation trace v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "trace_id", "item_id", "source_group_id", "fixture_manifest_id", "condition_id", "control_sha256", "master_seed", "derived_seed", "input_pixel_sha256", "aligned_pixel_sha256", "output_pixel_sha256", "encoded_sha256", "input_dimensions", "aligned_dimensions", "output_dimensions", "crop", "operations", "runtime"],
+  "properties": {
+    "schema_version": {"const": 2}, "record_type": {"const": "degradation-trace"},
+    "trace_id": {"type": "string", "pattern": "^degradation-[0-9a-f]{64}$"},
+    "item_id": {"type": "string", "minLength": 1}, "source_group_id": {"type": "string", "minLength": 1},
+    "fixture_manifest_id": {"type": "string", "minLength": 1},
+    "condition_id": {"enum": ["x2-clean", "x2-moderate", "x2-strong", "x4-clean", "x4-moderate", "x4-strong"]},
+    "control_sha256": {"$ref": "#/$defs/sha256"}, "master_seed": {"type": "integer", "minimum": 0}, "derived_seed": {"type": "integer", "minimum": 0},
+    "input_pixel_sha256": {"$ref": "#/$defs/sha256"}, "aligned_pixel_sha256": {"$ref": "#/$defs/sha256"}, "output_pixel_sha256": {"$ref": "#/$defs/sha256"}, "encoded_sha256": {"$ref": "#/$defs/sha256"},
+    "input_dimensions": {"$ref": "#/$defs/dimensions"}, "aligned_dimensions": {"$ref": "#/$defs/dimensions"}, "output_dimensions": {"$ref": "#/$defs/dimensions"},
+    "crop": {"type": "object", "additionalProperties": false, "required": ["top", "left", "bottom", "right"], "properties": {"top": {"const": 0}, "left": {"const": 0}, "bottom": {"type": "integer", "minimum": 0, "maximum": 3}, "right": {"type": "integer", "minimum": 0, "maximum": 3}}},
+    "operations": {"type": "array", "minItems": 1, "maxItems": 5, "items": {"type": "object", "additionalProperties": false, "required": ["order", "operator_id", "parameters"], "properties": {"order": {"type": "integer", "minimum": 1, "maximum": 5}, "operator_id": {"enum": ["blur", "reduction", "noise", "clip-round", "jpeg"]}, "parameters": {"type": "object"}}}},
+    "runtime": {"type": "object", "additionalProperties": false, "required": ["numpy_version", "opencv_version", "opencv_threads", "opencl"], "properties": {"numpy_version": {"type": "string", "minLength": 1}, "opencv_version": {"type": "string", "minLength": 1}, "opencv_threads": {"const": 1}, "opencl": {"const": false}}}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "dimensions": {"type": "object", "additionalProperties": false, "required": ["height", "width", "channels"], "properties": {"height": {"type": "integer", "minimum": 1}, "width": {"type": "integer", "minimum": 1}, "channels": {"const": 3}}}}
+}
