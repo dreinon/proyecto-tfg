@@ -428,6 +428,7 @@ def test_working_copy_execute_is_ignored_and_source_only_stays_clean(
         for cell in working["cells"]
         if cell["cell_type"] == "code"
     )
+    assert "phase2_artifact_root" not in working["metadata"]
     assert source_digest == preview_bundle["notebook_source_sha256"]
     assert working_path.is_relative_to(artifact_root)
 

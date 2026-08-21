@@ -1067,7 +1067,6 @@ def build_degradation_preview(
         from nbclient import NotebookClient
 
         notebook = nbformat.read(source_path, as_version=4)
-        notebook.metadata["phase2_artifact_root"] = str(artifact_root)
         client = NotebookClient(
             notebook,
             timeout=180,
