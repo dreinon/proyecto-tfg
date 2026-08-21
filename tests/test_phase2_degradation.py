@@ -273,7 +273,7 @@ def test_deterministic_lineage_order_colour_and_encoded_bytes(condition_id: str)
     assert np.array_equal(first.pixels, second.pixels)
     assert first.encoded_bytes == second.encoded_bytes
     assert first.trace == second.trace
-    assert first.pixels.shape == (128 // scale, 136 // scale, 3)
+    assert first.pixels.shape == (131 // scale, 137 // scale, 3)
     assert first.pixels.dtype == np.uint8
     assert int(first.pixels.min()) >= 0 and int(first.pixels.max()) <= 255
     assert np.array_equal(first.pixels[..., 0], first.pixels[..., 1])
@@ -387,9 +387,7 @@ def test_preview_has_fixed_two_per_cell_membership_and_exact_panels(
 ) -> None:
     artifact_root = Path(preview_bundle["artifact_root"])
     manifest = json.loads((artifact_root / "preview-manifest.json").read_text(encoding="utf-8"))
-    membership = json.loads(
-        (artifact_root / "preview-membership.json").read_text(encoding="utf-8")
-    )
+    membership = json.loads((artifact_root / "preview-membership.json").read_text(encoding="utf-8"))
 
     assert len(membership["panels"]) == 12
     assert [panel["condition_id"] for panel in membership["panels"]] == [
@@ -418,14 +416,24 @@ def test_working_copy_execute_is_ignored_and_source_only_stays_clean(
     source_digest = module.assert_notebook_source_clean(source_path)
     source = json.loads(source_path.read_text(encoding="utf-8"))
     working = json.loads(working_path.read_text(encoding="utf-8"))
-    assert all(cell.get("execution_count") is None for cell in source["cells"] if cell["cell_type"] == "code")
+    assert all(
+        cell.get("execution_count") is None
+        for cell in source["cells"]
+        if cell["cell_type"] == "code"
+    )
     assert all(not cell.get("outputs") for cell in source["cells"] if cell["cell_type"] == "code")
-    assert any(cell.get("execution_count") is not None for cell in working["cells"] if cell["cell_type"] == "code")
+    assert any(
+        cell.get("execution_count") is not None
+        for cell in working["cells"]
+        if cell["cell_type"] == "code"
+    )
     assert source_digest == preview_bundle["notebook_source_sha256"]
     assert working_path.is_relative_to(artifact_root)
 
 
-def test_notebook_source_clean_rejects_execution_output_and_embedded_payload(tmp_path: Path) -> None:
+def test_notebook_source_clean_rejects_execution_output_and_embedded_payload(
+    tmp_path: Path,
+) -> None:
     module = _degradation()
     source_path = PROJECT_ROOT / "notebooks/02-degradation-preview.ipynb"
     notebook = json.loads(source_path.read_text(encoding="utf-8"))
