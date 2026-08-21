@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -429,6 +430,51 @@ def test_working_copy_execute_is_ignored_and_source_only_stays_clean(
     )
     assert source_digest == preview_bundle["notebook_source_sha256"]
     assert working_path.is_relative_to(artifact_root)
+
+
+@pytest.fixture(scope="module")
+def relocatable_preview_project(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> tuple[Path, dict[str, Any]]:
+    module = _degradation()
+    project_root = tmp_path_factory.mktemp("relocatable-phase2-project")
+    tracked_inputs = (
+        Path("configs/degradations/controlled-score-candidates.yaml"),
+        Path("tests/fixtures/phase2/fixture-manifest-v1.yaml"),
+        Path("notebooks/02-degradation-preview.ipynb"),
+    )
+    for relative_path in tracked_inputs:
+        destination = project_root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(PROJECT_ROOT / relative_path, destination)
+    artifact_root = project_root / "artifacts/phase2-degradation-preview"
+    preview = module.build_degradation_preview(project_root, artifact_root=artifact_root)
+    return project_root, preview
+
+
+@pytest.mark.parametrize("working_directory", ("notebooks", "artifact-root"))
+def test_generated_working_copy_reopens_from_vscode_working_directories(
+    relocatable_preview_project: tuple[Path, dict[str, Any]],
+    working_directory: str,
+) -> None:
+    import nbformat
+    from nbclient import NotebookClient
+
+    project_root, preview = relocatable_preview_project
+    artifact_root = Path(preview["artifact_root"])
+    execution_root = (
+        project_root / "notebooks" if working_directory == "notebooks" else artifact_root
+    )
+    notebook = nbformat.read(artifact_root / "preview-working.ipynb", as_version=4)
+
+    NotebookClient(
+        notebook,
+        timeout=180,
+        kernel_name="python3",
+        resources={"metadata": {"path": str(execution_root)}},
+    ).execute()
+
+    assert not (artifact_root / "degradation-decision.json").exists()
 
 
 def test_notebook_source_clean_rejects_execution_output_and_embedded_payload(
