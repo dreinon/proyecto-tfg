@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import importlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -225,3 +226,311 @@ def test_fixture_symlink_manifest_and_changed_or_malformed_bytes_fail_closed(
     fixture_path.write_bytes(b"not an image")
     with pytest.raises(module.FixtureValidationError, match="digest"):
         module.generate_fixture_bundle(FIXTURE_MANIFEST_PATH, output)
+
+
+def _neutral_reference(height: int = 131, width: int = 137) -> np.ndarray:
+    rows = np.arange(height, dtype=np.uint16)[:, None]
+    columns = np.arange(width, dtype=np.uint16)[None, :]
+    plane = ((rows * 3 + columns * 5) % 256).astype(np.uint8)
+    return np.repeat(plane[..., None], 3, axis=2)
+
+
+def test_dimensions_alignment_and_rgb8_validation_are_explicit() -> None:
+    module = _degradation()
+    reference = _neutral_reference()
+    aligned_x4 = module.align_reference(reference, 4)
+
+    assert aligned_x4.input_dimensions == (131, 137, 3)
+    assert aligned_x4.aligned_dimensions == (128, 136, 3)
+    assert aligned_x4.crop == {"top": 0, "left": 0, "bottom": 3, "right": 1}
+    assert np.array_equal(aligned_x4.pixels, reference[:128, :136])
+    assert aligned_x4.pixels.dtype == np.uint8
+    with pytest.raises(module.DegradationContractError):
+        module.align_reference(reference.astype(np.float32), 2)
+    with pytest.raises(module.DegradationContractError):
+        module.align_reference(reference[..., 0], 2)
+    with pytest.raises(module.DegradationContractError):
+        module.align_reference(reference, 3)
+
+
+@pytest.mark.parametrize("condition_id", EXPECTED_CELLS)
+def test_deterministic_lineage_order_colour_and_encoded_bytes(condition_id: str) -> None:
+    module = _degradation()
+    control = module.load_degradation_control(CONTROL_PATH)
+    reference = _neutral_reference()
+    arguments = {
+        "control": control,
+        "condition_id": condition_id,
+        "item_id": "fixture-analytical-page",
+        "source_group_id": "fixture-analytical-work",
+        "fixture_manifest_id": "phase2-score-fixtures-v1",
+        "purpose": "fixture-preview",
+    }
+    first = module.apply_degradation(reference, **arguments)
+    second = module.apply_degradation(reference, **arguments)
+    scale = int(condition_id[1])
+
+    assert np.array_equal(first.pixels, second.pixels)
+    assert first.encoded_bytes == second.encoded_bytes
+    assert first.trace == second.trace
+    assert first.pixels.shape == (128 // scale, 136 // scale, 3)
+    assert first.pixels.dtype == np.uint8
+    assert int(first.pixels.min()) >= 0 and int(first.pixels.max()) <= 255
+    assert np.array_equal(first.pixels[..., 0], first.pixels[..., 1])
+    assert np.array_equal(first.pixels[..., 1], first.pixels[..., 2])
+    expected_order = (
+        ["reduction"]
+        if condition_id.endswith("clean")
+        else ["blur", "reduction", "noise", "clip-round", "jpeg"]
+    )
+    assert [operation["operator_id"] for operation in first.trace["operations"]] == expected_order
+    decoded_bgr = cv2.imdecode(np.frombuffer(first.encoded_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert np.array_equal(cv2.cvtColor(decoded_bgr, cv2.COLOR_BGR2RGB), first.pixels)
+
+
+def test_deterministic_seed_and_scientific_mutation_change_identity(tmp_path: Path) -> None:
+    module = _degradation()
+    control = module.load_degradation_control(CONTROL_PATH)
+    seed = module.derive_degradation_seed(
+        control.master_seed,
+        fixture_manifest_id="phase2-score-fixtures-v1",
+        item_id="fixture-work-01-page-01",
+        condition_id="x2-moderate",
+    )
+    assert seed == module.derive_degradation_seed(
+        control.master_seed,
+        fixture_manifest_id="phase2-score-fixtures-v1",
+        item_id="fixture-work-01-page-01",
+        condition_id="x2-moderate",
+    )
+    assert seed != module.derive_degradation_seed(
+        control.master_seed,
+        fixture_manifest_id="phase2-score-fixtures-v1",
+        item_id="fixture-work-01-page-02",
+        condition_id="x2-moderate",
+    )
+
+    registry = _yaml(CONTROL_PATH)
+    registry["candidates"][0]["master_seed"] += 1
+    changed_path = tmp_path / "changed.yaml"
+    _write_yaml(changed_path, registry)
+    changed = module.load_degradation_control(changed_path)
+    first = module.apply_degradation(
+        _neutral_reference(),
+        control=control,
+        condition_id="x2-moderate",
+        item_id="fixture-work-01-page-01",
+        source_group_id="fixture-work-01",
+        fixture_manifest_id="phase2-score-fixtures-v1",
+        purpose="fixture-preview",
+    )
+    second = module.apply_degradation(
+        _neutral_reference(),
+        control=changed,
+        condition_id="x2-moderate",
+        item_id="fixture-work-01-page-01",
+        source_group_id="fixture-work-01",
+        fixture_manifest_id="phase2-score-fixtures-v1",
+        purpose="fixture-preview",
+    )
+    assert changed.sha256 != control.sha256
+    assert first.trace["trace_id"] != second.trace["trace_id"]
+    assert not np.array_equal(first.pixels, second.pixels)
+    with pytest.raises(module.DegradationContractError, match="frozen"):
+        module.apply_degradation(
+            _neutral_reference(),
+            control=control,
+            condition_id="x2-clean",
+            item_id="fixture-work-01-page-01",
+            source_group_id="fixture-work-01",
+            fixture_manifest_id="phase2-score-fixtures-v1",
+            purpose="benchmark",
+        )
+
+
+def test_impulse_and_staff_geometry_remain_lower_right_aligned() -> None:
+    module = _degradation()
+    control = module.load_degradation_control(CONTROL_PATH)
+    reference = np.full((65, 67, 3), 255, dtype=np.uint8)
+    reference[8:57:8, 4:64] = 0
+    reference[32, 36] = 0
+    for scale in (2, 4):
+        result = module.apply_degradation(
+            reference,
+            control=control,
+            condition_id=f"x{scale}-clean",
+            item_id=f"analytical-x{scale}",
+            source_group_id="analytical-work",
+            fixture_manifest_id="phase2-score-fixtures-v1",
+            purpose="fixture-preview",
+        )
+        assert result.trace["crop"] == {
+            "top": 0,
+            "left": 0,
+            "bottom": 65 % scale,
+            "right": 67 % scale,
+        }
+        assert result.pixels.shape[:2] == (65 // scale, 67 // scale)
+        assert int(result.pixels.min()) < 255
+
+
+@pytest.fixture(scope="module")
+def preview_bundle(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    module = _degradation()
+    project_root = PROJECT_ROOT
+    artifact_root = tmp_path_factory.mktemp("phase2-preview")
+    return module.build_degradation_preview(project_root, artifact_root=artifact_root)
+
+
+def test_preview_has_fixed_two_per_cell_membership_and_exact_panels(
+    preview_bundle: dict[str, Any],
+) -> None:
+    artifact_root = Path(preview_bundle["artifact_root"])
+    manifest = json.loads((artifact_root / "preview-manifest.json").read_text(encoding="utf-8"))
+    membership = json.loads(
+        (artifact_root / "preview-membership.json").read_text(encoding="utf-8")
+    )
+
+    assert len(membership["panels"]) == 12
+    assert [panel["condition_id"] for panel in membership["panels"]] == [
+        condition_id for condition_id in EXPECTED_CELLS for _ in range(2)
+    ]
+    for condition_id in EXPECTED_CELLS:
+        selected = [
+            panel for panel in membership["panels"] if panel["condition_id"] == condition_id
+        ]
+        assert len(selected) == 2
+        assert len({panel["source_group_id"] for panel in selected}) == 2
+    assert len(manifest["panels"]) == 12
+    assert len(manifest["panel_sha256s"]) == 12
+    assert all((artifact_root / panel["relative_path"]).is_file() for panel in manifest["panels"])
+    assert "metric" not in json.dumps(manifest).casefold()
+
+
+def test_working_copy_execute_is_ignored_and_source_only_stays_clean(
+    preview_bundle: dict[str, Any],
+) -> None:
+    module = _degradation()
+    artifact_root = Path(preview_bundle["artifact_root"])
+    source_path = PROJECT_ROOT / "notebooks/02-degradation-preview.ipynb"
+    working_path = artifact_root / "preview-working.ipynb"
+
+    source_digest = module.assert_notebook_source_clean(source_path)
+    source = json.loads(source_path.read_text(encoding="utf-8"))
+    working = json.loads(working_path.read_text(encoding="utf-8"))
+    assert all(cell.get("execution_count") is None for cell in source["cells"] if cell["cell_type"] == "code")
+    assert all(not cell.get("outputs") for cell in source["cells"] if cell["cell_type"] == "code")
+    assert any(cell.get("execution_count") is not None for cell in working["cells"] if cell["cell_type"] == "code")
+    assert source_digest == preview_bundle["notebook_source_sha256"]
+    assert working_path.is_relative_to(artifact_root)
+
+
+def test_notebook_source_clean_rejects_execution_output_and_embedded_payload(tmp_path: Path) -> None:
+    module = _degradation()
+    source_path = PROJECT_ROOT / "notebooks/02-degradation-preview.ipynb"
+    notebook = json.loads(source_path.read_text(encoding="utf-8"))
+    code = next(cell for cell in notebook["cells"] if cell["cell_type"] == "code")
+    code["execution_count"] = 1
+    code["outputs"] = [
+        {
+            "output_type": "display_data",
+            "metadata": {},
+            "data": {"image/png": "aGVsbG8="},
+        }
+    ]
+    dirty = tmp_path / "dirty.ipynb"
+    dirty.write_text(json.dumps(notebook), encoding="utf-8")
+
+    with pytest.raises(module.NotebookSourceError):
+        module.assert_notebook_source_clean(dirty)
+
+
+def _decision_for_preview(preview_bundle: dict[str, Any], decision: str) -> dict[str, Any]:
+    artifact_root = Path(preview_bundle["artifact_root"])
+    manifest = json.loads((artifact_root / "preview-manifest.json").read_text(encoding="utf-8"))
+    return {
+        "schema_version": 2,
+        "record_type": "degradation-review",
+        "decision": decision,
+        "reviewer": "Fixture Test Reviewer",
+        "reviewed_at": "2026-08-21T10:00:00Z",
+        "rationale": "The fixed analytical panels are suitable for exercising the freeze gate.",
+        "candidate_id": manifest["candidate_id"],
+        "candidate_sha256": manifest["candidate_sha256"],
+        "notebook_source_sha256": manifest["notebook_source_sha256"],
+        "preview_manifest_sha256": preview_bundle["preview_manifest_sha256"],
+        "membership_sha256": manifest["membership_sha256"],
+        "panel_sha256s": manifest["panel_sha256s"],
+        "authorship": "human-recorded-in-working-notebook",
+    }
+
+
+def test_freeze_gate_rejects_missing_stale_agent_authored_or_rejected_review(
+    tmp_path: Path, preview_bundle: dict[str, Any]
+) -> None:
+    module = _degradation()
+    artifact_root = Path(preview_bundle["artifact_root"])
+    preview_manifest = artifact_root / "preview-manifest.json"
+    frozen = tmp_path / "controlled-score-v1.yaml"
+    reconciliation = tmp_path / "degradation-decision-reconciliation.json"
+
+    with pytest.raises(module.DegradationDecisionError):
+        module.freeze_degradation_control(
+            CONTROL_PATH,
+            tmp_path / "missing.json",
+            preview_manifest,
+            frozen,
+            reconciliation_path=reconciliation,
+        )
+    agent_authored = _decision_for_preview(preview_bundle, "accept")
+    agent_authored["authorship"] = "agent-authored"
+    decision_path = tmp_path / "decision.json"
+    decision_path.write_text(json.dumps(agent_authored), encoding="utf-8")
+    with pytest.raises(module.DegradationDecisionError):
+        module.freeze_degradation_control(
+            CONTROL_PATH,
+            decision_path,
+            preview_manifest,
+            frozen,
+            reconciliation_path=reconciliation,
+        )
+    rejected = _decision_for_preview(preview_bundle, "reject")
+    decision_path.write_text(json.dumps(rejected), encoding="utf-8")
+    blocked = module.freeze_degradation_control(
+        CONTROL_PATH,
+        decision_path,
+        preview_manifest,
+        frozen,
+        reconciliation_path=reconciliation,
+    )
+    assert blocked["status"] == "blocked-rejected"
+    assert not frozen.exists()
+    assert not reconciliation.exists()
+
+
+def test_freeze_gate_accepts_only_exact_content_bound_human_review(
+    tmp_path: Path, preview_bundle: dict[str, Any]
+) -> None:
+    module = _degradation()
+    artifact_root = Path(preview_bundle["artifact_root"])
+    preview_manifest = artifact_root / "preview-manifest.json"
+    decision = _decision_for_preview(preview_bundle, "accept")
+    decision_path = tmp_path / "decision.json"
+    decision_path.write_text(json.dumps(decision), encoding="utf-8")
+    frozen = tmp_path / "controlled-score-v1.yaml"
+    reconciliation = tmp_path / "degradation-decision-reconciliation.json"
+
+    result = module.freeze_degradation_control(
+        CONTROL_PATH,
+        decision_path,
+        preview_manifest,
+        frozen,
+        reconciliation_path=reconciliation,
+    )
+    assert result["status"] == "frozen"
+    assert frozen.is_file()
+    assert reconciliation.is_file()
+    frozen_control = _yaml(frozen)
+    assert frozen_control["status"] == "frozen"
+    assert frozen_control["candidate_sha256"] == decision["candidate_sha256"]
+    assert frozen_control["decision_reconciliation_sha256"] == result["reconciliation_sha256"]
