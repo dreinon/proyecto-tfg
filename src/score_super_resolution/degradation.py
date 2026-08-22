@@ -765,21 +765,31 @@ def generate_visual_fixture_bundle(
         ValueError,
     ) as error:
         raise FixtureValidationError(str(error)) from error
+    item_records = {item["item_id"]: item for item in records}
+    review_membership = []
+    for panel in manifest["review_membership"]:
+        item = item_records[panel["item_id"]]
+        review_membership.append(
+            {
+                **copy.deepcopy(panel),
+                "fixture_source_role": manifest["source_role"],
+                "source_relative_path": item["relative_path"],
+                "roi": copy.deepcopy(item["roi"]),
+            }
+        )
+    engraver = copy.deepcopy(configured["engraver"])
+    engraver["runtime_version"] = importlib.metadata.version("verovio")
+    engraver["runtime_toolkit_version"] = verovio.toolkit().getVersion()
+    rasterizer = copy.deepcopy(configured["rasterizer"])
+    rasterizer["runtime_version"] = importlib.metadata.version("cairosvg")
+    rasterizer["opencv_version"] = cv2.__version__
     return {
         "manifest_id": manifest["manifest_id"],
         "manifest_sha256": canonical_sha256(manifest),
         "source_role": manifest["source_role"],
         "required_semantics": sorted(required),
-        "renderer": {
-            "configured": copy.deepcopy(configured),
-            "runtime": {
-                "verovio_package_version": importlib.metadata.version("verovio"),
-                "verovio_toolkit_version": verovio.toolkit().getVersion(),
-                "cairosvg_version": importlib.metadata.version("cairosvg"),
-                "opencv_version": cv2.__version__,
-            },
-        },
-        "review_membership": copy.deepcopy(manifest["review_membership"]),
+        "renderer": {"engraver": engraver, "rasterizer": rasterizer},
+        "review_membership": review_membership,
         "items": records,
     }
 
@@ -1088,7 +1098,7 @@ def _panel_image(
         resized = cv2.resize(
             image,
             (max(1, round(image.shape[1] * ratio)), max(1, round(image.shape[0] * ratio))),
-            interpolation=cv2.INTER_NEAREST,
+            interpolation=cv2.INTER_AREA,
         )
         top = top_base + (available_height - resized.shape[0]) // 2
         canvas[top : top + resized.shape[0], left : left + resized.shape[1]] = resized
@@ -1102,8 +1112,6 @@ def _panel_image(
             1,
         )
 
-    place(reference, 20, "HR aligned reference")
-    place(degraded, 590, "LR degraded (nearest display zoom)")
     x = min(int(roi["x"]), reference.shape[1] - 1)
     y = min(int(roi["y"]), reference.shape[0] - 1)
     width = min(int(roi["width"]), reference.shape[1] - x)
@@ -1111,6 +1119,18 @@ def _panel_image(
     lr_x, lr_y = x // scale, y // scale
     lr_width = max(1, width // scale)
     lr_height = max(1, height // scale)
+    reference_context = reference.copy()
+    degraded_context = degraded.copy()
+    cv2.rectangle(reference_context, (x, y), (x + width, y + height), (190, 30, 30), 4)
+    cv2.rectangle(
+        degraded_context,
+        (lr_x, lr_y),
+        (lr_x + lr_width, lr_y + lr_height),
+        (190, 30, 30),
+        max(1, 4 // scale),
+    )
+    place(reference_context, 20, "Whole engraved HR system (fixed ROI in red)")
+    place(degraded_context, 590, "Corresponding whole LR system")
     hr_roi = reference[y : y + height, x : x + width]
     lr_roi = degraded[lr_y : lr_y + lr_height, lr_x : lr_x + lr_width]
     roi_height = 235
@@ -1131,46 +1151,6 @@ def _panel_image(
     return canvas
 
 
-def _preview_selection(
-    bundle: Mapping[str, Any], control: DegradationControl
-) -> list[dict[str, Any]]:
-    panels: list[dict[str, Any]] = []
-    for condition_id in control.condition_ids:
-        ranked = sorted(
-            bundle["items"],
-            key=lambda item: canonical_sha256(
-                {
-                    "domain": "phase2-degradation-preview-membership-v1",
-                    "condition_id": condition_id,
-                    "item_id": item["item_id"],
-                    "control_sha256": control.sha256,
-                }
-            ),
-        )
-        selected: list[Mapping[str, Any]] = []
-        groups: set[str] = set()
-        for item in ranked:
-            if item["source_group_id"] in groups:
-                continue
-            selected.append(item)
-            groups.add(item["source_group_id"])
-            if len(selected) == 2:
-                break
-        if len(selected) != 2:
-            raise FixtureValidationError("preview needs two distinct source groups per cell")
-        for item in selected:
-            panels.append(
-                {
-                    "condition_id": condition_id,
-                    "item_id": item["item_id"],
-                    "source_group_id": item["source_group_id"],
-                    "source_relative_path": item["relative_path"],
-                    "roi": item["roi"],
-                }
-            )
-    return panels
-
-
 def build_degradation_preview(
     project_root: Path, *, artifact_root: Path | None = None
 ) -> dict[str, Any]:
@@ -1187,18 +1167,21 @@ def build_degradation_preview(
     control = load_degradation_control(
         project_root / "configs/degradations/controlled-score-candidates.yaml"
     )
-    fixture_root = artifact_root / "fixtures"
-    bundle = generate_fixture_bundle(
-        project_root / "tests/fixtures/phase2/fixture-manifest-v1.yaml", fixture_root
+    fixture_root = artifact_root / "visual-fixtures"
+    fixture_manifest_path = project_root / "tests/fixtures/phase2/visual-fixture-manifest-v1.yaml"
+    bundle = generate_visual_fixture_bundle(
+        fixture_manifest_path,
+        source_root=fixture_manifest_path.parent,
+        output_root=fixture_root,
     )
     membership = {
         "schema_version": 1,
         "record_type": "degradation-preview-membership",
-        "selection_policy": "domain-separated-sha256-two-distinct-groups-per-cell",
+        "selection_policy": "predeclared-engraved-membership-v1",
         "control_sha256": control.sha256,
         "fixture_manifest_id": bundle["manifest_id"],
         "fixture_manifest_sha256": bundle["manifest_sha256"],
-        "panels": _preview_selection(bundle, control),
+        "panels": bundle["review_membership"],
     }
     _write_atomic(artifact_root / "fixture-bundle.json", _json_bytes(bundle))
     _write_atomic(artifact_root / "preview-membership.json", _json_bytes(membership))
@@ -1230,7 +1213,7 @@ def build_degradation_preview(
             int(member["condition_id"][1]),
         )
         panel_bytes = _encode_fixture_png(panel_pixels)
-        panel_path = panels_root / f"panel-{index:02d}-{member['condition_id']}.png"
+        panel_path = panels_root / f"{member['panel_id']}-{member['condition_id']}.png"
         if panel_path.exists():
             if (
                 hashlib.sha256(panel_path.read_bytes()).hexdigest()
@@ -1246,6 +1229,7 @@ def build_degradation_preview(
                 "condition_id": member["condition_id"],
                 "item_id": member["item_id"],
                 "source_group_id": member["source_group_id"],
+                "fixture_source_role": bundle["source_role"],
                 "relative_path": panel_path.relative_to(artifact_root).as_posix(),
                 "sha256": panel_sha256,
                 "degradation_trace_id": result.trace["trace_id"],
@@ -1275,6 +1259,8 @@ def build_degradation_preview(
         "notebook_source_sha256": source_sha256,
         "fixture_manifest_id": bundle["manifest_id"],
         "fixture_manifest_sha256": bundle["manifest_sha256"],
+        "fixture_source_role": bundle["source_role"],
+        "renderer": bundle["renderer"],
         "membership_sha256": canonical_sha256(membership),
         "mapping_sha256": canonical_sha256(mapping),
         "panels": panel_records,
@@ -1288,6 +1274,14 @@ def build_degradation_preview(
         from nbclient import NotebookClient
 
         notebook = nbformat.read(source_path, as_version=4)
+        marker = "__GENERATED_PHASE2_VISUAL_REVIEW_WORKING_COPY__"
+        replacements = 0
+        for cell in notebook.cells:
+            if marker in cell.source:
+                cell.source = cell.source.replace(marker, f"generated:{canonical_sha256(manifest)}")
+                replacements += 1
+        if replacements != 1:
+            raise NotebookSourceError("tracked notebook working-copy guard is absent or ambiguous")
         client = NotebookClient(
             notebook,
             timeout=180,

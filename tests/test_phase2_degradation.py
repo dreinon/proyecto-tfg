@@ -585,6 +585,11 @@ def relocatable_preview_project(
         Path("pyproject.toml"),
         Path("configs/degradations/controlled-score-candidates.yaml"),
         Path("tests/fixtures/phase2/fixture-manifest-v1.yaml"),
+        Path("tests/fixtures/phase2/visual-fixture-manifest-v1.yaml"),
+        Path("tests/fixtures/phase2/visual-scores/compound-meter-phrase.musicxml"),
+        Path("tests/fixtures/phase2/visual-scores/grand-staff-polyphony.musicxml"),
+        Path("tests/fixtures/phase2/visual-scores/lyrical-bass-phrase.musicxml"),
+        Path("tests/fixtures/phase2/visual-scores/melodic-phrase.musicxml"),
         Path("notebooks/02-degradation-preview.ipynb"),
     )
     for relative_path in tracked_inputs:
