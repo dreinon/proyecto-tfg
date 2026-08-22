@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v2:visual-fixture-manifest",
+  "title": "Project-authored engraved visual fixture manifest v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "manifest_id", "source_role", "content_policy", "required_semantics", "renderer", "limits", "items", "review_membership"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "record_type": {"const": "visual-fixture-manifest"},
+    "manifest_id": {"const": "phase2-engraved-visual-fixtures-v1"},
+    "source_role": {"const": "visual-degradation-review"},
+    "content_policy": {"const": "project-authored-cc0-no-smb"},
+    "required_semantics": {"type": "array", "minItems": 16, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/semantic"}},
+    "renderer": {
+      "type": "object", "additionalProperties": false, "required": ["engraver", "rasterizer"],
+      "properties": {
+        "engraver": {
+          "type": "object", "additionalProperties": false, "required": ["name", "package", "version", "project_url", "source_format", "options"],
+          "properties": {
+            "name": {"const": "Verovio"}, "package": {"const": "verovio"}, "version": {"const": "6.2.1"},
+            "project_url": {"const": "https://www.verovio.org/"}, "source_format": {"const": "MusicXML 4.0 partwise"},
+            "options": {"type": "object", "additionalProperties": {"type": ["boolean", "integer", "string"]}}
+          }
+        },
+        "rasterizer": {
+          "type": "object", "additionalProperties": false,
+          "required": ["name", "package", "version", "project_url", "canvas_width", "canvas_height", "ink_threshold", "crop_margin", "canvas_inset"],
+          "properties": {
+            "name": {"const": "CairoSVG"}, "package": {"const": "cairosvg"}, "version": {"const": "2.9.0"},
+            "project_url": {"const": "https://cairosvg.org/"},
+            "canvas_width": {"const": 1600}, "canvas_height": {"const": 900}, "ink_threshold": {"const": 250},
+            "crop_margin": {"const": 30}, "canvas_inset": {"const": 60}
+          }
+        }
+      }
+    },
+    "limits": {
+      "type": "object", "additionalProperties": false, "required": ["max_items", "max_source_bytes"],
+      "properties": {"max_items": {"const": 8}, "max_source_bytes": {"const": 1048576}}
+    },
+    "items": {"type": "array", "minItems": 4, "maxItems": 8, "items": {"$ref": "#/$defs/item"}},
+    "review_membership": {"type": "array", "minItems": 12, "maxItems": 12, "items": {"$ref": "#/$defs/panel"}}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "semantic": {"enum": ["clefs", "key-signatures", "time-signatures", "staff-lines", "barlines", "pitched-notes", "stems", "beams", "rests", "accidentals", "slurs", "ties", "articulations", "dynamics", "text-lyrics-digits", "grand-staff-polyphony-chords"]},
+    "roi": {
+      "type": "object", "additionalProperties": false, "required": ["x", "y", "width", "height", "purpose"],
+      "properties": {
+        "x": {"type": "integer", "minimum": 0}, "y": {"type": "integer", "minimum": 0},
+        "width": {"type": "integer", "minimum": 128}, "height": {"type": "integer", "minimum": 128},
+        "purpose": {"enum": ["melody-symbol-detail", "lyrics-text-detail", "compound-meter-detail", "grand-staff-polyphony-detail"]}
+      }
+    },
+    "item": {
+      "type": "object", "additionalProperties": false,
+      "required": ["item_id", "source_group_id", "source_role", "origin", "author", "license", "source_relative_path", "source_sha256", "relative_path", "semantic_features", "roi", "rendered_pixel_sha256"],
+      "properties": {
+        "item_id": {"type": "string", "pattern": "^review-work-[0-9]{2}-excerpt-[0-9]{2}$"},
+        "source_group_id": {"type": "string", "pattern": "^review-work-[0-9]{2}$"},
+        "source_role": {"const": "visual-degradation-review"}, "origin": {"const": "authored-for-this-tfg-fixture-suite"},
+        "author": {"const": "TFG score-super-resolution project"}, "license": {"const": "CC0-1.0"},
+        "source_relative_path": {"type": "string", "pattern": "^visual-scores/[a-z0-9][a-z0-9-]*\\.musicxml$"},
+        "source_sha256": {"$ref": "#/$defs/sha256"}, "relative_path": {"type": "string", "pattern": "^images/[a-z0-9][a-z0-9-]*\\.png$"},
+        "semantic_features": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/semantic"}},
+        "roi": {"$ref": "#/$defs/roi"}, "rendered_pixel_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "panel": {
+      "type": "object", "additionalProperties": false, "required": ["panel_id", "condition_id", "item_id", "source_group_id"],
+      "properties": {
+        "panel_id": {"type": "string", "pattern": "^panel-(0[1-9]|1[0-2])$"},
+        "condition_id": {"enum": ["x2-clean", "x2-moderate", "x2-strong", "x4-clean", "x4-moderate", "x4-strong"]},
+        "item_id": {"type": "string", "pattern": "^review-work-[0-9]{2}-excerpt-[0-9]{2}$"},
+        "source_group_id": {"type": "string", "pattern": "^review-work-[0-9]{2}$"}
+      }
+    }
+  }
+}

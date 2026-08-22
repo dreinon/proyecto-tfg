@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.metadata
 import json
 import os
 import stat
@@ -18,9 +19,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import cairosvg
 import cv2
 import numpy as np
+import verovio
 import yaml
+from defusedxml import ElementTree
 
 from score_super_resolution.contracts import ContractValidationError, validate_instance
 from score_super_resolution.identities import canonical_sha256
@@ -28,6 +32,9 @@ from score_super_resolution.identities import canonical_sha256
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONTROL_PATH = PROJECT_ROOT / "configs/degradations/controlled-score-candidates.yaml"
 DEFAULT_FIXTURE_MANIFEST_PATH = PROJECT_ROOT / "tests/fixtures/phase2/fixture-manifest-v1.yaml"
+DEFAULT_VISUAL_FIXTURE_MANIFEST_PATH = (
+    PROJECT_ROOT / "tests/fixtures/phase2/visual-fixture-manifest-v1.yaml"
+)
 
 EXPECTED_CONDITION_IDS = (
     "x2-clean",
@@ -559,6 +566,220 @@ def generate_fixture_bundle(manifest_path: Path, output_root: Path) -> dict[str,
         "manifest_id": manifest["manifest_id"],
         "manifest_sha256": canonical_sha256(manifest),
         "source_role": manifest["source_role"],
+        "items": records,
+    }
+
+
+def _musicxml_semantics(payload: bytes) -> set[str]:
+    """Derive review semantics from MusicXML rather than trusting manifest labels."""
+
+    try:
+        root = ElementTree.fromstring(payload)
+    except ElementTree.ParseError as error:
+        raise FixtureValidationError("visual fixture source is not valid XML") from error
+    names = [element.tag.rsplit("}", 1)[-1] for element in root.iter()]
+    present = set(names)
+    semantics: set[str] = set()
+    rules = {
+        "clefs": "clef",
+        "key-signatures": "fifths",
+        "time-signatures": "time",
+        "staff-lines": "staff-lines",
+        "barlines": "barline",
+        "pitched-notes": "pitch",
+        "stems": "stem",
+        "beams": "beam",
+        "rests": "rest",
+        "accidentals": "accidental",
+        "slurs": "slur",
+        "ties": "tied",
+        "articulations": "articulations",
+        "dynamics": "dynamics",
+    }
+    semantics.update(label for label, tag in rules.items() if tag in present)
+    text = " ".join((element.text or "") for element in root.iter()).strip()
+    if present & {"words", "rehearsal", "lyric"} and any(character.isdigit() for character in text):
+        semantics.add("text-lyrics-digits")
+    if {"staves", "backup", "chord"} <= present:
+        semantics.add("grand-staff-polyphony-chords")
+    return semantics
+
+
+def _render_engraved_fixture(
+    source: bytes, *, options: Mapping[str, Any], rasterizer: Mapping[str, Any]
+) -> np.ndarray:
+    """Render one bounded MusicXML source onto a fixed white RGB review canvas."""
+
+    toolkit = verovio.toolkit()
+    toolkit.setOptions(dict(options))
+    if not toolkit.loadData(source.decode("utf-8")) or toolkit.getPageCount() != 1:
+        raise FixtureValidationError("visual fixture must engrave as exactly one page")
+    svg = toolkit.renderToSVG(1)
+    png = cairosvg.svg2png(bytestring=svg.encode("utf-8"), background_color="#ffffff")
+    decoded = cv2.imdecode(np.frombuffer(png, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if decoded is None:
+        raise FixtureValidationError("engraved fixture rasterization failed")
+    rgb = cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB)
+    mask = np.any(rgb < int(rasterizer["ink_threshold"]), axis=2).astype(np.uint8)
+    points = cv2.findNonZero(mask)
+    if points is None:
+        raise FixtureValidationError("engraved fixture contains no visible notation")
+    x, y, width, height = cv2.boundingRect(points)
+    margin = int(rasterizer["crop_margin"])
+    left, top = max(0, x - margin), max(0, y - margin)
+    right = min(rgb.shape[1], x + width + margin)
+    bottom = min(rgb.shape[0], y + height + margin)
+    cropped = np.ascontiguousarray(rgb[top:bottom, left:right])
+    canvas_width = int(rasterizer["canvas_width"])
+    canvas_height = int(rasterizer["canvas_height"])
+    inset = int(rasterizer["canvas_inset"])
+    ratio = min(
+        (canvas_width - 2 * inset) / cropped.shape[1],
+        (canvas_height - 2 * inset) / cropped.shape[0],
+    )
+    interpolation = cv2.INTER_AREA if ratio < 1 else cv2.INTER_CUBIC
+    resized = cv2.resize(
+        cropped,
+        (round(cropped.shape[1] * ratio), round(cropped.shape[0] * ratio)),
+        interpolation=interpolation,
+    )
+    canvas = np.full((canvas_height, canvas_width, 3), 255, dtype=np.uint8)
+    offset_x = (canvas_width - resized.shape[1]) // 2
+    offset_y = (canvas_height - resized.shape[0]) // 2
+    canvas[offset_y : offset_y + resized.shape[0], offset_x : offset_x + resized.shape[1]] = resized
+    return np.ascontiguousarray(canvas)
+
+
+def generate_visual_fixture_bundle(
+    manifest_path: Path, *, source_root: Path, output_root: Path
+) -> dict[str, Any]:
+    """Validate, engrave, and materialize the separate human-review fixture set."""
+
+    manifest_path = Path(manifest_path)
+    source_root = Path(source_root).resolve()
+    output_root = Path(output_root)
+    try:
+        manifest = _read_regular_yaml(
+            manifest_path, maximum_bytes=_MAX_MANIFEST_BYTES, kind="visual fixture manifest"
+        )
+        if manifest.get("source_role") != "visual-degradation-review":
+            raise FixtureValidationError(
+                "visual fixtures require source_role visual-degradation-review"
+            )
+        secret = _secret_like_key((), manifest)
+        if secret is not None:
+            raise FixtureValidationError(f"secret-like fixture metadata is forbidden: {secret}")
+        serialized = yaml.safe_dump(manifest, sort_keys=True).casefold()
+        if "praig/smb" in serialized or "evaluation_benchmark" in serialized or "hf_" in serialized:
+            raise FixtureValidationError(
+                "SMB identity, loader, or role is forbidden in visual fixtures"
+            )
+        validate_instance("visual-fixture-manifest", manifest, version=2)
+        configured = manifest["renderer"]
+        if importlib.metadata.version("verovio") != configured["engraver"]["version"]:
+            raise FixtureValidationError("Verovio runtime version differs from visual manifest")
+        if importlib.metadata.version("cairosvg") != configured["rasterizer"]["version"]:
+            raise FixtureValidationError("CairoSVG runtime version differs from visual manifest")
+        required = set(manifest["required_semantics"])
+        item_ids = {item["item_id"] for item in manifest["items"]}
+        groups = {item["source_group_id"] for item in manifest["items"]}
+        if len(groups) < 4:
+            raise FixtureValidationError("visual review requires four independent source groups")
+        declared_union: set[str] = set()
+        prepared: list[tuple[Mapping[str, Any], np.ndarray, bytes, bytes]] = []
+        for item in manifest["items"]:
+            source_path = (source_root / item["source_relative_path"]).resolve()
+            if not source_path.is_relative_to(source_root):
+                raise FixtureValidationError("visual fixture source path escapes source root")
+            source = _read_regular_bytes(
+                source_path,
+                maximum_bytes=manifest["limits"]["max_source_bytes"],
+                kind="MusicXML source",
+            )
+            if hashlib.sha256(source).hexdigest() != item["source_sha256"]:
+                raise FixtureValidationError(f"source digest mismatch for {item['item_id']}")
+            actual = _musicxml_semantics(source)
+            declared = set(item["semantic_features"])
+            if actual != declared:
+                raise FixtureValidationError(
+                    f"declared notation semantics differ from source for {item['item_id']}"
+                )
+            declared_union.update(declared)
+            pixels = _render_engraved_fixture(
+                source,
+                options=configured["engraver"]["options"],
+                rasterizer=configured["rasterizer"],
+            )
+            pixel_sha256 = _fixture_pixel_sha256(pixels)
+            if pixel_sha256 != item["rendered_pixel_sha256"]:
+                raise FixtureValidationError(
+                    f"rendered pixel digest mismatch for {item['item_id']}"
+                )
+            encoded = _encode_fixture_png(pixels)
+            prepared.append((item, pixels, encoded, source))
+        if declared_union != required:
+            raise FixtureValidationError(
+                "visual fixture set does not prove every required semantic"
+            )
+        panels = manifest["review_membership"]
+        if len(panels) != 12 or {panel["item_id"] for panel in panels} - item_ids:
+            raise FixtureValidationError("visual review membership must contain 12 known items")
+        if output_root.is_symlink() or (output_root.exists() and not output_root.is_dir()):
+            raise FixtureValidationError("visual fixture output root must be a directory")
+        records: list[dict[str, Any]] = []
+        for item, pixels, encoded, source in prepared:
+            destination = output_root / item["relative_path"]
+            digest = hashlib.sha256(encoded).hexdigest()
+            if destination.exists():
+                if (
+                    destination.is_symlink()
+                    or hashlib.sha256(destination.read_bytes()).hexdigest() != digest
+                ):
+                    _write_atomic(destination, encoded)
+            else:
+                _write_new_regular(destination, encoded)
+            records.append(
+                {
+                    "item_id": item["item_id"],
+                    "source_group_id": item["source_group_id"],
+                    "source_role": item["source_role"],
+                    "source_relative_path": item["source_relative_path"],
+                    "source_sha256": hashlib.sha256(source).hexdigest(),
+                    "relative_path": item["relative_path"],
+                    "width": pixels.shape[1],
+                    "height": pixels.shape[0],
+                    "roi": copy.deepcopy(item["roi"]),
+                    "semantic_features": copy.deepcopy(item["semantic_features"]),
+                    "pixel_sha256": _fixture_pixel_sha256(pixels),
+                    "encoded_sha256": digest,
+                }
+            )
+    except FixtureValidationError:
+        raise
+    except (
+        ContractValidationError,
+        KeyError,
+        OSError,
+        TypeError,
+        UnicodeError,
+        ValueError,
+    ) as error:
+        raise FixtureValidationError(str(error)) from error
+    return {
+        "manifest_id": manifest["manifest_id"],
+        "manifest_sha256": canonical_sha256(manifest),
+        "source_role": manifest["source_role"],
+        "required_semantics": sorted(required),
+        "renderer": {
+            "configured": copy.deepcopy(configured),
+            "runtime": {
+                "verovio_package_version": importlib.metadata.version("verovio"),
+                "verovio_toolkit_version": verovio.toolkit().getVersion(),
+                "cairosvg_version": importlib.metadata.version("cairosvg"),
+                "opencv_version": cv2.__version__,
+            },
+        },
+        "review_membership": copy.deepcopy(manifest["review_membership"]),
         "items": records,
     }
 

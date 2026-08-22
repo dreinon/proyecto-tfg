@@ -203,18 +203,18 @@ def test_visual_fixture_manifest_is_separate_cc0_engraved_review_evidence() -> N
             "project_url": "https://www.verovio.org/",
             "source_format": "MusicXML 4.0 partwise",
             "options": {
-                "adjustPageHeight": False,
+                "adjustPageHeight": True,
                 "breaks": "none",
                 "footer": "none",
                 "header": "none",
-                "landscape": True,
-                "pageHeight": 900,
+                "landscape": False,
+                "pageHeight": 1800,
                 "pageMarginBottom": 40,
                 "pageMarginLeft": 40,
                 "pageMarginRight": 40,
                 "pageMarginTop": 40,
-                "pageWidth": 1600,
-                "scale": 50,
+                "pageWidth": 2400,
+                "scale": 130,
             },
         },
         "rasterizer": {
@@ -222,16 +222,17 @@ def test_visual_fixture_manifest_is_separate_cc0_engraved_review_evidence() -> N
             "package": "cairosvg",
             "version": "2.9.0",
             "project_url": "https://cairosvg.org/",
-            "output_width": 1600,
-            "output_height": 900,
+            "canvas_width": 1600,
+            "canvas_height": 900,
+            "ink_threshold": 250,
+            "crop_margin": 30,
+            "canvas_inset": 60,
         },
     }
     assert set(manifest["required_semantics"]) == REQUIRED_NOTATION_SEMANTICS
     assert len({item["source_group_id"] for item in manifest["items"]}) >= 4
     assert {
-        semantic
-        for item in manifest["items"]
-        for semantic in item["semantic_features"]
+        semantic for item in manifest["items"] for semantic in item["semantic_features"]
     } == REQUIRED_NOTATION_SEMANTICS
     assert len(manifest["review_membership"]) == 12
     assert [panel["condition_id"] for panel in manifest["review_membership"]] == [
@@ -539,8 +540,7 @@ def test_preview_uses_only_semantically_complete_engraved_review_fixtures(
     assert fixture_bundle["renderer"]["engraver"]["runtime_version"] == "6.2.1"
     assert fixture_bundle["renderer"]["rasterizer"]["runtime_version"] == "2.9.0"
     assert all(
-        panel["fixture_source_role"] == "visual-degradation-review"
-        for panel in manifest["panels"]
+        panel["fixture_source_role"] == "visual-degradation-review" for panel in manifest["panels"]
     )
     serialized = json.dumps((manifest, membership, fixture_bundle)).casefold()
     assert "praig/smb" not in serialized
@@ -646,9 +646,7 @@ def test_notebook_source_clean_rejects_execution_output_and_embedded_payload(
 def test_tracked_notebook_is_explicitly_non_executable_in_place() -> None:
     source_path = PROJECT_ROOT / "notebooks/02-degradation-preview.ipynb"
     notebook = json.loads(source_path.read_text(encoding="utf-8"))
-    serialized_sources = "\n".join(
-        "".join(cell.get("source", [])) for cell in notebook["cells"]
-    )
+    serialized_sources = "\n".join("".join(cell.get("source", [])) for cell in notebook["cells"])
 
     assert "__GENERATED_PHASE2_VISUAL_REVIEW_WORKING_COPY__" in serialized_sources
     assert "No executeu aquest quadern rastrejat" in serialized_sources

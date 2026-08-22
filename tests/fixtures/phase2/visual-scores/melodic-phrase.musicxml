@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
+<score-partwise version="4.0">
+  <work><work-title>Project Etude No. 1</work-title></work>
+  <identification><creator type="composer">TFG score-super-resolution project</creator><rights>CC0 1.0</rights></identification>
+  <part-list><score-part id="P1"><part-name>Violin</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>4</divisions><key><fifths>1</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time>
+        <clef><sign>G</sign><line>2</line></clef><staff-details><staff-lines>5</staff-lines></staff-details>
+      </attributes>
+      <direction placement="above"><direction-type><words>cantabile 1</words></direction-type><sound tempo="96"/></direction>
+      <direction placement="below"><direction-type><dynamics><mp/></dynamics></direction-type></direction>
+      <note><pitch><step>G</step><octave>4</octave></pitch><duration>2</duration><voice>1</voice><type>eighth</type><stem>up</stem><beam number="1">begin</beam><notations><slur type="start" number="1"/><articulations><staccato/></articulations></notations><lyric number="1"><syllabic>single</syllabic><text>la</text></lyric></note>
+      <note><pitch><step>A</step><octave>4</octave></pitch><duration>2</duration><voice>1</voice><type>eighth</type><stem>up</stem><beam number="1">end</beam><lyric number="1"><syllabic>single</syllabic><text>mi</text></lyric></note>
+      <note><pitch><step>B</step><alter>-1</alter><octave>4</octave></pitch><duration>4</duration><voice>1</voice><type>quarter</type><accidental>flat</accidental><stem>up</stem><notations><slur type="stop" number="1"/><tied type="start"/></notations><tie type="start"/></note>
+      <note><pitch><step>B</step><alter>-1</alter><octave>4</octave></pitch><duration>4</duration><voice>1</voice><type>quarter</type><stem>down</stem><notations><tied type="stop"/></notations><tie type="stop"/></note>
+      <note><rest/><duration>4</duration><voice>1</voice><type>quarter</type></note>
+      <barline location="right"><bar-style>light-light</bar-style></barline>
+    </measure>
+    <measure number="2">
+      <note><pitch><step>C</step><alter>1</alter><octave>5</octave></pitch><duration>2</duration><voice>1</voice><type>eighth</type><accidental>sharp</accidental><stem>down</stem><beam number="1">begin</beam></note>
+      <note><pitch><step>D</step><octave>5</octave></pitch><duration>2</duration><voice>1</voice><type>eighth</type><stem>down</stem><beam number="1">end</beam><notations><articulations><accent/></articulations></notations></note>
+      <note><pitch><step>E</step><octave>5</octave></pitch><duration>8</duration><voice>1</voice><type>half</type><dot/><stem>down</stem></note>
+      <note><rest/><duration>4</duration><voice>1</voice><type>quarter</type></note>
+      <barline location="right"><bar-style>light-heavy</bar-style></barline>
+    </measure>
+  </part>
+</score-partwise>
