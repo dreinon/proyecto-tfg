@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib
 import json
 import shutil
@@ -15,6 +16,9 @@ import yaml
 PROJECT_ROOT = Path(__file__).parents[1]
 CONTROL_PATH = PROJECT_ROOT / "configs/degradations/controlled-score-candidates.yaml"
 FIXTURE_MANIFEST_PATH = PROJECT_ROOT / "tests/fixtures/phase2/fixture-manifest-v1.yaml"
+VISUAL_FIXTURE_MANIFEST_PATH = (
+    PROJECT_ROOT / "tests/fixtures/phase2/visual-fixture-manifest-v1.yaml"
+)
 EXPECTED_CELLS = (
     "x2-clean",
     "x2-moderate",
@@ -23,6 +27,24 @@ EXPECTED_CELLS = (
     "x4-moderate",
     "x4-strong",
 )
+REQUIRED_NOTATION_SEMANTICS = {
+    "clefs",
+    "key-signatures",
+    "time-signatures",
+    "staff-lines",
+    "barlines",
+    "pitched-notes",
+    "stems",
+    "beams",
+    "rests",
+    "accidentals",
+    "slurs",
+    "ties",
+    "articulations",
+    "dynamics",
+    "text-lyrics-digits",
+    "grand-staff-polyphony-chords",
+}
 
 
 def _degradation() -> Any:
@@ -165,6 +187,102 @@ def test_fixture_manifest_records_authorship_licence_checksums_groups_pages_and_
         "fixture-work-03": [1, 2],
         "fixture-work-04": [1, 2],
     }
+
+
+def test_visual_fixture_manifest_is_separate_cc0_engraved_review_evidence() -> None:
+    manifest = _yaml(VISUAL_FIXTURE_MANIFEST_PATH)
+
+    assert manifest["record_type"] == "visual-fixture-manifest"
+    assert manifest["source_role"] == "visual-degradation-review"
+    assert manifest["content_policy"] == "project-authored-cc0-no-smb"
+    assert manifest["renderer"] == {
+        "engraver": {
+            "name": "Verovio",
+            "package": "verovio",
+            "version": "6.2.1",
+            "project_url": "https://www.verovio.org/",
+            "source_format": "MusicXML 4.0 partwise",
+            "options": {
+                "adjustPageHeight": False,
+                "breaks": "none",
+                "footer": "none",
+                "header": "none",
+                "landscape": True,
+                "pageHeight": 900,
+                "pageMarginBottom": 40,
+                "pageMarginLeft": 40,
+                "pageMarginRight": 40,
+                "pageMarginTop": 40,
+                "pageWidth": 1600,
+                "scale": 50,
+            },
+        },
+        "rasterizer": {
+            "name": "CairoSVG",
+            "package": "cairosvg",
+            "version": "2.9.0",
+            "project_url": "https://cairosvg.org/",
+            "output_width": 1600,
+            "output_height": 900,
+        },
+    }
+    assert set(manifest["required_semantics"]) == REQUIRED_NOTATION_SEMANTICS
+    assert len({item["source_group_id"] for item in manifest["items"]}) >= 4
+    assert {
+        semantic
+        for item in manifest["items"]
+        for semantic in item["semantic_features"]
+    } == REQUIRED_NOTATION_SEMANTICS
+    assert len(manifest["review_membership"]) == 12
+    assert [panel["condition_id"] for panel in manifest["review_membership"]] == [
+        condition_id for condition_id in EXPECTED_CELLS for _ in range(2)
+    ]
+    for item in manifest["items"]:
+        source_path = VISUAL_FIXTURE_MANIFEST_PATH.parent / item["source_relative_path"]
+        assert source_path.is_file()
+        assert hashlib.sha256(source_path.read_bytes()).hexdigest() == item["source_sha256"]
+        assert item["source_role"] == "visual-degradation-review"
+        assert item["license"] == "CC0-1.0"
+        assert item["origin"] == "authored-for-this-tfg-fixture-suite"
+
+
+def test_visual_fixture_bundle_rejects_analytical_only_manifest(tmp_path: Path) -> None:
+    module = _degradation()
+
+    with pytest.raises(module.FixtureValidationError, match="visual-degradation-review"):
+        module.generate_visual_fixture_bundle(
+            FIXTURE_MANIFEST_PATH,
+            source_root=FIXTURE_MANIFEST_PATH.parent,
+            output_root=tmp_path / "visual",
+        )
+
+
+def test_visual_fixture_bundle_is_deterministic_and_semantically_complete(tmp_path: Path) -> None:
+    module = _degradation()
+    first = module.generate_visual_fixture_bundle(
+        VISUAL_FIXTURE_MANIFEST_PATH,
+        source_root=VISUAL_FIXTURE_MANIFEST_PATH.parent,
+        output_root=tmp_path / "first",
+    )
+    second = module.generate_visual_fixture_bundle(
+        VISUAL_FIXTURE_MANIFEST_PATH,
+        source_root=VISUAL_FIXTURE_MANIFEST_PATH.parent,
+        output_root=tmp_path / "second",
+    )
+
+    assert first["source_role"] == "visual-degradation-review"
+    assert first["renderer"] == second["renderer"]
+    assert first["manifest_sha256"] == second["manifest_sha256"]
+    assert [item["pixel_sha256"] for item in first["items"]] == [
+        item["pixel_sha256"] for item in second["items"]
+    ]
+    assert first["required_semantics"] == sorted(REQUIRED_NOTATION_SEMANTICS)
+    assert len(first["review_membership"]) == 12
+    for item in first["items"]:
+        image = cv2.imread(str(tmp_path / "first" / item["relative_path"]), cv2.IMREAD_COLOR)
+        assert image is not None
+        assert image.shape == (900, 1600, 3)
+        assert int(np.count_nonzero(image < 128)) > 1_000
 
 
 @pytest.mark.parametrize(
@@ -406,6 +524,30 @@ def test_preview_has_fixed_two_per_cell_membership_and_exact_panels(
     assert "metric" not in json.dumps(manifest).casefold()
 
 
+def test_preview_uses_only_semantically_complete_engraved_review_fixtures(
+    preview_bundle: dict[str, Any],
+) -> None:
+    artifact_root = Path(preview_bundle["artifact_root"])
+    manifest = json.loads((artifact_root / "preview-manifest.json").read_text(encoding="utf-8"))
+    membership = json.loads((artifact_root / "preview-membership.json").read_text(encoding="utf-8"))
+    fixture_bundle = json.loads((artifact_root / "fixture-bundle.json").read_text(encoding="utf-8"))
+
+    assert manifest["fixture_source_role"] == "visual-degradation-review"
+    assert membership["selection_policy"] == "predeclared-engraved-membership-v1"
+    assert membership["panels"] == fixture_bundle["review_membership"]
+    assert set(fixture_bundle["required_semantics"]) == REQUIRED_NOTATION_SEMANTICS
+    assert fixture_bundle["renderer"]["engraver"]["runtime_version"] == "6.2.1"
+    assert fixture_bundle["renderer"]["rasterizer"]["runtime_version"] == "2.9.0"
+    assert all(
+        panel["fixture_source_role"] == "visual-degradation-review"
+        for panel in manifest["panels"]
+    )
+    serialized = json.dumps((manifest, membership, fixture_bundle)).casefold()
+    assert "praig/smb" not in serialized
+    assert "data/sources/smb" not in serialized
+    assert "load_dataset" not in serialized
+
+
 def test_working_copy_execute_is_ignored_and_source_only_stays_clean(
     preview_bundle: dict[str, Any],
 ) -> None:
@@ -499,6 +641,17 @@ def test_notebook_source_clean_rejects_execution_output_and_embedded_payload(
 
     with pytest.raises(module.NotebookSourceError):
         module.assert_notebook_source_clean(dirty)
+
+
+def test_tracked_notebook_is_explicitly_non_executable_in_place() -> None:
+    source_path = PROJECT_ROOT / "notebooks/02-degradation-preview.ipynb"
+    notebook = json.loads(source_path.read_text(encoding="utf-8"))
+    serialized_sources = "\n".join(
+        "".join(cell.get("source", [])) for cell in notebook["cells"]
+    )
+
+    assert "__GENERATED_PHASE2_VISUAL_REVIEW_WORKING_COPY__" in serialized_sources
+    assert "No executeu aquest quadern rastrejat" in serialized_sources
 
 
 def _decision_for_preview(preview_bundle: dict[str, Any], decision: str) -> dict[str, Any]:
