@@ -1372,6 +1372,50 @@ def _panel_image(
     return canvas
 
 
+def _execute_preview_working_notebook(
+    project_root: Path, artifact_root: Path, manifest: Mapping[str, Any]
+) -> bytes:
+    """Execute the source-only notebook against one already-bound candidate preview."""
+
+    source_path = project_root / "notebooks/02-degradation-preview.ipynb"
+    source_sha256 = assert_notebook_source_clean(source_path)
+    if source_sha256 != manifest.get("notebook_source_sha256"):
+        raise NotebookSourceError("preview source notebook digest differs")
+    try:
+        import nbformat
+        from nbclient import NotebookClient
+
+        notebook = nbformat.read(source_path, as_version=4)
+        marker = "__GENERATED_PHASE2_VISUAL_REVIEW_WORKING_COPY__"
+        replacements = 0
+        for cell in notebook.cells:
+            if marker in cell.source:
+                cell.source = cell.source.replace(marker, f"generated:{canonical_sha256(manifest)}")
+                replacements += 1
+        if replacements != 1:
+            raise NotebookSourceError("tracked notebook working-copy guard is absent or ambiguous")
+        client = NotebookClient(
+            notebook,
+            timeout=180,
+            kernel_name="python3",
+            resources={"metadata": {"path": str(project_root)}},
+        )
+        environment_key = "SCORE_SR_PHASE2_PREVIEW_ROOT"
+        prior_artifact_root = os.environ.get(environment_key)
+        os.environ[environment_key] = str(artifact_root)
+        try:
+            client.execute()
+        finally:
+            if prior_artifact_root is None:
+                os.environ.pop(environment_key, None)
+            else:
+                os.environ[environment_key] = prior_artifact_root
+    except Exception as error:
+        raise NotebookSourceError(f"ignored preview notebook execution failed: {error}") from error
+    assert_notebook_source_clean(source_path)
+    return nbformat.writes(notebook).encode("utf-8")
+
+
 def _build_degradation_preview_directory(
     project_root: Path,
     *,
@@ -1495,40 +1539,11 @@ def _build_degradation_preview_directory(
     manifest_bytes = _json_bytes(manifest)
     _write_atomic(artifact_root / "preview-manifest.json", manifest_bytes)
 
-    try:
-        import nbformat
-        from nbclient import NotebookClient
-
-        notebook = nbformat.read(source_path, as_version=4)
-        marker = "__GENERATED_PHASE2_VISUAL_REVIEW_WORKING_COPY__"
-        replacements = 0
-        for cell in notebook.cells:
-            if marker in cell.source:
-                cell.source = cell.source.replace(marker, f"generated:{canonical_sha256(manifest)}")
-                replacements += 1
-        if replacements != 1:
-            raise NotebookSourceError("tracked notebook working-copy guard is absent or ambiguous")
-        client = NotebookClient(
-            notebook,
-            timeout=180,
-            kernel_name="python3",
-            resources={"metadata": {"path": str(project_root)}},
-        )
-        environment_key = "SCORE_SR_PHASE2_PREVIEW_ROOT"
-        prior_artifact_root = os.environ.get(environment_key)
-        os.environ[environment_key] = str(artifact_root)
-        try:
-            client.execute()
-        finally:
-            if prior_artifact_root is None:
-                os.environ.pop(environment_key, None)
-            else:
-                os.environ[environment_key] = prior_artifact_root
-        working_path = artifact_root / "preview-working.ipynb"
-        payload = nbformat.writes(notebook).encode("utf-8")
-        _write_atomic(working_path, payload)
-    except Exception as error:
-        raise NotebookSourceError(f"ignored preview notebook execution failed: {error}") from error
+    working_path = artifact_root / "preview-working.ipynb"
+    _write_atomic(
+        working_path,
+        _execute_preview_working_notebook(project_root, artifact_root, manifest),
+    )
 
     assert_notebook_source_clean(source_path)
     publication = {
@@ -1635,7 +1650,10 @@ def _read_regular_bytes(path: Path, *, maximum_bytes: int, kind: str) -> bytes:
 
 
 def _reconcile_preview_evidence(
-    preview_manifest_path: Path, *, allow_temporary_root: bool = False
+    preview_manifest_path: Path,
+    *,
+    allow_temporary_root: bool = False,
+    allow_working_copy_refresh: bool = False,
 ) -> dict[str, Any]:
     manifest_path = Path(preview_manifest_path).resolve()
     candidate_root = manifest_path.parent
@@ -1810,9 +1828,12 @@ def _reconcile_preview_evidence(
         "record_type": "degradation-preview-publication",
         "candidate_id": CURRENT_CANDIDATE_ID,
         "preview_manifest_sha256": canonical_sha256(manifest),
-        "working_notebook_sha256": working_sha256,
     }
-    if publication != expected_publication:
+    if any(publication.get(key) != value for key, value in expected_publication.items()) or set(
+        publication
+    ) != {*expected_publication, "working_notebook_sha256"}:
+        raise DegradationDecisionError("candidate-2 publication reconciliation differs")
+    if not allow_working_copy_refresh and publication["working_notebook_sha256"] != working_sha256:
         raise DegradationDecisionError("candidate-2 publication reconciliation differs")
     inventory = _regular_file_inventory(candidate_root)
     allowed_optional = {
@@ -1832,6 +1853,45 @@ def _reconcile_preview_evidence(
     ):
         raise DegradationDecisionError("SMB identity or loader is forbidden in candidate preview")
     return manifest
+
+
+def refresh_degradation_preview_working_copy(
+    project_root: Path, *, artifact_root: Path | None = None
+) -> dict[str, Any]:
+    """Refresh only candidate 2's executable review presentation before a decision exists."""
+
+    project_root = Path(project_root).resolve()
+    candidate_root = (
+        project_root / "artifacts/phase2-degradation-preview/candidates" / CURRENT_CANDIDATE_ID
+        if artifact_root is None
+        else Path(artifact_root).resolve()
+    )
+    manifest_path = candidate_root / "preview-manifest.json"
+    for decision_name in (
+        "degradation-decision.json",
+        "degradation-decision-reconciliation.json",
+    ):
+        if (candidate_root / decision_name).exists():
+            raise DegradationDecisionError("review presentation cannot change after a decision")
+    manifest = _reconcile_preview_evidence(manifest_path, allow_working_copy_refresh=True)
+
+    working_path = candidate_root / "preview-working.ipynb"
+    working_payload = _execute_preview_working_notebook(project_root, candidate_root, manifest)
+    _write_atomic(working_path, working_payload)
+    publication = {
+        "schema_version": 1,
+        "record_type": "degradation-preview-publication",
+        "candidate_id": CURRENT_CANDIDATE_ID,
+        "preview_manifest_sha256": canonical_sha256(manifest),
+        "working_notebook_sha256": hashlib.sha256(working_payload).hexdigest(),
+    }
+    _write_atomic(candidate_root / "preview-publication.json", _json_bytes(publication))
+    _reconcile_preview_evidence(manifest_path)
+    return {
+        "artifact_root": str(candidate_root),
+        "preview_manifest_sha256": canonical_sha256(manifest),
+        "working_notebook_sha256": publication["working_notebook_sha256"],
+    }
 
 
 def validate_degradation_decision(
@@ -1974,9 +2034,31 @@ class DegradationPreviewSession:
         from IPython.display import Image, Markdown, display
 
         display(Markdown("## Paired candidate-2 degradation review"))
-        for panel in self.manifest["panels"]:
-            display(Markdown(f"### {panel['condition_id']} — {panel['item_id']}"))
-            display(Image(filename=str(self.artifact_root / panel["relative_path"])))
+        panels = self.manifest.get("panels")
+        if not isinstance(panels, list):
+            raise DegradationDecisionError("preview panels are malformed")
+        by_identity = {(panel.get("item_id"), panel.get("condition_id")): panel for panel in panels}
+        expected_items = (
+            "review-work-01-excerpt-01",
+            "review-work-04-excerpt-01",
+        )
+        expected_identities = {
+            (item_id, condition_id)
+            for item_id in expected_items
+            for condition_id in EXPECTED_CONDITION_IDS
+        }
+        if len(by_identity) != len(panels) or set(by_identity) != expected_identities:
+            raise DegradationDecisionError("preview panels do not match the paired review layout")
+
+        for fragment_number, item_id in enumerate(expected_items, start=1):
+            display(Markdown(f"## Fragment {fragment_number} — `{item_id}`"))
+            for scale in ("x2", "x4"):
+                display(Markdown(f"### {scale}"))
+                for severity in ("clean", "moderate", "strong"):
+                    condition_id = f"{scale}-{severity}"
+                    panel = by_identity[(item_id, condition_id)]
+                    display(Markdown(f"#### {severity} (`{condition_id}`)"))
+                    display(Image(filename=str(self.artifact_root / panel["relative_path"])))
 
     def decision_widget(self) -> Any:
         import ipywidgets as widgets

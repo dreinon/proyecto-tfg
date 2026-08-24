@@ -700,6 +700,63 @@ def test_preview_has_fixed_two_per_cell_membership_and_exact_panels(
     assert "metric" not in json.dumps(manifest).casefold()
 
 
+def test_preview_summary_groups_each_fragment_before_the_next(
+    preview_bundle: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import IPython.display
+
+    module = _degradation()
+    artifact_root = Path(preview_bundle["artifact_root"])
+    manifest = json.loads((artifact_root / "preview-manifest.json").read_text(encoding="utf-8"))
+    session = module.DegradationPreviewSession.__new__(module.DegradationPreviewSession)
+    session.artifact_root = artifact_root
+    session.manifest = manifest
+    displayed: list[Any] = []
+    monkeypatch.setattr(IPython.display, "display", displayed.append)
+
+    session.summary()
+
+    presentation = [
+        ("markdown", value.data)
+        if isinstance(value, IPython.display.Markdown)
+        else ("image", Path(value.filename).name)
+        for value in displayed
+    ]
+    assert presentation == [
+        ("markdown", "## Paired candidate-2 degradation review"),
+        ("markdown", "## Fragment 1 — `review-work-01-excerpt-01`"),
+        ("markdown", "### x2"),
+        ("markdown", "#### clean (`x2-clean`)"),
+        ("image", "panel-01-x2-clean.png"),
+        ("markdown", "#### moderate (`x2-moderate`)"),
+        ("image", "panel-03-x2-moderate.png"),
+        ("markdown", "#### strong (`x2-strong`)"),
+        ("image", "panel-05-x2-strong.png"),
+        ("markdown", "### x4"),
+        ("markdown", "#### clean (`x4-clean`)"),
+        ("image", "panel-07-x4-clean.png"),
+        ("markdown", "#### moderate (`x4-moderate`)"),
+        ("image", "panel-09-x4-moderate.png"),
+        ("markdown", "#### strong (`x4-strong`)"),
+        ("image", "panel-11-x4-strong.png"),
+        ("markdown", "## Fragment 2 — `review-work-04-excerpt-01`"),
+        ("markdown", "### x2"),
+        ("markdown", "#### clean (`x2-clean`)"),
+        ("image", "panel-02-x2-clean.png"),
+        ("markdown", "#### moderate (`x2-moderate`)"),
+        ("image", "panel-04-x2-moderate.png"),
+        ("markdown", "#### strong (`x2-strong`)"),
+        ("image", "panel-06-x2-strong.png"),
+        ("markdown", "### x4"),
+        ("markdown", "#### clean (`x4-clean`)"),
+        ("image", "panel-08-x4-clean.png"),
+        ("markdown", "#### moderate (`x4-moderate`)"),
+        ("image", "panel-10-x4-moderate.png"),
+        ("markdown", "#### strong (`x4-strong`)"),
+        ("image", "panel-12-x4-strong.png"),
+    ]
+
+
 def test_preview_uses_only_semantically_complete_engraved_review_fixtures(
     preview_bundle: dict[str, Any],
 ) -> None:
@@ -790,6 +847,38 @@ def test_working_copy_execute_is_ignored_and_source_only_stays_clean(
     assert "phase2_artifact_root" not in working["metadata"]
     assert source_digest == preview_bundle["notebook_source_sha256"]
     assert working_path.is_relative_to(artifact_root)
+
+
+def test_working_copy_refresh_changes_only_the_review_presentation(
+    preview_bundle: dict[str, Any],
+) -> None:
+    module = _degradation()
+    artifact_root = Path(preview_bundle["artifact_root"])
+    scientific_paths = [
+        artifact_root / "preview-manifest.json",
+        artifact_root / "preview-membership.json",
+        artifact_root / "preview-mapping.json",
+        *sorted((artifact_root / "panels").glob("*.png")),
+    ]
+    before = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in scientific_paths}
+    working_path = artifact_root / "preview-working.ipynb"
+    working = json.loads(working_path.read_text(encoding="utf-8"))
+    first_code = next(cell for cell in working["cells"] if cell["cell_type"] == "code")
+    first_code["execution_count"] = int(first_code["execution_count"]) + 1
+    working_path.write_text(json.dumps(working), encoding="utf-8")
+
+    refreshed = module.refresh_degradation_preview_working_copy(
+        Path(preview_bundle["project_root"]), artifact_root=artifact_root
+    )
+
+    after = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in scientific_paths}
+    assert after == before
+    assert (
+        hashlib.sha256(working_path.read_bytes()).hexdigest()
+        == refreshed["working_notebook_sha256"]
+    )
+    assert not (artifact_root / "degradation-decision.json").exists()
+    assert not (artifact_root / "degradation-decision-reconciliation.json").exists()
 
 
 @pytest.fixture(scope="module")
