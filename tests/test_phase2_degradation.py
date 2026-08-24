@@ -19,6 +19,12 @@ FIXTURE_MANIFEST_PATH = PROJECT_ROOT / "tests/fixtures/phase2/fixture-manifest-v
 VISUAL_FIXTURE_MANIFEST_PATH = (
     PROJECT_ROOT / "tests/fixtures/phase2/visual-fixture-manifest-v1.yaml"
 )
+VISUAL_FIXTURE_MANIFEST_V2_PATH = (
+    PROJECT_ROOT / "tests/fixtures/phase2/visual-fixture-manifest-v2.yaml"
+)
+LEGACY_ARTIFACT_ROOT = PROJECT_ROOT / "artifacts/phase2-degradation-preview"
+V1_RAW_SHA256 = "cabc3ad9ff1564ff2d08808c42a8e34784bebe8ff47beabaa979a7a167548536"
+V1_CANONICAL_SHA256 = "52cb18aa12de1a11791e7249f8086df3a25030b2e5c4c5ef7c29948c2e22f237"
 EXPECTED_CELLS = (
     "x2-clean",
     "x2-moderate",
@@ -61,6 +67,55 @@ def _write_yaml(path: Path, value: dict[str, Any]) -> None:
     path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
 
 
+def _raw_first_candidate(path: Path) -> bytes:
+    raw = path.read_bytes()
+    first = raw.index(b"  - version: 1\n")
+    second = raw.find(b"  - version: 2\n", first + 1)
+    return raw[first:] if second == -1 else raw[first:second]
+
+
+def _regular_inventory(root: Path, *, exclude_candidates: bool = False) -> dict[str, str]:
+    inventory: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if exclude_candidates and relative.parts[:1] == ("candidates",):
+            continue
+        if path.is_symlink():
+            raise AssertionError(f"unexpected symlink in fixture inventory: {relative}")
+        if path.is_file():
+            inventory[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return inventory
+
+
+def _copy_legacy_evidence(destination: Path) -> None:
+    for relative in _regular_inventory(LEGACY_ARTIFACT_ROOT, exclude_candidates=True):
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(LEGACY_ARTIFACT_ROOT / relative, target)
+
+
+def _copy_preview_project(destination: Path) -> None:
+    tracked_inputs = (
+        Path("pyproject.toml"),
+        Path("configs/degradations/controlled-score-candidates.yaml"),
+        Path("data/schemas/v2/degradation-control.schema.json"),
+        Path("data/schemas/v2/degradation-review.schema.json"),
+        Path("tests/fixtures/phase2/fixture-manifest-v1.yaml"),
+        Path("tests/fixtures/phase2/visual-fixture-manifest-v1.yaml"),
+        Path("tests/fixtures/phase2/visual-fixture-manifest-v2.yaml"),
+        Path("tests/fixtures/phase2/visual-scores/compound-meter-phrase.musicxml"),
+        Path("tests/fixtures/phase2/visual-scores/grand-staff-polyphony.musicxml"),
+        Path("tests/fixtures/phase2/visual-scores/lyrical-bass-phrase.musicxml"),
+        Path("tests/fixtures/phase2/visual-scores/melodic-phrase.musicxml"),
+        Path("notebooks/02-degradation-preview.ipynb"),
+    )
+    for relative_path in tracked_inputs:
+        target = destination / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(PROJECT_ROOT / relative_path, target)
+    _copy_legacy_evidence(destination / "artifacts/phase2-degradation-preview")
+
+
 def test_degradation_contract_defines_exact_closed_six_cell_candidate() -> None:
     module = _degradation()
     control = module.load_degradation_control(CONTROL_PATH)
@@ -99,6 +154,64 @@ def test_degradation_contract_defines_exact_closed_six_cell_candidate() -> None:
         assert strong["blur"] == {"type": "gaussian", "sigma": 1.6, "kernel": 11}
         assert strong["noise"] == {"type": "gaussian", "sigma": 8.0}
         assert strong["jpeg"]["quality"] == 60
+
+
+def test_candidate_registry_preserves_v1_and_appends_exact_candidate_v2() -> None:
+    module = _degradation()
+    registry = _yaml(CONTROL_PATH)
+
+    assert hashlib.sha256(_raw_first_candidate(CONTROL_PATH)).hexdigest() == V1_RAW_SHA256
+    assert module.canonical_sha256(registry["candidates"][0]) == V1_CANONICAL_SHA256
+    assert [candidate["version"] for candidate in registry["candidates"]] == [1, 2]
+    assert [candidate["candidate_id"] for candidate in registry["candidates"]] == [
+        "controlled-score-v1-candidate",
+        "controlled-score-v2-candidate",
+    ]
+
+    control = module.load_degradation_control(CONTROL_PATH)
+    assert control.version == 2
+    assert control.candidate_id == "controlled-score-v2-candidate"
+    candidate = registry["candidates"][1]
+    assert candidate["previous_candidate_sha256"] == V1_CANONICAL_SHA256
+    conditions = {condition["condition_id"]: condition for condition in control.conditions}
+    for scale in (2, 4):
+        assert conditions[f"x{scale}-moderate"]["blur"] == {
+            "type": "gaussian",
+            "sigma": 1.2,
+            "kernel": 9,
+        }
+        assert conditions[f"x{scale}-moderate"]["noise"] == {
+            "type": "gaussian",
+            "sigma": 5.0,
+        }
+        assert conditions[f"x{scale}-moderate"]["jpeg"]["quality"] == 75
+        assert conditions[f"x{scale}-strong"]["blur"] == {
+            "type": "gaussian",
+            "sigma": 2.4,
+            "kernel": 17,
+        }
+        assert conditions[f"x{scale}-strong"]["noise"] == {
+            "type": "gaussian",
+            "sigma": 14.0,
+        }
+        assert conditions[f"x{scale}-strong"]["jpeg"]["quality"] == 40
+
+
+@pytest.mark.parametrize("mutation", ("predecessor", "mixed-scale", "mutated-v1"))
+def test_candidate_v2_mutations_fail_closed(tmp_path: Path, mutation: str) -> None:
+    module = _degradation()
+    registry = _yaml(CONTROL_PATH)
+    if mutation == "predecessor":
+        registry["candidates"][1]["previous_candidate_sha256"] = "0" * 64
+    elif mutation == "mixed-scale":
+        registry["candidates"][1]["conditions"][4]["noise"]["sigma"] = 14.0
+    else:
+        registry["candidates"][0]["master_seed"] += 1
+    path = tmp_path / "candidate.yaml"
+    _write_yaml(path, registry)
+
+    with pytest.raises(module.DegradationContractError):
+        module.load_degradation_control(path)
 
 
 @pytest.mark.parametrize(
@@ -245,6 +358,58 @@ def test_visual_fixture_manifest_is_separate_cc0_engraved_review_evidence() -> N
         assert item["source_role"] == "visual-degradation-review"
         assert item["license"] == "CC0-1.0"
         assert item["origin"] == "authored-for-this-tfg-fixture-suite"
+
+
+def test_paired_preview_manifest_retains_four_sources_and_fixed_anchors() -> None:
+    manifest_v1 = _yaml(VISUAL_FIXTURE_MANIFEST_PATH)
+    manifest_v2 = _yaml(VISUAL_FIXTURE_MANIFEST_V2_PATH)
+
+    assert manifest_v2["manifest_id"] == "phase2-engraved-visual-fixtures-v2"
+    assert manifest_v2["items"] == manifest_v1["items"]
+    assert len({item["source_group_id"] for item in manifest_v2["items"]}) == 4
+    expected_items = ["review-work-01-excerpt-01", "review-work-04-excerpt-01"]
+    expected_groups = ["review-work-01", "review-work-04"]
+    assert [panel["condition_id"] for panel in manifest_v2["review_membership"]] == [
+        condition for condition in EXPECTED_CELLS for _ in range(2)
+    ]
+    for offset in range(0, 12, 2):
+        pair = manifest_v2["review_membership"][offset : offset + 2]
+        assert [panel["item_id"] for panel in pair] == expected_items
+        assert [panel["source_group_id"] for panel in pair] == expected_groups
+
+
+def test_evidence_archive_is_byte_exact_idempotent_and_symlink_safe(tmp_path: Path) -> None:
+    module = _degradation()
+    project_root = tmp_path / "project"
+    legacy_root = project_root / "artifacts/phase2-degradation-preview"
+    _copy_legacy_evidence(legacy_root)
+    expected = _regular_inventory(legacy_root, exclude_candidates=True)
+
+    first = module.archive_legacy_degradation_evidence(project_root)
+    archive_root = Path(first["archive_root"])
+    archived = _regular_inventory(archive_root)
+    archived.pop("legacy-evidence-reconciliation.json")
+    assert archived == expected
+    reconciliation = json.loads(
+        (archive_root / "legacy-evidence-reconciliation.json").read_text(encoding="utf-8")
+    )
+    assert reconciliation["candidate_id"] == "controlled-score-v1-candidate"
+    assert reconciliation["source_files"] == [
+        {"relative_path": path, "sha256": digest} for path, digest in expected.items()
+    ]
+    before = _regular_inventory(archive_root)
+    assert module.archive_legacy_degradation_evidence(project_root) == first
+    assert _regular_inventory(archive_root) == before
+
+    bad_root = tmp_path / "bad-project" / "artifacts/phase2-degradation-preview"
+    _copy_legacy_evidence(bad_root)
+    (bad_root / "panels/panel-01-x2-clean.png").unlink()
+    (bad_root / "panels/panel-01-x2-clean.png").symlink_to(
+        LEGACY_ARTIFACT_ROOT / "panels/panel-01-x2-clean.png"
+    )
+    with pytest.raises(module.DegradationDecisionError, match="symlink"):
+        module.archive_legacy_degradation_evidence(tmp_path / "bad-project")
+    assert not (bad_root / "candidates/controlled-score-v1-candidate").exists()
 
 
 def test_visual_fixture_bundle_rejects_analytical_only_manifest(tmp_path: Path) -> None:
@@ -497,9 +662,9 @@ def test_impulse_and_staff_geometry_remain_lower_right_aligned() -> None:
 @pytest.fixture(scope="module")
 def preview_bundle(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     module = _degradation()
-    project_root = PROJECT_ROOT
-    artifact_root = tmp_path_factory.mktemp("phase2-preview")
-    return module.build_degradation_preview(project_root, artifact_root=artifact_root)
+    project_root = tmp_path_factory.mktemp("phase2-preview-project")
+    _copy_preview_project(project_root)
+    return module.build_degradation_preview(project_root)
 
 
 def test_preview_has_fixed_two_per_cell_membership_and_exact_panels(
@@ -513,12 +678,18 @@ def test_preview_has_fixed_two_per_cell_membership_and_exact_panels(
     assert [panel["condition_id"] for panel in membership["panels"]] == [
         condition_id for condition_id in EXPECTED_CELLS for _ in range(2)
     ]
+    expected_items = ["review-work-01-excerpt-01", "review-work-04-excerpt-01"]
+    expected_rois: list[dict[str, Any]] | None = None
     for condition_id in EXPECTED_CELLS:
         selected = [
             panel for panel in membership["panels"] if panel["condition_id"] == condition_id
         ]
         assert len(selected) == 2
         assert len({panel["source_group_id"] for panel in selected}) == 2
+        assert [panel["item_id"] for panel in selected] == expected_items
+        rois = [panel["roi"] for panel in selected]
+        expected_rois = rois if expected_rois is None else expected_rois
+        assert rois == expected_rois
     assert len(manifest["panels"]) == 12
     assert len(manifest["panel_sha256s"]) == 12
     assert all((artifact_root / panel["relative_path"]).is_file() for panel in manifest["panels"])
@@ -534,7 +705,7 @@ def test_preview_uses_only_semantically_complete_engraved_review_fixtures(
     fixture_bundle = json.loads((artifact_root / "fixture-bundle.json").read_text(encoding="utf-8"))
 
     assert manifest["fixture_source_role"] == "visual-degradation-review"
-    assert membership["selection_policy"] == "predeclared-engraved-membership-v1"
+    assert membership["selection_policy"] == "paired-fixed-anchors-v2"
     assert membership["panels"] == fixture_bundle["review_membership"]
     assert set(fixture_bundle["required_semantics"]) == REQUIRED_NOTATION_SEMANTICS
     assert fixture_bundle["renderer"]["engraver"]["runtime_version"] == "6.2.1"
@@ -546,6 +717,48 @@ def test_preview_uses_only_semantically_complete_engraved_review_fixtures(
     assert "praig/smb" not in serialized
     assert "data/sources/smb" not in serialized
     assert "load_dataset" not in serialized
+
+
+def test_candidate_scoped_preview_reconciles_actual_panel_bytes_and_no_smb(
+    preview_bundle: dict[str, Any],
+) -> None:
+    module = _degradation()
+    artifact_root = Path(preview_bundle["artifact_root"])
+    manifest_path = artifact_root / "preview-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert artifact_root.parts[-3:] == (
+        "phase2-degradation-preview",
+        "candidates",
+        "controlled-score-v2-candidate",
+    )
+    assert manifest["candidate_id"] == "controlled-score-v2-candidate"
+    assert len(manifest["panels"]) == 12
+    assert [
+        hashlib.sha256((artifact_root / panel["relative_path"]).read_bytes()).hexdigest()
+        for panel in manifest["panels"]
+    ] == manifest["panel_sha256s"]
+    serialized = json.dumps(manifest).casefold()
+    assert "praig/smb" not in serialized
+    assert "load_dataset" not in serialized
+
+    decision = _decision_for_preview(preview_bundle, "accept")
+    decision_path = artifact_root / "degradation-decision.json"
+    decision_path.write_text(json.dumps(decision), encoding="utf-8")
+    assert (
+        module.validate_degradation_decision(decision_path, manifest_path)["decision"] == "accept"
+    )
+    decision_path.unlink()
+    panel = artifact_root / manifest["panels"][0]["relative_path"]
+    original = panel.read_bytes()
+    try:
+        panel.write_bytes(original + b"substitution")
+        decision_path.write_text(json.dumps(decision), encoding="utf-8")
+        with pytest.raises(module.DegradationDecisionError, match="panel"):
+            module.validate_degradation_decision(decision_path, manifest_path)
+    finally:
+        panel.write_bytes(original)
+        decision_path.unlink(missing_ok=True)
 
 
 def test_working_copy_execute_is_ignored_and_source_only_stays_clean(
@@ -581,21 +794,7 @@ def relocatable_preview_project(
 ) -> tuple[Path, dict[str, Any]]:
     module = _degradation()
     project_root = tmp_path_factory.mktemp("relocatable-phase2-project")
-    tracked_inputs = (
-        Path("pyproject.toml"),
-        Path("configs/degradations/controlled-score-candidates.yaml"),
-        Path("tests/fixtures/phase2/fixture-manifest-v1.yaml"),
-        Path("tests/fixtures/phase2/visual-fixture-manifest-v1.yaml"),
-        Path("tests/fixtures/phase2/visual-scores/compound-meter-phrase.musicxml"),
-        Path("tests/fixtures/phase2/visual-scores/grand-staff-polyphony.musicxml"),
-        Path("tests/fixtures/phase2/visual-scores/lyrical-bass-phrase.musicxml"),
-        Path("tests/fixtures/phase2/visual-scores/melodic-phrase.musicxml"),
-        Path("notebooks/02-degradation-preview.ipynb"),
-    )
-    for relative_path in tracked_inputs:
-        destination = project_root / relative_path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(PROJECT_ROOT / relative_path, destination)
+    _copy_preview_project(project_root)
     artifact_root = project_root / "artifacts/phase2-degradation-preview"
     preview = module.build_degradation_preview(project_root, artifact_root=artifact_root)
     return project_root, preview
@@ -657,6 +856,28 @@ def test_tracked_notebook_is_explicitly_non_executable_in_place() -> None:
     assert "No executeu aquest quadern rastrejat" in serialized_sources
 
 
+def test_notebook_sanitization_and_candidate_v2_review_wording() -> None:
+    module = _degradation()
+    source_path = PROJECT_ROOT / "notebooks/02-degradation-preview.ipynb"
+    assert module.assert_notebook_source_clean(source_path)
+    notebook = json.loads(source_path.read_text(encoding="utf-8"))
+    sources = "\n".join("".join(cell.get("source", [])) for cell in notebook["cells"])
+    for text in (
+        "controlled-score-v2-candidate",
+        "HR",
+        "LR",
+        "ROI",
+        "clean",
+        "moderate",
+        "strong",
+        "x2",
+        "x4",
+        "noteheads",
+        "unintended joins",
+    ):
+        assert text in sources
+
+
 def _decision_for_preview(preview_bundle: dict[str, Any], decision: str) -> dict[str, Any]:
     artifact_root = Path(preview_bundle["artifact_root"])
     manifest = json.loads((artifact_root / "preview-manifest.json").read_text(encoding="utf-8"))
@@ -677,18 +898,74 @@ def _decision_for_preview(preview_bundle: dict[str, Any], decision: str) -> dict
     }
 
 
-def test_freeze_gate_rejects_missing_stale_agent_authored_or_rejected_review(
+@pytest.mark.parametrize(
+    "mutation",
+    ("membership", "mapping", "registry", "archive", "source", "cross-root"),
+)
+def test_human_decision_validation_rejects_candidate_scoped_substitution(
+    tmp_path: Path, preview_bundle: dict[str, Any], mutation: str
+) -> None:
+    module = _degradation()
+    source_project = Path(preview_bundle["project_root"])
+    project_root = tmp_path / "project"
+    shutil.copytree(source_project, project_root)
+    artifact_root = (
+        project_root
+        / "artifacts/phase2-degradation-preview/candidates/controlled-score-v2-candidate"
+    )
+    manifest_path = artifact_root / "preview-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    decision = _decision_for_preview(
+        {
+            **preview_bundle,
+            "artifact_root": str(artifact_root),
+            "preview_manifest_sha256": module.canonical_sha256(manifest),
+        },
+        "accept",
+    )
+    decision_path = artifact_root / "degradation-decision.json"
+    if mutation in {"membership", "mapping"}:
+        evidence_path = artifact_root / f"preview-{mutation}.json"
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        evidence["panels"] = list(reversed(evidence["panels"]))
+        evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+    elif mutation == "registry":
+        registry = _yaml(project_root / "configs/degradations/controlled-score-candidates.yaml")
+        registry["candidates"][1]["master_seed"] += 1
+        _write_yaml(
+            project_root / "configs/degradations/controlled-score-candidates.yaml", registry
+        )
+    elif mutation == "archive":
+        archive_panel = (
+            project_root
+            / "artifacts/phase2-degradation-preview/candidates/controlled-score-v1-candidate"
+            / "panels/panel-01-x2-clean.png"
+        )
+        archive_panel.write_bytes(archive_panel.read_bytes() + b"substitution")
+    elif mutation == "source":
+        notebook_path = project_root / "notebooks/02-degradation-preview.ipynb"
+        notebook_path.write_bytes(notebook_path.read_bytes() + b" ")
+    else:
+        decision_path = tmp_path / "cross-root-decision.json"
+    decision_path.write_text(json.dumps(decision), encoding="utf-8")
+
+    with pytest.raises(module.DegradationDecisionError):
+        module.validate_degradation_decision(decision_path, manifest_path)
+
+
+def test_reject_fail_closed_for_missing_stale_agent_authored_or_rejected_review(
     tmp_path: Path, preview_bundle: dict[str, Any]
 ) -> None:
     module = _degradation()
     artifact_root = Path(preview_bundle["artifact_root"])
     preview_manifest = artifact_root / "preview-manifest.json"
+    control_path = Path(preview_bundle["project_root"]) / CONTROL_PATH.relative_to(PROJECT_ROOT)
     frozen = tmp_path / "controlled-score-v1.yaml"
     reconciliation = tmp_path / "degradation-decision-reconciliation.json"
 
     with pytest.raises(module.DegradationDecisionError):
         module.freeze_degradation_control(
-            CONTROL_PATH,
+            control_path,
             tmp_path / "missing.json",
             preview_manifest,
             frozen,
@@ -700,7 +977,7 @@ def test_freeze_gate_rejects_missing_stale_agent_authored_or_rejected_review(
     decision_path.write_text(json.dumps(agent_authored), encoding="utf-8")
     with pytest.raises(module.DegradationDecisionError):
         module.freeze_degradation_control(
-            CONTROL_PATH,
+            control_path,
             decision_path,
             preview_manifest,
             frozen,
@@ -709,7 +986,7 @@ def test_freeze_gate_rejects_missing_stale_agent_authored_or_rejected_review(
     rejected = _decision_for_preview(preview_bundle, "reject")
     decision_path.write_text(json.dumps(rejected), encoding="utf-8")
     blocked = module.freeze_degradation_control(
-        CONTROL_PATH,
+        control_path,
         decision_path,
         preview_manifest,
         frozen,
@@ -720,7 +997,7 @@ def test_freeze_gate_rejects_missing_stale_agent_authored_or_rejected_review(
     assert not reconciliation.exists()
 
 
-def test_freeze_gate_accepts_only_exact_content_bound_human_review(
+def test_accept_freeze_allows_only_exact_candidate_v2_human_review(
     tmp_path: Path, preview_bundle: dict[str, Any]
 ) -> None:
     module = _degradation()
@@ -732,8 +1009,9 @@ def test_freeze_gate_accepts_only_exact_content_bound_human_review(
     frozen = tmp_path / "controlled-score-v1.yaml"
     reconciliation = tmp_path / "degradation-decision-reconciliation.json"
 
+    control_path = Path(preview_bundle["project_root"]) / CONTROL_PATH.relative_to(PROJECT_ROOT)
     result = module.freeze_degradation_control(
-        CONTROL_PATH,
+        control_path,
         decision_path,
         preview_manifest,
         frozen,
