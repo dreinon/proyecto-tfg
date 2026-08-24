@@ -118,7 +118,7 @@ def _copy_preview_project(destination: Path) -> None:
 
 def test_degradation_contract_defines_exact_closed_six_cell_candidate() -> None:
     module = _degradation()
-    control = module.load_degradation_control(CONTROL_PATH)
+    control = module.load_degradation_control(CONTROL_PATH, version=1)
 
     assert control.status == "candidate"
     assert control.version == 1
@@ -595,10 +595,14 @@ def test_deterministic_seed_and_scientific_mutation_change_identity(tmp_path: Pa
         condition_id="x2-moderate",
     )
 
-    registry = _yaml(CONTROL_PATH)
-    registry["candidates"][0]["master_seed"] += 1
     changed_path = tmp_path / "changed.yaml"
-    _write_yaml(changed_path, registry)
+    raw = CONTROL_PATH.read_text(encoding="utf-8")
+    marker = "  - version: 2\n"
+    prefix, candidate_v2 = raw.split(marker, maxsplit=1)
+    candidate_v2 = candidate_v2.replace(
+        "    master_seed: 20260821\n", "    master_seed: 20260822\n", 1
+    )
+    changed_path.write_text(prefix + marker + candidate_v2, encoding="utf-8")
     changed = module.load_degradation_control(changed_path)
     first = module.apply_degradation(
         _neutral_reference(),
@@ -944,7 +948,9 @@ def test_human_decision_validation_rejects_candidate_scoped_substitution(
         archive_panel.write_bytes(archive_panel.read_bytes() + b"substitution")
     elif mutation == "source":
         notebook_path = project_root / "notebooks/02-degradation-preview.ipynb"
-        notebook_path.write_bytes(notebook_path.read_bytes() + b" ")
+        notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+        notebook["cells"][0]["source"].append("substituted source")
+        notebook_path.write_text(json.dumps(notebook), encoding="utf-8")
     else:
         decision_path = tmp_path / "cross-root-decision.json"
     decision_path.write_text(json.dumps(decision), encoding="utf-8")
@@ -973,7 +979,7 @@ def test_reject_fail_closed_for_missing_stale_agent_authored_or_rejected_review(
         )
     agent_authored = _decision_for_preview(preview_bundle, "accept")
     agent_authored["authorship"] = "agent-authored"
-    decision_path = tmp_path / "decision.json"
+    decision_path = artifact_root / "degradation-decision.json"
     decision_path.write_text(json.dumps(agent_authored), encoding="utf-8")
     with pytest.raises(module.DegradationDecisionError):
         module.freeze_degradation_control(
@@ -995,6 +1001,7 @@ def test_reject_fail_closed_for_missing_stale_agent_authored_or_rejected_review(
     assert blocked["status"] == "blocked-rejected"
     assert not frozen.exists()
     assert not reconciliation.exists()
+    decision_path.unlink()
 
 
 def test_accept_freeze_allows_only_exact_candidate_v2_human_review(
@@ -1004,7 +1011,7 @@ def test_accept_freeze_allows_only_exact_candidate_v2_human_review(
     artifact_root = Path(preview_bundle["artifact_root"])
     preview_manifest = artifact_root / "preview-manifest.json"
     decision = _decision_for_preview(preview_bundle, "accept")
-    decision_path = tmp_path / "decision.json"
+    decision_path = artifact_root / "degradation-decision.json"
     decision_path.write_text(json.dumps(decision), encoding="utf-8")
     frozen = tmp_path / "controlled-score-v1.yaml"
     reconciliation = tmp_path / "degradation-decision-reconciliation.json"
@@ -1021,6 +1028,9 @@ def test_accept_freeze_allows_only_exact_candidate_v2_human_review(
     assert frozen.is_file()
     assert reconciliation.is_file()
     frozen_control = _yaml(frozen)
+    module.validate_instance("degradation-control", frozen_control, version=2)
     assert frozen_control["status"] == "frozen"
+    assert frozen_control["candidate_id"] == "controlled-score-v2-candidate"
     assert frozen_control["candidate_sha256"] == decision["candidate_sha256"]
     assert frozen_control["decision_reconciliation_sha256"] == result["reconciliation_sha256"]
+    decision_path.unlink()

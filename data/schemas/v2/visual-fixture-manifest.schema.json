@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": 2},
     "record_type": {"const": "visual-fixture-manifest"},
-    "manifest_id": {"const": "phase2-engraved-visual-fixtures-v1"},
+    "manifest_id": {"enum": ["phase2-engraved-visual-fixtures-v1", "phase2-engraved-visual-fixtures-v2"]},
     "source_role": {"const": "visual-degradation-review"},
     "content_policy": {"const": "project-authored-cc0-no-smb"},
     "required_semantics": {"type": "array", "minItems": 16, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/semantic"}},

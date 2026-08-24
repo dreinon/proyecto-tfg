@@ -1,0 +1,132 @@
+schema_version: 2
+record_type: visual-fixture-manifest
+manifest_id: phase2-engraved-visual-fixtures-v2
+source_role: visual-degradation-review
+content_policy: project-authored-cc0-no-smb
+required_semantics: &required_semantics
+  - clefs
+  - key-signatures
+  - time-signatures
+  - staff-lines
+  - barlines
+  - pitched-notes
+  - stems
+  - beams
+  - rests
+  - accidentals
+  - slurs
+  - ties
+  - articulations
+  - dynamics
+  - text-lyrics-digits
+  - grand-staff-polyphony-chords
+renderer:
+  engraver:
+    name: Verovio
+    package: verovio
+    version: 6.2.1
+    project_url: https://www.verovio.org/
+    source_format: MusicXML 4.0 partwise
+    options:
+      adjustPageHeight: true
+      breaks: none
+      footer: none
+      header: none
+      landscape: false
+      pageHeight: 1800
+      pageMarginBottom: 40
+      pageMarginLeft: 40
+      pageMarginRight: 40
+      pageMarginTop: 40
+      pageWidth: 2400
+      scale: 130
+  rasterizer:
+    name: CairoSVG
+    package: cairosvg
+    version: 2.9.0
+    project_url: https://cairosvg.org/
+    canvas_width: 1600
+    canvas_height: 900
+    ink_threshold: 250
+    crop_margin: 30
+    canvas_inset: 60
+limits:
+  max_items: 8
+  max_source_bytes: 1048576
+items:
+  - item_id: review-work-01-excerpt-01
+    source_group_id: review-work-01
+    source_role: visual-degradation-review
+    origin: authored-for-this-tfg-fixture-suite
+    author: TFG score-super-resolution project
+    license: CC0-1.0
+    source_relative_path: visual-scores/melodic-phrase.musicxml
+    source_sha256: c20e1fd48bc5d324eb622a2fb1d58701d7b307eb215f64894427a9b8f606447d
+    relative_path: images/melodic-phrase.png
+    semantic_features: &single_staff_semantics
+      - accidentals
+      - articulations
+      - barlines
+      - beams
+      - clefs
+      - dynamics
+      - key-signatures
+      - pitched-notes
+      - rests
+      - slurs
+      - staff-lines
+      - stems
+      - text-lyrics-digits
+      - ties
+      - time-signatures
+    roi: {x: 250, y: 230, width: 760, height: 430, purpose: melody-symbol-detail}
+    rendered_pixel_sha256: 436e1deeae5a3cd02a68f6d652f6f82b496e68e68014f9551d929c673113279b
+  - item_id: review-work-02-excerpt-01
+    source_group_id: review-work-02
+    source_role: visual-degradation-review
+    origin: authored-for-this-tfg-fixture-suite
+    author: TFG score-super-resolution project
+    license: CC0-1.0
+    source_relative_path: visual-scores/lyrical-bass-phrase.musicxml
+    source_sha256: f7ef2a999f6f95560294ffc5197931024419d5f05475a4ebd0927f79f8b2abe3
+    relative_path: images/lyrical-bass-phrase.png
+    semantic_features: *single_staff_semantics
+    roi: {x: 230, y: 250, width: 780, height: 420, purpose: lyrics-text-detail}
+    rendered_pixel_sha256: 0bf9a8ef7c7d6688afe966ff35bf8ce6e33535ff6dc8418ee0c1c4c008218c15
+  - item_id: review-work-03-excerpt-01
+    source_group_id: review-work-03
+    source_role: visual-degradation-review
+    origin: authored-for-this-tfg-fixture-suite
+    author: TFG score-super-resolution project
+    license: CC0-1.0
+    source_relative_path: visual-scores/compound-meter-phrase.musicxml
+    source_sha256: e4b8e4fd3527ef0c6674e23edbb2f14cab18acbed4970f6734f2a01723784b41
+    relative_path: images/compound-meter-phrase.png
+    semantic_features: *single_staff_semantics
+    roi: {x: 250, y: 230, width: 760, height: 430, purpose: compound-meter-detail}
+    rendered_pixel_sha256: 2b9cbb5c99efd4e3e0ede2a2831f82d3773cb09f4e3aa11b1d6ef6ee9eff580e
+  - item_id: review-work-04-excerpt-01
+    source_group_id: review-work-04
+    source_role: visual-degradation-review
+    origin: authored-for-this-tfg-fixture-suite
+    author: TFG score-super-resolution project
+    license: CC0-1.0
+    source_relative_path: visual-scores/grand-staff-polyphony.musicxml
+    source_sha256: 175546fac8846f3d3a8368776e2f3aaf7a5f15299bb42c6ad51a79d4be28d65e
+    relative_path: images/grand-staff-polyphony.png
+    semantic_features: *required_semantics
+    roi: {x: 180, y: 180, width: 850, height: 540, purpose: grand-staff-polyphony-detail}
+    rendered_pixel_sha256: cbd1fd4f227b339519b5899a7e9269ade5d357d230487a4c13c9dd74e0c1e62c
+review_membership:
+  - {panel_id: panel-01, condition_id: x2-clean, item_id: review-work-01-excerpt-01, source_group_id: review-work-01}
+  - {panel_id: panel-02, condition_id: x2-clean, item_id: review-work-04-excerpt-01, source_group_id: review-work-04}
+  - {panel_id: panel-03, condition_id: x2-moderate, item_id: review-work-01-excerpt-01, source_group_id: review-work-01}
+  - {panel_id: panel-04, condition_id: x2-moderate, item_id: review-work-04-excerpt-01, source_group_id: review-work-04}
+  - {panel_id: panel-05, condition_id: x2-strong, item_id: review-work-01-excerpt-01, source_group_id: review-work-01}
+  - {panel_id: panel-06, condition_id: x2-strong, item_id: review-work-04-excerpt-01, source_group_id: review-work-04}
+  - {panel_id: panel-07, condition_id: x4-clean, item_id: review-work-01-excerpt-01, source_group_id: review-work-01}
+  - {panel_id: panel-08, condition_id: x4-clean, item_id: review-work-04-excerpt-01, source_group_id: review-work-04}
+  - {panel_id: panel-09, condition_id: x4-moderate, item_id: review-work-01-excerpt-01, source_group_id: review-work-01}
+  - {panel_id: panel-10, condition_id: x4-moderate, item_id: review-work-04-excerpt-01, source_group_id: review-work-04}
+  - {panel_id: panel-11, condition_id: x4-strong, item_id: review-work-01-excerpt-01, source_group_id: review-work-01}
+  - {panel_id: panel-12, condition_id: x4-strong, item_id: review-work-04-excerpt-01, source_group_id: review-work-04}
