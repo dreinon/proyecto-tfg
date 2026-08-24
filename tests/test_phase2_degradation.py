@@ -25,6 +25,9 @@ VISUAL_FIXTURE_MANIFEST_V2_PATH = (
 LEGACY_ARTIFACT_ROOT = PROJECT_ROOT / "artifacts/phase2-degradation-preview"
 V1_RAW_SHA256 = "cabc3ad9ff1564ff2d08808c42a8e34784bebe8ff47beabaa979a7a167548536"
 V1_CANONICAL_SHA256 = "52cb18aa12de1a11791e7249f8086df3a25030b2e5c4c5ef7c29948c2e22f237"
+V2_CANONICAL_SHA256 = "89b270aa56f9c0d9cd5335c645921f7447280c7bcc26e6c7d0995b720f41716a"
+V1_ARCHIVE_ROOT = LEGACY_ARTIFACT_ROOT / "candidates/controlled-score-v1-candidate"
+V2_ARTIFACT_ROOT = LEGACY_ARTIFACT_ROOT / "candidates/controlled-score-v2-candidate"
 EXPECTED_CELLS = (
     "x2-clean",
     "x2-moderate",
@@ -114,6 +117,9 @@ def _copy_preview_project(destination: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(PROJECT_ROOT / relative_path, target)
     _copy_legacy_evidence(destination / "artifacts/phase2-degradation-preview")
+    candidates = destination / "artifacts/phase2-degradation-preview/candidates"
+    shutil.copytree(V1_ARCHIVE_ROOT, candidates / V1_ARCHIVE_ROOT.name)
+    shutil.copytree(V2_ARTIFACT_ROOT, candidates / V2_ARTIFACT_ROOT.name)
 
 
 def test_degradation_contract_defines_exact_closed_six_cell_candidate() -> None:
@@ -156,57 +162,59 @@ def test_degradation_contract_defines_exact_closed_six_cell_candidate() -> None:
         assert strong["jpeg"]["quality"] == 60
 
 
-def test_candidate_registry_preserves_v1_and_appends_exact_candidate_v2() -> None:
+def test_candidate_registry_preserves_v1_v2_and_appends_exact_candidate_v3() -> None:
     module = _degradation()
     registry = _yaml(CONTROL_PATH)
 
     assert hashlib.sha256(_raw_first_candidate(CONTROL_PATH)).hexdigest() == V1_RAW_SHA256
     assert module.canonical_sha256(registry["candidates"][0]) == V1_CANONICAL_SHA256
-    assert [candidate["version"] for candidate in registry["candidates"]] == [1, 2]
+    assert [candidate["version"] for candidate in registry["candidates"]] == [1, 2, 3]
     assert [candidate["candidate_id"] for candidate in registry["candidates"]] == [
         "controlled-score-v1-candidate",
         "controlled-score-v2-candidate",
+        "controlled-score-v3-candidate",
     ]
+    assert module.canonical_sha256(registry["candidates"][1]) == V2_CANONICAL_SHA256
 
     control = module.load_degradation_control(CONTROL_PATH)
-    assert control.version == 2
-    assert control.candidate_id == "controlled-score-v2-candidate"
-    candidate = registry["candidates"][1]
-    assert candidate["previous_candidate_sha256"] == V1_CANONICAL_SHA256
+    assert control.version == 3
+    assert control.candidate_id == "controlled-score-v3-candidate"
+    candidate = registry["candidates"][2]
+    assert candidate["previous_candidate_sha256"] == V2_CANONICAL_SHA256
     conditions = {condition["condition_id"]: condition for condition in control.conditions}
     for scale in (2, 4):
         assert conditions[f"x{scale}-moderate"]["blur"] == {
             "type": "gaussian",
-            "sigma": 1.2,
-            "kernel": 9,
+            "sigma": 1.8,
+            "kernel": 13,
         }
         assert conditions[f"x{scale}-moderate"]["noise"] == {
             "type": "gaussian",
-            "sigma": 5.0,
+            "sigma": 3.0,
         }
-        assert conditions[f"x{scale}-moderate"]["jpeg"]["quality"] == 75
+        assert conditions[f"x{scale}-moderate"]["jpeg"]["quality"] == 60
         assert conditions[f"x{scale}-strong"]["blur"] == {
             "type": "gaussian",
-            "sigma": 2.4,
-            "kernel": 17,
+            "sigma": 3.0,
+            "kernel": 21,
         }
         assert conditions[f"x{scale}-strong"]["noise"] == {
             "type": "gaussian",
-            "sigma": 14.0,
+            "sigma": 6.0,
         }
-        assert conditions[f"x{scale}-strong"]["jpeg"]["quality"] == 40
+        assert conditions[f"x{scale}-strong"]["jpeg"]["quality"] == 30
 
 
-@pytest.mark.parametrize("mutation", ("predecessor", "mixed-scale", "mutated-v1"))
-def test_candidate_v2_mutations_fail_closed(tmp_path: Path, mutation: str) -> None:
+@pytest.mark.parametrize("mutation", ("predecessor", "mixed-scale", "mutated-v2"))
+def test_candidate_v3_mutations_fail_closed(tmp_path: Path, mutation: str) -> None:
     module = _degradation()
     registry = _yaml(CONTROL_PATH)
     if mutation == "predecessor":
-        registry["candidates"][1]["previous_candidate_sha256"] = "0" * 64
+        registry["candidates"][2]["previous_candidate_sha256"] = "0" * 64
     elif mutation == "mixed-scale":
-        registry["candidates"][1]["conditions"][4]["noise"]["sigma"] = 14.0
+        registry["candidates"][2]["conditions"][4]["noise"]["sigma"] = 6.5
     else:
-        registry["candidates"][0]["master_seed"] += 1
+        registry["candidates"][1]["master_seed"] += 1
     path = tmp_path / "candidate.yaml"
     _write_yaml(path, registry)
 
@@ -671,7 +679,7 @@ def preview_bundle(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     return module.build_degradation_preview(project_root)
 
 
-def test_preview_has_fixed_two_per_cell_membership_and_exact_panels(
+def test_candidate_v3_preview_has_fixed_two_per_cell_membership_and_exact_panels(
     preview_bundle: dict[str, Any],
 ) -> None:
     artifact_root = Path(preview_bundle["artifact_root"])
@@ -700,7 +708,68 @@ def test_preview_has_fixed_two_per_cell_membership_and_exact_panels(
     assert "metric" not in json.dumps(manifest).casefold()
 
 
-def test_preview_summary_groups_each_fragment_before_the_next(
+@pytest.mark.parametrize("scale", (2, 4))
+def test_native_physical_preview_preserves_hr_and_exact_nearest_lr_pixels(scale: int) -> None:
+    module = _degradation()
+    reference = np.arange(11 * 13 * 3, dtype=np.uint16).reshape(11, 13, 3).astype(np.uint8)
+    degraded = np.arange(6 * 7 * 3, dtype=np.uint16).reshape(6, 7, 3).astype(np.uint8)
+    roi = {"x": 1, "y": 2, "width": 9, "height": 7, "purpose": "offset-test"}
+
+    hr_roi, lr_display, evidence = module.native_physical_review_rois(
+        reference, degraded, roi=roi, scale=scale
+    )
+
+    assert np.array_equal(hr_roi, reference[2:9, 1:10])
+    left, top = 1 // scale, 2 // scale
+    right = (1 + 9 + scale - 1) // scale
+    bottom = (2 + 7 + scale - 1) // scale
+    covering = degraded[top:bottom, left:right]
+    enlarged = cv2.resize(
+        covering,
+        (covering.shape[1] * scale, covering.shape[0] * scale),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    overhang_left = 1 - left * scale
+    overhang_top = 2 - top * scale
+    expected = enlarged[
+        overhang_top : overhang_top + 7,
+        overhang_left : overhang_left + 9,
+    ]
+    assert np.array_equal(lr_display, expected)
+    assert hr_roi.shape == lr_display.shape == (7, 9, 3)
+    assert evidence["nearest_display_factor"] == scale
+    assert evidence["displayed_dimensions"] == {"width": 9, "height": 7}
+    assert evidence["lr_covering_bounds"] == {
+        "left": left,
+        "top": top,
+        "right": right,
+        "bottom": bottom,
+    }
+
+
+def test_native_physical_preview_panels_publish_dimensions_labels_and_pixel_origins(
+    preview_bundle: dict[str, Any],
+) -> None:
+    artifact_root = Path(preview_bundle["artifact_root"])
+    mapping = json.loads((artifact_root / "preview-mapping.json").read_text(encoding="utf-8"))
+    manifest = json.loads((artifact_root / "preview-manifest.json").read_text(encoding="utf-8"))
+
+    assert len(mapping["panels"]) == 12
+    for mapped, panel in zip(mapping["panels"], manifest["panels"], strict=True):
+        display = mapped["review_display"]
+        scale = int(mapped["condition_id"][1])
+        assert display["nearest_display_factor"] == scale
+        assert display["hr_native_dimensions"] == display["displayed_dimensions"]
+        assert f"nearest x{scale}" in display["lr_label"]
+        assert "native" in display["hr_label"]
+        assert display["displayed_dimensions"] != {"width": 500, "height": 235}
+        image = cv2.imread(str(artifact_root / panel["relative_path"]), cv2.IMREAD_COLOR)
+        assert image is not None
+        assert image.shape[1] == display["canvas_dimensions"]["width"]
+        assert image.shape[0] == display["canvas_dimensions"]["height"]
+
+
+def test_candidate_v3_preview_summary_groups_each_fragment_before_the_next(
     preview_bundle: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import IPython.display
@@ -723,7 +792,7 @@ def test_preview_summary_groups_each_fragment_before_the_next(
         for value in displayed
     ]
     assert presentation == [
-        ("markdown", "## Paired candidate-2 degradation review"),
+        ("markdown", "## Paired candidate-3 degradation review"),
         ("markdown", "## Fragment 1 — `review-work-01-excerpt-01`"),
         ("markdown", "### x2"),
         ("markdown", "#### clean (`x2-clean`)"),
@@ -757,7 +826,7 @@ def test_preview_summary_groups_each_fragment_before_the_next(
     ]
 
 
-def test_preview_uses_only_semantically_complete_engraved_review_fixtures(
+def test_candidate_v3_preview_uses_only_semantically_complete_engraved_review_fixtures(
     preview_bundle: dict[str, Any],
 ) -> None:
     artifact_root = Path(preview_bundle["artifact_root"])
@@ -780,7 +849,7 @@ def test_preview_uses_only_semantically_complete_engraved_review_fixtures(
     assert "load_dataset" not in serialized
 
 
-def test_candidate_scoped_preview_reconciles_actual_panel_bytes_and_no_smb(
+def test_candidate_scoped_preview_reconciles_actual_panel_bytes_and_no_smb_candidate_v3(
     preview_bundle: dict[str, Any],
 ) -> None:
     module = _degradation()
@@ -791,9 +860,9 @@ def test_candidate_scoped_preview_reconciles_actual_panel_bytes_and_no_smb(
     assert artifact_root.parts[-3:] == (
         "phase2-degradation-preview",
         "candidates",
-        "controlled-score-v2-candidate",
+        "controlled-score-v3-candidate",
     )
-    assert manifest["candidate_id"] == "controlled-score-v2-candidate"
+    assert manifest["candidate_id"] == "controlled-score-v3-candidate"
     assert len(manifest["panels"]) == 12
     assert [
         hashlib.sha256((artifact_root / panel["relative_path"]).read_bytes()).hexdigest()
@@ -822,7 +891,97 @@ def test_candidate_scoped_preview_reconciles_actual_panel_bytes_and_no_smb(
         decision_path.unlink(missing_ok=True)
 
 
-def test_working_copy_execute_is_ignored_and_source_only_stays_clean(
+def test_prior_evidence_integrity_is_unchanged_by_candidate_v3_publication(
+    preview_bundle: dict[str, Any],
+) -> None:
+    project_root = Path(preview_bundle["project_root"])
+    candidates_root = project_root / "artifacts/phase2-degradation-preview/candidates"
+    v1_root = candidates_root / "controlled-score-v1-candidate"
+    v2_root = candidates_root / "controlled-score-v2-candidate"
+    assert _regular_inventory(v1_root) == _regular_inventory(V1_ARCHIVE_ROOT)
+    assert _regular_inventory(v2_root) == _regular_inventory(V2_ARTIFACT_ROOT)
+    assert hashlib.sha256((v2_root / "degradation-decision.json").read_bytes()).hexdigest() == (
+        "05a4f6e914241d94e376f59783182fdd61e996a67fd0bc91b7c345bb16e9d7e1"
+    )
+
+
+def test_preview_publication_candidate_v3_has_exact_inventory_and_is_idempotent(
+    preview_bundle: dict[str, Any],
+) -> None:
+    module = _degradation()
+    artifact_root = Path(preview_bundle["artifact_root"])
+    project_root = Path(preview_bundle["project_root"])
+    expected = {
+        "fixture-bundle.json",
+        "preview-manifest.json",
+        "preview-mapping.json",
+        "preview-membership.json",
+        "preview-publication.json",
+        "preview-working.ipynb",
+        *(
+            f"panels/panel-{index:02d}-{condition}.png"
+            for index, condition in enumerate(
+                [condition for condition in EXPECTED_CELLS for _ in range(2)], start=1
+            )
+        ),
+        "visual-fixtures/images/compound-meter-phrase.png",
+        "visual-fixtures/images/grand-staff-polyphony.png",
+        "visual-fixtures/images/lyrical-bass-phrase.png",
+        "visual-fixtures/images/melodic-phrase.png",
+    }
+    before = _regular_inventory(artifact_root)
+    assert set(before) == expected
+    assert module.build_degradation_preview(project_root) == preview_bundle
+    assert _regular_inventory(artifact_root) == before
+
+
+def test_preview_publication_candidate_v3_rejects_divergence_and_symlink(
+    tmp_path: Path,
+) -> None:
+    module = _degradation()
+    project_root = tmp_path / "project"
+    _copy_preview_project(project_root)
+    preview = module.build_degradation_preview(project_root)
+    artifact_root = Path(preview["artifact_root"])
+    prior_v1 = _regular_inventory(
+        project_root
+        / "artifacts/phase2-degradation-preview/candidates/controlled-score-v1-candidate"
+    )
+    prior_v2 = _regular_inventory(
+        project_root
+        / "artifacts/phase2-degradation-preview/candidates/controlled-score-v2-candidate"
+    )
+    panel = next((artifact_root / "panels").glob("*.png"))
+    panel.write_bytes(panel.read_bytes() + b"divergent")
+    with pytest.raises(module.DegradationDecisionError):
+        module.build_degradation_preview(project_root)
+    assert (
+        _regular_inventory(
+            project_root
+            / "artifacts/phase2-degradation-preview/candidates/controlled-score-v1-candidate"
+        )
+        == prior_v1
+    )
+    assert (
+        _regular_inventory(
+            project_root
+            / "artifacts/phase2-degradation-preview/candidates/controlled-score-v2-candidate"
+        )
+        == prior_v2
+    )
+
+    symlink_project = tmp_path / "symlink-project"
+    _copy_preview_project(symlink_project)
+    candidate_root = (
+        symlink_project
+        / "artifacts/phase2-degradation-preview/candidates/controlled-score-v3-candidate"
+    )
+    candidate_root.symlink_to(artifact_root, target_is_directory=True)
+    with pytest.raises(module.DegradationDecisionError, match="symlink"):
+        module.build_degradation_preview(symlink_project)
+
+
+def test_working_copy_execute_is_ignored_and_source_only_stays_clean_candidate_v3(
     preview_bundle: dict[str, Any],
 ) -> None:
     module = _degradation()
@@ -849,7 +1008,7 @@ def test_working_copy_execute_is_ignored_and_source_only_stays_clean(
     assert working_path.is_relative_to(artifact_root)
 
 
-def test_working_copy_refresh_changes_only_the_review_presentation(
+def test_working_copy_refresh_changes_only_the_review_presentation_candidate_v3(
     preview_bundle: dict[str, Any],
 ) -> None:
     module = _degradation()
@@ -879,6 +1038,87 @@ def test_working_copy_refresh_changes_only_the_review_presentation(
     )
     assert not (artifact_root / "degradation-decision.json").exists()
     assert not (artifact_root / "degradation-decision-reconciliation.json").exists()
+
+
+def test_logical_working_notebook_and_notebook_autosave_allowlist_are_invariant(
+    tmp_path: Path, preview_bundle: dict[str, Any]
+) -> None:
+    module = _degradation()
+    artifact_root = Path(preview_bundle["artifact_root"])
+    manifest_path = artifact_root / "preview-manifest.json"
+    working_path = artifact_root / "preview-working.ipynb"
+    expected = module.logical_working_notebook_sha256(working_path, manifest_path)
+    assert (
+        expected
+        == json.loads(manifest_path.read_text(encoding="utf-8"))["working_notebook_logical_sha256"]
+    )
+
+    notebook = json.loads(working_path.read_text(encoding="utf-8"))
+    notebook["metadata"]["widgets"] = {"application/vnd.jupyter.widget-state+json": {}}
+    notebook["metadata"]["language_info"].update(
+        {
+            "codemirror_mode": {"name": "python", "version": 3},
+            "file_extension": ".py",
+            "mimetype": "text/x-python",
+            "nbconvert_exporter": "python",
+            "pygments_lexer": "ipython3",
+            "version": "3.12.99",
+        }
+    )
+    for index, cell in enumerate(notebook["cells"]):
+        if cell["cell_type"] == "code":
+            cell["execution_count"] = 100 + index
+            cell["outputs"] = [{"output_type": "stream", "name": "stdout", "text": "ok\n"}]
+        cell["metadata"].update(
+            {
+                "execution": {"iopub.status.busy": "later"},
+                "collapsed": True,
+                "scrolled": "auto",
+                "trusted": True,
+                "jupyter": {"outputs_hidden": True, "source_hidden": False},
+            }
+        )
+    autosaved = tmp_path / "autosaved.ipynb"
+    autosaved.write_text(json.dumps(notebook), encoding="utf-8")
+    assert module.logical_working_notebook_sha256(autosaved, manifest_path) == expected
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("source", "extra-cell", "reordered", "cell-id", "token", "unknown-metadata"),
+)
+def test_logical_working_notebook_fails_closed_on_substitution(
+    tmp_path: Path, preview_bundle: dict[str, Any], mutation: str
+) -> None:
+    module = _degradation()
+    artifact_root = Path(preview_bundle["artifact_root"])
+    manifest_path = artifact_root / "preview-manifest.json"
+    notebook = json.loads((artifact_root / "preview-working.ipynb").read_text(encoding="utf-8"))
+    if mutation == "source":
+        notebook["cells"][0]["source"].append("\nsubstitution")
+    elif mutation == "extra-cell":
+        notebook["cells"].append(copy.deepcopy(notebook["cells"][0]))
+    elif mutation == "reordered":
+        notebook["cells"][0], notebook["cells"][1] = (
+            notebook["cells"][1],
+            notebook["cells"][0],
+        )
+    elif mutation == "cell-id":
+        notebook["cells"][0]["id"] = "changed-cell-id"
+    elif mutation == "token":
+        code = next(cell for cell in notebook["cells"] if cell["cell_type"] == "code")
+        code["source"] = [
+            line.replace("generated:", "generated:" + "0" * 64 + "#")
+            if "generated:" in line
+            else line
+            for line in code["source"]
+        ]
+    else:
+        notebook["metadata"]["unexpected"] = {"smuggled": True}
+    changed = tmp_path / f"{mutation}.ipynb"
+    changed.write_text(json.dumps(notebook), encoding="utf-8")
+    with pytest.raises(module.NotebookSourceError):
+        module.logical_working_notebook_sha256(changed, manifest_path)
 
 
 @pytest.fixture(scope="module")
@@ -949,14 +1189,14 @@ def test_tracked_notebook_is_explicitly_non_executable_in_place() -> None:
     assert "No executeu aquest quadern rastrejat" in serialized_sources
 
 
-def test_notebook_sanitization_and_candidate_v2_review_wording() -> None:
+def test_notebook_sanitization_and_candidate_v3_review_wording() -> None:
     module = _degradation()
     source_path = PROJECT_ROOT / "notebooks/02-degradation-preview.ipynb"
     assert module.assert_notebook_source_clean(source_path)
     notebook = json.loads(source_path.read_text(encoding="utf-8"))
     sources = "\n".join("".join(cell.get("source", [])) for cell in notebook["cells"])
     for text in (
-        "controlled-score-v2-candidate",
+        "controlled-score-v3-candidate",
         "HR",
         "LR",
         "ROI",
@@ -984,11 +1224,37 @@ def _decision_for_preview(preview_bundle: dict[str, Any], decision: str) -> dict
         "candidate_id": manifest["candidate_id"],
         "candidate_sha256": manifest["candidate_sha256"],
         "notebook_source_sha256": manifest["notebook_source_sha256"],
+        "working_notebook_logical_sha256": manifest["working_notebook_logical_sha256"],
         "preview_manifest_sha256": preview_bundle["preview_manifest_sha256"],
         "membership_sha256": manifest["membership_sha256"],
+        "mapping_sha256": manifest["mapping_sha256"],
         "panel_sha256s": manifest["panel_sha256s"],
         "authorship": "human-recorded-in-working-notebook",
     }
+
+
+def test_human_decision_validation_accepts_immutable_candidate_v2_rejection_read_only(
+    tmp_path: Path,
+) -> None:
+    module = _degradation()
+    before = _regular_inventory(V2_ARTIFACT_ROOT)
+    decision = module.validate_degradation_decision(
+        V2_ARTIFACT_ROOT / "degradation-decision.json",
+        V2_ARTIFACT_ROOT / "preview-manifest.json",
+    )
+    assert decision["candidate_id"] == "controlled-score-v2-candidate"
+    assert decision["decision"] == "reject"
+    result = module.freeze_degradation_control(
+        CONTROL_PATH,
+        V2_ARTIFACT_ROOT / "degradation-decision.json",
+        V2_ARTIFACT_ROOT / "preview-manifest.json",
+        tmp_path / "must-not-freeze.yaml",
+        reconciliation_path=tmp_path / "must-not-reconcile.json",
+    )
+    assert result["status"] == "blocked-rejected"
+    assert not (tmp_path / "must-not-freeze.yaml").exists()
+    assert not (tmp_path / "must-not-reconcile.json").exists()
+    assert _regular_inventory(V2_ARTIFACT_ROOT) == before
 
 
 @pytest.mark.parametrize(
@@ -1093,7 +1359,7 @@ def test_reject_fail_closed_for_missing_stale_agent_authored_or_rejected_review(
     decision_path.unlink()
 
 
-def test_accept_freeze_allows_only_exact_candidate_v2_human_review(
+def test_accept_freeze_allows_only_exact_candidate_v3_human_review(
     tmp_path: Path, preview_bundle: dict[str, Any]
 ) -> None:
     module = _degradation()
@@ -1119,7 +1385,16 @@ def test_accept_freeze_allows_only_exact_candidate_v2_human_review(
     frozen_control = _yaml(frozen)
     module.validate_instance("degradation-control", frozen_control, version=2)
     assert frozen_control["status"] == "frozen"
-    assert frozen_control["candidate_id"] == "controlled-score-v2-candidate"
+    assert frozen_control["candidate_id"] == "controlled-score-v3-candidate"
     assert frozen_control["candidate_sha256"] == decision["candidate_sha256"]
+    assert frozen_control["notebook_source_sha256"] == decision["notebook_source_sha256"]
+    assert (
+        frozen_control["working_notebook_logical_sha256"]
+        == decision["working_notebook_logical_sha256"]
+    )
+    assert frozen_control["preview_manifest_sha256"] == decision["preview_manifest_sha256"]
+    assert frozen_control["membership_sha256"] == decision["membership_sha256"]
+    assert frozen_control["mapping_sha256"] == decision["mapping_sha256"]
+    assert frozen_control["panel_sha256s"] == decision["panel_sha256s"]
     assert frozen_control["decision_reconciliation_sha256"] == result["reconciliation_sha256"]
     decision_path.unlink()
