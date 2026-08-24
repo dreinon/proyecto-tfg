@@ -605,12 +605,12 @@ def test_deterministic_seed_and_scientific_mutation_change_identity(tmp_path: Pa
 
     changed_path = tmp_path / "changed.yaml"
     raw = CONTROL_PATH.read_text(encoding="utf-8")
-    marker = "  - version: 2\n"
-    prefix, candidate_v2 = raw.split(marker, maxsplit=1)
-    candidate_v2 = candidate_v2.replace(
+    marker = "  - version: 3\n"
+    prefix, candidate_v3 = raw.split(marker, maxsplit=1)
+    candidate_v3 = candidate_v3.replace(
         "    master_seed: 20260821\n", "    master_seed: 20260822\n", 1
     )
-    changed_path.write_text(prefix + marker + candidate_v2, encoding="utf-8")
+    changed_path.write_text(prefix + marker + candidate_v3, encoding="utf-8")
     changed = module.load_degradation_control(changed_path)
     first = module.apply_degradation(
         _neutral_reference(),
@@ -1270,7 +1270,7 @@ def test_human_decision_validation_rejects_candidate_scoped_substitution(
     shutil.copytree(source_project, project_root)
     artifact_root = (
         project_root
-        / "artifacts/phase2-degradation-preview/candidates/controlled-score-v2-candidate"
+        / "artifacts/phase2-degradation-preview/candidates/controlled-score-v3-candidate"
     )
     manifest_path = artifact_root / "preview-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

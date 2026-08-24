@@ -12,6 +12,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import re
 import stat
 import uuid
 from collections.abc import Mapping, Sequence
@@ -37,11 +38,18 @@ DEFAULT_VISUAL_FIXTURE_MANIFEST_PATH = (
     PROJECT_ROOT / "tests/fixtures/phase2/visual-fixture-manifest-v2.yaml"
 )
 LEGACY_CANDIDATE_ID = "controlled-score-v1-candidate"
-CURRENT_CANDIDATE_ID = "controlled-score-v2-candidate"
+PRIOR_CANDIDATE_ID = "controlled-score-v2-candidate"
+CURRENT_CANDIDATE_ID = "controlled-score-v3-candidate"
 LEGACY_CANDIDATE_RAW_SHA256 = "cabc3ad9ff1564ff2d08808c42a8e34784bebe8ff47beabaa979a7a167548536"
 LEGACY_CANDIDATE_CANONICAL_SHA256 = (
     "52cb18aa12de1a11791e7249f8086df3a25030b2e5c4c5ef7c29948c2e22f237"
 )
+PRIOR_CANDIDATE_RAW_SHA256 = "c98a3dc1cc70b01ce9ff6ace6df43546e6c2731e11ee8ae16897951c399f1d0c"
+PRIOR_CANDIDATE_CANONICAL_SHA256 = (
+    "89b270aa56f9c0d9cd5335c645921f7447280c7bcc26e6c7d0995b720f41716a"
+)
+_WORKING_COPY_MARKER = "__GENERATED_PHASE2_VISUAL_REVIEW_WORKING_COPY__"
+_GENERATED_TOKEN = re.compile(r"generated:[0-9a-f]{64}")
 
 EXPECTED_CONDITION_IDS = (
     "x2-clean",
@@ -227,18 +235,26 @@ def _validate_registry_semantics(registry: Mapping[str, Any]) -> None:
 def _validate_registry_bytes(raw: bytes, candidates: Sequence[Mapping[str, Any]]) -> None:
     first_marker = b"  - version: 1\n"
     second_marker = b"  - version: 2\n"
+    third_marker = b"  - version: 3\n"
     try:
         first_start = raw.index(first_marker)
         first_end = raw.index(second_marker, first_start + len(first_marker))
+        second_end = raw.index(third_marker, first_end + len(second_marker))
     except ValueError as error:
         raise DegradationContractError(
-            "candidate registry must contain the exact v1/v2 append"
+            "candidate registry must contain the exact v1/v2/v3 append"
         ) from error
     if hashlib.sha256(raw[first_start:first_end]).hexdigest() != LEGACY_CANDIDATE_RAW_SHA256:
         raise DegradationContractError("candidate 1 raw bytes differ from immutable history")
     if canonical_sha256(candidates[0]) != LEGACY_CANDIDATE_CANONICAL_SHA256:
         raise DegradationContractError(
             "candidate 1 canonical content differs from immutable history"
+        )
+    if hashlib.sha256(raw[first_end:second_end]).hexdigest() != PRIOR_CANDIDATE_RAW_SHA256:
+        raise DegradationContractError("candidate 2 raw bytes differ from immutable history")
+    if canonical_sha256(candidates[1]) != PRIOR_CANDIDATE_CANONICAL_SHA256:
+        raise DegradationContractError(
+            "candidate 2 canonical content differs from immutable history"
         )
 
 
@@ -288,6 +304,19 @@ def _validate_candidate_semantics(entry: Mapping[str, Any]) -> None:
                     {"type": "gaussian", "sigma": 2.4, "kernel": 17},
                     {"type": "gaussian", "sigma": 14.0},
                     40,
+                ),
+            }
+        elif version == 3:
+            expected_by_severity = {
+                "moderate": (
+                    {"type": "gaussian", "sigma": 1.8, "kernel": 13},
+                    {"type": "gaussian", "sigma": 3.0},
+                    60,
+                ),
+                "strong": (
+                    {"type": "gaussian", "sigma": 3.0, "kernel": 21},
+                    {"type": "gaussian", "sigma": 6.0},
+                    30,
                 ),
             }
         else:
@@ -1112,6 +1141,216 @@ def assert_notebook_source_clean(path: Path) -> str:
     return canonical_sha256(notebook)
 
 
+def _manifest_scientific_identity(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    fields = (
+        "candidate_id",
+        "candidate_sha256",
+        "membership_sha256",
+        "mapping_sha256",
+        "panel_sha256s",
+    )
+    identity = {field: copy.deepcopy(manifest.get(field)) for field in fields}
+    if (
+        not isinstance(identity["candidate_id"], str)
+        or not all(
+            isinstance(identity[field], str) and re.fullmatch(r"[0-9a-f]{64}", identity[field])
+            for field in ("candidate_sha256", "membership_sha256", "mapping_sha256")
+        )
+        or not isinstance(identity["panel_sha256s"], list)
+        or len(identity["panel_sha256s"]) != 12
+        or not all(
+            isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+            for value in identity["panel_sha256s"]
+        )
+    ):
+        raise NotebookSourceError("preview manifest scientific identity is incomplete")
+    return identity
+
+
+def _notebook_document(path: Path, *, kind: str) -> dict[str, Any]:
+    try:
+        raw = _read_regular_bytes(path, maximum_bytes=_MAX_EVIDENCE_BYTES, kind=kind)
+        notebook = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+        raise NotebookSourceError(f"{kind} is not readable canonical JSON") from error
+    if (
+        not isinstance(notebook, dict)
+        or not isinstance(notebook.get("cells"), list)
+        or not isinstance(notebook.get("metadata"), dict)
+        or isinstance(notebook.get("nbformat"), bool)
+        or not isinstance(notebook.get("nbformat"), int)
+        or isinstance(notebook.get("nbformat_minor"), bool)
+        or not isinstance(notebook.get("nbformat_minor"), int)
+    ):
+        raise NotebookSourceError(f"{kind} has an invalid notebook structure")
+    return notebook
+
+
+def _strip_transient_notebook_metadata(notebook: dict[str, Any]) -> None:
+    metadata = notebook["metadata"]
+    metadata.pop("widgets", None)
+    language_info = metadata.get("language_info")
+    if language_info is not None:
+        if not isinstance(language_info, dict):
+            raise NotebookSourceError("language_info metadata must be an object")
+        for key in (
+            "codemirror_mode",
+            "file_extension",
+            "mimetype",
+            "nbconvert_exporter",
+            "pygments_lexer",
+            "version",
+        ):
+            language_info.pop(key, None)
+        if not language_info:
+            metadata.pop("language_info")
+    for cell in notebook["cells"]:
+        if not isinstance(cell, dict) or not isinstance(cell.get("metadata"), dict):
+            raise NotebookSourceError("cell metadata must be an object")
+        cell_metadata = cell["metadata"]
+        for key in ("execution", "collapsed", "scrolled", "trusted"):
+            cell_metadata.pop(key, None)
+        jupyter = cell_metadata.get("jupyter")
+        if jupyter is not None:
+            if not isinstance(jupyter, dict):
+                raise NotebookSourceError("cell jupyter metadata must be an object")
+            jupyter.pop("outputs_hidden", None)
+            jupyter.pop("source_hidden", None)
+            if not jupyter:
+                cell_metadata.pop("jupyter")
+
+
+def _normalize_working_copy_token(
+    notebook: dict[str, Any], *, expected_token: str | None, source: bool
+) -> None:
+    generated_matches = 0
+    marker_matches = 0
+    malformed_generated = 0
+    for cell in notebook["cells"]:
+        cell_source = cell.get("source")
+        if not isinstance(cell_source, (str, list)) or (
+            isinstance(cell_source, list)
+            and not all(isinstance(value, str) for value in cell_source)
+        ):
+            raise NotebookSourceError("cell source must be text")
+        values = [cell_source] if isinstance(cell_source, str) else cell_source
+        updated: list[str] = []
+        for value in values:
+            generated_matches += len(_GENERATED_TOKEN.findall(value))
+            marker_matches += value.count(_WORKING_COPY_MARKER)
+            malformed_generated += value.count("generated:") - len(_GENERATED_TOKEN.findall(value))
+            if expected_token is not None and expected_token in value:
+                value = value.replace(expected_token, _WORKING_COPY_MARKER)
+            updated.append(value)
+        cell["source"] = updated[0] if isinstance(cell_source, str) else updated
+    if source:
+        if marker_matches != 1 or generated_matches != 0 or malformed_generated != 0:
+            raise NotebookSourceError("tracked notebook working-copy marker is absent or ambiguous")
+    elif (
+        expected_token is None
+        or generated_matches != 1
+        or marker_matches != 0
+        or malformed_generated != 0
+    ):
+        raise NotebookSourceError("working notebook token is missing, malformed, or ambiguous")
+
+
+def _notebook_projection(
+    notebook: Mapping[str, Any], *, expected_token: str | None, source: bool, logical: bool
+) -> dict[str, Any]:
+    projected = copy.deepcopy(dict(notebook))
+    original_serialized = json.dumps(projected, ensure_ascii=False)
+    tokens = _GENERATED_TOKEN.findall(original_serialized)
+    if not source and (len(tokens) != 1 or tokens[0] != expected_token):
+        raise NotebookSourceError("working notebook token does not bind the preview manifest")
+    _normalize_working_copy_token(projected, expected_token=expected_token, source=source)
+    _strip_transient_notebook_metadata(projected)
+    for cell in projected["cells"]:
+        if cell.get("cell_type") == "code":
+            if logical:
+                cell.pop("execution_count", None)
+                cell.pop("outputs", None)
+            else:
+                cell["execution_count"] = None
+                cell["outputs"] = []
+    return projected
+
+
+def logical_working_notebook_sha256(
+    working_notebook_path: Path, preview_manifest_path: Path
+) -> str:
+    """Hash the exact source-equivalent notebook plus candidate scientific identity.
+
+    Only the explicit Jupyter execution/autosave allowlist is removed. The remaining projection
+    must equal the tracked source projection byte-for-byte at the JSON data-model level.
+    """
+
+    manifest_path = Path(preview_manifest_path).resolve()
+    manifest = _read_regular_json(manifest_path, kind="preview manifest")
+    identity = _manifest_scientific_identity(manifest)
+    expected_token = f"generated:{canonical_sha256(identity)}"
+    working = _notebook_document(working_notebook_path, kind="working notebook")
+    working_projection = _notebook_projection(
+        working, expected_token=expected_token, source=False, logical=True
+    )
+    project_root = manifest_path.parent.parents[3]
+    source_relative = Path(str(manifest.get("notebook_source_relative_path", "")))
+    if (
+        source_relative.is_absolute()
+        or ".." in source_relative.parts
+        or source_relative.as_posix() != "notebooks/02-degradation-preview.ipynb"
+    ):
+        raise NotebookSourceError("preview notebook source path is not canonical")
+    source_path = project_root / source_relative
+    source_sha256 = assert_notebook_source_clean(source_path)
+    if source_sha256 != manifest.get("notebook_source_sha256"):
+        raise NotebookSourceError("tracked notebook source digest differs")
+    source_notebook = _notebook_document(source_path, kind="tracked notebook")
+    source_projection = _notebook_projection(
+        source_notebook, expected_token=None, source=True, logical=True
+    )
+    if working_projection != source_projection:
+        raise NotebookSourceError(
+            "working notebook differs from tracked source outside the transient allowlist"
+        )
+    return canonical_sha256(
+        {
+            "domain": "phase2-logical-working-notebook-v1",
+            "notebook": working_projection,
+            "preview_scientific_identity": identity,
+        }
+    )
+
+
+def _historical_working_notebook_logical_sha256(
+    working_notebook_path: Path, manifest: Mapping[str, Any]
+) -> str:
+    """Recover and validate the immutable candidate-2 tracked-source projection."""
+
+    identity = _manifest_scientific_identity(manifest)
+    expected_token = f"generated:{canonical_sha256(manifest)}"
+    working = _notebook_document(working_notebook_path, kind="historical working notebook")
+    recovered_source = _notebook_projection(
+        working, expected_token=expected_token, source=False, logical=False
+    )
+    language_info = recovered_source["metadata"].setdefault("language_info", {})
+    if language_info != {"name": "python"}:
+        raise NotebookSourceError("historical working notebook language identity differs")
+    language_info["version"] = "3.12"
+    if canonical_sha256(recovered_source) != manifest.get("notebook_source_sha256"):
+        raise NotebookSourceError("historical working notebook does not recover its tracked source")
+    logical = _notebook_projection(
+        working, expected_token=expected_token, source=False, logical=True
+    )
+    return canonical_sha256(
+        {
+            "domain": "phase2-logical-working-notebook-v1",
+            "notebook": logical,
+            "preview_scientific_identity": identity,
+        }
+    )
+
+
 def _json_bytes(value: Any) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode()
 
@@ -1305,71 +1544,177 @@ def _load_rgb(path: Path) -> np.ndarray:
     return np.ascontiguousarray(cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB))
 
 
+def native_physical_review_rois(
+    reference: np.ndarray,
+    degraded: np.ndarray,
+    *,
+    roi: Mapping[str, int],
+    scale: int,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Return native HR ROI and its exact nearest-neighbour LR display counterpart."""
+
+    for name, pixels in (("reference", reference), ("degraded", degraded)):
+        if (
+            not isinstance(pixels, np.ndarray)
+            or pixels.dtype != np.uint8
+            or pixels.ndim != 3
+            or pixels.shape[2] != 3
+        ):
+            raise DegradationContractError(f"{name} must be an RGB uint8 NumPy array")
+    if scale not in (2, 4):
+        raise DegradationContractError("review display scale must be x2 or x4")
+    try:
+        x = int(roi["x"])
+        y = int(roi["y"])
+        width = int(roi["width"])
+        height = int(roi["height"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise DegradationContractError(
+            "review ROI must define integer x, y, width, and height"
+        ) from error
+    if x < 0 or y < 0 or width <= 0 or height <= 0:
+        raise DegradationContractError("review ROI must have positive in-bounds dimensions")
+    if x + width > reference.shape[1] or y + height > reference.shape[0]:
+        raise DegradationContractError("review ROI escapes the aligned HR reference")
+    left, top = x // scale, y // scale
+    right = (x + width + scale - 1) // scale
+    bottom = (y + height + scale - 1) // scale
+    if right > degraded.shape[1] or bottom > degraded.shape[0]:
+        raise DegradationContractError("review ROI escapes the corresponding LR image")
+    covering = degraded[top:bottom, left:right]
+    enlarged = cv2.resize(
+        covering,
+        (covering.shape[1] * scale, covering.shape[0] * scale),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    overhang_left = x - left * scale
+    overhang_top = y - top * scale
+    lr_display = enlarged[
+        overhang_top : overhang_top + height,
+        overhang_left : overhang_left + width,
+    ]
+    hr_roi = reference[y : y + height, x : x + width].copy()
+    if hr_roi.shape != lr_display.shape:
+        raise DegradationContractError("native HR and nearest LR review displays must align")
+    dimensions = {"width": width, "height": height}
+    evidence = {
+        "nearest_display_factor": scale,
+        "hr_native_dimensions": dimensions,
+        "lr_native_dimensions": {
+            "width": right - left,
+            "height": bottom - top,
+        },
+        "displayed_dimensions": dimensions,
+        "lr_covering_bounds": {
+            "left": left,
+            "top": top,
+            "right": right,
+            "bottom": bottom,
+        },
+        "grid_overhang": {
+            "left": overhang_left,
+            "top": overhang_top,
+            "right": right * scale - (x + width),
+            "bottom": bottom * scale - (y + height),
+        },
+    }
+    return hr_roi, np.ascontiguousarray(lr_display), evidence
+
+
 def _panel_image(
     reference: np.ndarray, degraded: np.ndarray, label: str, roi: Mapping[str, int], scale: int
-) -> np.ndarray:
-    canvas_width = 1120
-    canvas_height = 820
+) -> tuple[np.ndarray, dict[str, Any]]:
+    hr_roi, lr_display, evidence = native_physical_review_rois(
+        reference, degraded, roi=roi, scale=scale
+    )
+    whole_lr = cv2.resize(
+        degraded,
+        (degraded.shape[1] * scale, degraded.shape[0] * scale),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    if whole_lr.shape != reference.shape:
+        raise DegradationContractError("nearest LR context must equal the aligned HR dimensions")
+    gap = 40
+    margin = 20
+    title_height = 52
+    row_label_height = 30
+    canvas_width = max(
+        reference.shape[1] * 2 + gap + margin * 2,
+        hr_roi.shape[1] * 2 + gap + margin * 2,
+    )
+    canvas_height = (
+        title_height
+        + row_label_height
+        + reference.shape[0]
+        + row_label_height
+        + hr_roi.shape[0]
+        + margin
+    )
     canvas = np.full((canvas_height, canvas_width, 3), 248, dtype=np.uint8)
     cv2.putText(canvas, label, (20, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (20, 20, 20), 2)
-    available_height = 390
-
-    def place(image: np.ndarray, left: int, title: str, top_base: int = 80) -> None:
-        ratio = min(500 / image.shape[1], available_height / image.shape[0])
-        resized = cv2.resize(
-            image,
-            (max(1, round(image.shape[1] * ratio)), max(1, round(image.shape[0] * ratio))),
-            interpolation=cv2.INTER_AREA,
-        )
-        top = top_base + (available_height - resized.shape[0]) // 2
-        canvas[top : top + resized.shape[0], left : left + resized.shape[1]] = resized
-        cv2.putText(
-            canvas,
-            title,
-            (left, top_base - 12),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.62,
-            (30, 30, 30),
-            1,
-        )
-
-    x = min(int(roi["x"]), reference.shape[1] - 1)
-    y = min(int(roi["y"]), reference.shape[0] - 1)
-    width = min(int(roi["width"]), reference.shape[1] - x)
-    height = min(int(roi["height"]), reference.shape[0] - y)
-    lr_x, lr_y = x // scale, y // scale
-    lr_width = max(1, width // scale)
-    lr_height = max(1, height // scale)
+    x, y = int(roi["x"]), int(roi["y"])
+    width, height = int(roi["width"]), int(roi["height"])
     reference_context = reference.copy()
-    degraded_context = degraded.copy()
+    lr_context = whole_lr.copy()
     cv2.rectangle(reference_context, (x, y), (x + width, y + height), (190, 30, 30), 4)
-    cv2.rectangle(
-        degraded_context,
-        (lr_x, lr_y),
-        (lr_x + lr_width, lr_y + lr_height),
-        (190, 30, 30),
-        max(1, 4 // scale),
+    cv2.rectangle(lr_context, (x, y), (x + width, y + height), (190, 30, 30), 4)
+    left_hr = margin
+    left_lr = margin + reference.shape[1] + gap
+    context_top = title_height + row_label_height
+    hr_label = f"HR native {width}x{height} px"
+    lr_native = evidence["lr_native_dimensions"]
+    lr_label = (
+        f"LR {lr_native['width']}x{lr_native['height']} px, nearest x{scale}, "
+        f"displayed {width}x{height} px"
     )
-    place(reference_context, 20, "Whole engraved HR system (fixed ROI in red)")
-    place(degraded_context, 590, "Corresponding whole LR system")
-    hr_roi = reference[y : y + height, x : x + width]
-    lr_roi = degraded[lr_y : lr_y + lr_height, lr_x : lr_x + lr_width]
-    roi_height = 235
-    hr_zoom = cv2.resize(hr_roi, (500, roi_height), interpolation=cv2.INTER_NEAREST)
-    lr_zoom = cv2.resize(lr_roi, (500, roi_height), interpolation=cv2.INTER_NEAREST)
-    canvas[555 : 555 + roi_height, 20:520] = hr_zoom
-    canvas[555 : 555 + roi_height, 590:1090] = lr_zoom
-    cv2.putText(canvas, "Fixed HR ROI", (20, 540), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (30, 30, 30), 1)
     cv2.putText(
         canvas,
-        "Corresponding LR ROI",
-        (590, 540),
+        "Whole HR context (native)",
+        (left_hr, title_height + 20),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.62,
+        0.52,
         (30, 30, 30),
         1,
     )
-    return canvas
+    cv2.putText(
+        canvas,
+        f"Whole LR context (exact nearest x{scale})",
+        (left_lr, title_height + 20),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.52,
+        (30, 30, 30),
+        1,
+    )
+    canvas[
+        context_top : context_top + reference.shape[0], left_hr : left_hr + reference.shape[1]
+    ] = reference_context
+    canvas[context_top : context_top + whole_lr.shape[0], left_lr : left_lr + whole_lr.shape[1]] = (
+        lr_context
+    )
+    roi_label_top = context_top + reference.shape[0] + 22
+    roi_top = context_top + reference.shape[0] + row_label_height
+    cv2.putText(
+        canvas, hr_label, (left_hr, roi_label_top), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (30, 30, 30), 1
+    )
+    cv2.putText(
+        canvas,
+        lr_label,
+        (left_lr, roi_label_top),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.52,
+        (30, 30, 30),
+        1,
+    )
+    canvas[roi_top : roi_top + height, left_hr : left_hr + width] = hr_roi
+    canvas[roi_top : roi_top + height, left_lr : left_lr + width] = lr_display
+    evidence.update(
+        {
+            "hr_label": hr_label,
+            "lr_label": lr_label,
+            "canvas_dimensions": {"width": canvas_width, "height": canvas_height},
+        }
+    )
+    return canvas, evidence
 
 
 def _execute_preview_working_notebook(
@@ -1390,7 +1735,8 @@ def _execute_preview_working_notebook(
         replacements = 0
         for cell in notebook.cells:
             if marker in cell.source:
-                cell.source = cell.source.replace(marker, f"generated:{canonical_sha256(manifest)}")
+                identity_token = canonical_sha256(_manifest_scientific_identity(manifest))
+                cell.source = cell.source.replace(marker, f"generated:{identity_token}")
                 replacements += 1
         if replacements != 1:
             raise NotebookSourceError("tracked notebook working-copy guard is absent or ambiguous")
@@ -1422,7 +1768,7 @@ def _build_degradation_preview_directory(
     artifact_root: Path,
     legacy_reconciliation_sha256: str,
 ) -> dict[str, Any]:
-    """Build one complete candidate-2 directory before atomic publication."""
+    """Build one complete candidate-3 directory before atomic publication."""
 
     project_root = Path(project_root).resolve()
     artifact_root = Path(artifact_root)
@@ -1430,8 +1776,19 @@ def _build_degradation_preview_directory(
     source_sha256 = assert_notebook_source_clean(source_path)
     control_path = project_root / "configs/degradations/controlled-score-candidates.yaml"
     control = load_degradation_control(control_path)
-    if control.candidate_id != CURRENT_CANDIDATE_ID or control.version != 2:
-        raise DegradationDecisionError("preview publication requires exact candidate 2")
+    if control.candidate_id != CURRENT_CANDIDATE_ID or control.version != 3:
+        raise DegradationDecisionError("preview publication requires exact candidate 3")
+    previous_root = artifact_root.parent / PRIOR_CANDIDATE_ID
+    previous_inventory = _regular_file_inventory(previous_root)
+    previous_decision = _read_regular_json(
+        previous_root / "degradation-decision.json", kind="candidate-2 decision"
+    )
+    if (
+        previous_decision.get("decision") != "reject"
+        or previous_decision.get("candidate_id") != PRIOR_CANDIDATE_ID
+        or previous_decision.get("candidate_sha256") != PRIOR_CANDIDATE_CANONICAL_SHA256
+    ):
+        raise DegradationDecisionError("candidate-2 predecessor rejection differs")
     fixture_root = artifact_root / "visual-fixtures"
     fixture_manifest_path = project_root / "tests/fixtures/phase2/visual-fixture-manifest-v2.yaml"
     bundle = generate_visual_fixture_bundle(
@@ -1470,7 +1827,7 @@ def _build_degradation_preview_directory(
         )
         aligned = align_reference(reference, int(member["condition_id"][1]))
         label = f"{member['condition_id']} | {member['item_id']} | panel {index:02d}/12"
-        panel_pixels = _panel_image(
+        panel_pixels, review_display = _panel_image(
             aligned.pixels,
             result.pixels,
             label,
@@ -1508,6 +1865,7 @@ def _build_degradation_preview_directory(
                 "source_pixel_sha256": item["pixel_sha256"],
                 "degradation_trace": result.trace,
                 "panel_sha256": panel_sha256,
+                "review_display": review_display,
             }
         )
     mapping = {
@@ -1533,17 +1891,26 @@ def _build_degradation_preview_directory(
         "membership_sha256": canonical_sha256(membership),
         "mapping_sha256": canonical_sha256(mapping),
         "legacy_evidence_reconciliation_sha256": legacy_reconciliation_sha256,
+        "previous_candidate_id": PRIOR_CANDIDATE_ID,
+        "previous_candidate_sha256": PRIOR_CANDIDATE_CANONICAL_SHA256,
+        "previous_candidate_decision_sha256": canonical_sha256(previous_decision),
+        "previous_candidate_evidence_inventory_sha256": canonical_sha256(previous_inventory),
         "panels": panel_records,
         "panel_sha256s": panel_sha256s,
     }
+    manifest_path = artifact_root / "preview-manifest.json"
     manifest_bytes = _json_bytes(manifest)
-    _write_atomic(artifact_root / "preview-manifest.json", manifest_bytes)
+    _write_atomic(manifest_path, manifest_bytes)
 
     working_path = artifact_root / "preview-working.ipynb"
     _write_atomic(
         working_path,
         _execute_preview_working_notebook(project_root, artifact_root, manifest),
     )
+
+    working_logical_sha256 = logical_working_notebook_sha256(working_path, manifest_path)
+    manifest["working_notebook_logical_sha256"] = working_logical_sha256
+    _write_atomic(manifest_path, _json_bytes(manifest))
 
     assert_notebook_source_clean(source_path)
     publication = {
@@ -1554,6 +1921,7 @@ def _build_degradation_preview_directory(
         "working_notebook_sha256": hashlib.sha256(
             (artifact_root / "preview-working.ipynb").read_bytes()
         ).hexdigest(),
+        "working_notebook_logical_sha256": working_logical_sha256,
     }
     _write_new_regular(artifact_root / "preview-publication.json", _json_bytes(publication))
     return {
@@ -1567,17 +1935,24 @@ def _build_degradation_preview_directory(
 def build_degradation_preview(
     project_root: Path, *, artifact_root: Path | None = None
 ) -> dict[str, Any]:
-    """Archive candidate 1 and atomically publish or validate the paired candidate-2 preview."""
+    """Atomically publish or validate the isolated paired candidate-3 preview."""
 
     project_root = Path(project_root).resolve()
     expected_base = project_root / "artifacts/phase2-degradation-preview"
     artifact_base = expected_base if artifact_root is None else Path(artifact_root).resolve()
     if artifact_base != expected_base:
         raise DegradationDecisionError("preview artifact root must be the project candidate base")
-    archive = archive_legacy_degradation_evidence(project_root, artifact_root=artifact_base)
+    archive_root = artifact_base / "candidates" / LEGACY_CANDIDATE_ID
+    archive_reconciliation = _validate_legacy_archive(artifact_base, archive_root)
+    _reconcile_preview_evidence(
+        artifact_base / "candidates" / PRIOR_CANDIDATE_ID / "preview-manifest.json"
+    )
+    archive = {"reconciliation_sha256": canonical_sha256(archive_reconciliation)}
     candidates_root = artifact_base / "candidates"
     candidate_root = candidates_root / CURRENT_CANDIDATE_ID
-    if candidate_root.exists() or candidate_root.is_symlink():
+    if candidate_root.is_symlink():
+        raise DegradationDecisionError("candidate preview root must not be a symlink")
+    if candidate_root.exists():
         manifest = _reconcile_preview_evidence(candidate_root / "preview-manifest.json")
         return {
             "artifact_root": str(candidate_root),
@@ -1649,13 +2024,155 @@ def _read_regular_bytes(path: Path, *, maximum_bytes: int, kind: str) -> bytes:
     return raw
 
 
+def _reconcile_prior_preview_evidence(preview_manifest_path: Path) -> dict[str, Any]:
+    """Validate the immutable candidate-2 rejection without rewriting historical bytes."""
+
+    manifest_path = Path(preview_manifest_path)
+    if manifest_path.is_symlink() or manifest_path.parent.is_symlink():
+        raise DegradationDecisionError("candidate-2 evidence must not use symlinks")
+    manifest_path = manifest_path.resolve()
+    candidate_root = manifest_path.parent
+    if (
+        manifest_path.name != "preview-manifest.json"
+        or candidate_root.name != PRIOR_CANDIDATE_ID
+        or candidate_root.parent.name != "candidates"
+        or candidate_root.parent.parent.name != "phase2-degradation-preview"
+        or candidate_root.parent.parent.parent.name != "artifacts"
+    ):
+        raise DegradationDecisionError("preview manifest is outside the candidate-2 scoped root")
+    project_root = candidate_root.parents[3]
+    manifest = _read_regular_json(manifest_path, kind="candidate-2 preview manifest")
+    membership = _read_regular_json(
+        candidate_root / "preview-membership.json", kind="candidate-2 preview membership"
+    )
+    mapping = _read_regular_json(
+        candidate_root / "preview-mapping.json", kind="candidate-2 preview mapping"
+    )
+    fixture_bundle = _read_regular_json(
+        candidate_root / "fixture-bundle.json", kind="candidate-2 fixture bundle"
+    )
+    publication = _read_regular_json(
+        candidate_root / "preview-publication.json", kind="candidate-2 preview publication"
+    )
+    control = load_degradation_control(
+        project_root / "configs/degradations/controlled-score-candidates.yaml", version=2
+    )
+    if (
+        control.candidate_id != PRIOR_CANDIDATE_ID
+        or control.sha256 != PRIOR_CANDIDATE_CANONICAL_SHA256
+        or manifest.get("candidate_id") != PRIOR_CANDIDATE_ID
+        or manifest.get("candidate_sha256") != control.sha256
+    ):
+        raise DegradationDecisionError("candidate-2 identity differs")
+    expected_manifest = {
+        "fixture_bundle_sha256": canonical_sha256(fixture_bundle),
+        "membership_sha256": canonical_sha256(membership),
+        "mapping_sha256": canonical_sha256(mapping),
+    }
+    for key, value in expected_manifest.items():
+        if manifest.get(key) != value:
+            raise DegradationDecisionError(f"candidate-2 preview differs at {key}")
+    archive_reconciliation = _validate_legacy_archive(
+        candidate_root.parent.parent, candidate_root.parent / LEGACY_CANDIDATE_ID
+    )
+    if manifest.get("legacy_evidence_reconciliation_sha256") != canonical_sha256(
+        archive_reconciliation
+    ):
+        raise DegradationDecisionError("candidate-2 legacy lineage differs")
+    items = fixture_bundle.get("items")
+    members = membership.get("panels")
+    panels = manifest.get("panels")
+    mapped_panels = mapping.get("panels")
+    if (
+        not isinstance(items, list)
+        or len({item.get("source_group_id") for item in items}) != 4
+        or not isinstance(members, list)
+        or not isinstance(panels, list)
+        or not isinstance(mapped_panels, list)
+        or len(members) != 12
+        or len(panels) != 12
+        or len(mapped_panels) != 12
+    ):
+        raise DegradationDecisionError("candidate-2 preview structure differs")
+    expected_files = {
+        "degradation-decision.json",
+        "fixture-bundle.json",
+        "preview-manifest.json",
+        "preview-mapping.json",
+        "preview-membership.json",
+        "preview-publication.json",
+        "preview-working.ipynb",
+    }
+    for item in items:
+        relative = Path("visual-fixtures") / str(item.get("relative_path", ""))
+        payload = _read_regular_bytes(
+            candidate_root / relative,
+            maximum_bytes=_MAX_EVIDENCE_BYTES,
+            kind="candidate-2 fixture image",
+        )
+        if hashlib.sha256(payload).hexdigest() != item.get("encoded_sha256"):
+            raise DegradationDecisionError("candidate-2 fixture bytes differ")
+        expected_files.add(relative.as_posix())
+    panel_sha256s: list[str] = []
+    for member, panel, mapped in zip(members, panels, mapped_panels, strict=True):
+        identity = (
+            member.get("condition_id"),
+            member.get("item_id"),
+            member.get("source_group_id"),
+        )
+        if identity != (
+            panel.get("condition_id"),
+            panel.get("item_id"),
+            panel.get("source_group_id"),
+        ) or identity != (
+            mapped.get("condition_id"),
+            mapped.get("item_id"),
+            mapped.get("source_group_id"),
+        ):
+            raise DegradationDecisionError("candidate-2 panel identities differ")
+        relative = Path(str(panel.get("relative_path", "")))
+        if relative.is_absolute() or ".." in relative.parts or relative.parts[:1] != ("panels",):
+            raise DegradationDecisionError("candidate-2 panel path escapes its root")
+        payload = _read_regular_bytes(
+            candidate_root / relative,
+            maximum_bytes=_MAX_EVIDENCE_BYTES,
+            kind="candidate-2 panel",
+        )
+        digest = hashlib.sha256(payload).hexdigest()
+        if digest != panel.get("sha256") or digest != mapped.get("panel_sha256"):
+            raise DegradationDecisionError("candidate-2 panel bytes differ")
+        panel_sha256s.append(digest)
+        expected_files.add(relative.as_posix())
+    if panel_sha256s != manifest.get("panel_sha256s"):
+        raise DegradationDecisionError("candidate-2 panel ordering differs")
+    expected_publication = {
+        "schema_version": 1,
+        "record_type": "degradation-preview-publication",
+        "candidate_id": PRIOR_CANDIDATE_ID,
+        "preview_manifest_sha256": canonical_sha256(manifest),
+    }
+    if any(publication.get(key) != value for key, value in expected_publication.items()) or set(
+        publication
+    ) != {*expected_publication, "working_notebook_sha256"}:
+        raise DegradationDecisionError("candidate-2 publication differs")
+    _historical_working_notebook_logical_sha256(candidate_root / "preview-working.ipynb", manifest)
+    if set(_regular_file_inventory(candidate_root)) != expected_files:
+        raise DegradationDecisionError("candidate-2 inventory differs")
+    return manifest
+
+
 def _reconcile_preview_evidence(
     preview_manifest_path: Path,
     *,
     allow_temporary_root: bool = False,
     allow_working_copy_refresh: bool = False,
 ) -> dict[str, Any]:
-    manifest_path = Path(preview_manifest_path).resolve()
+    unresolved_manifest = Path(preview_manifest_path)
+    if unresolved_manifest.is_symlink() or unresolved_manifest.parent.is_symlink():
+        raise DegradationDecisionError("candidate preview must not use symlinks")
+    if unresolved_manifest.parent.name == PRIOR_CANDIDATE_ID:
+        return _reconcile_prior_preview_evidence(unresolved_manifest)
+    manifest_path = unresolved_manifest.resolve()
     candidate_root = manifest_path.parent
     temporary_prefix = f".{CURRENT_CANDIDATE_ID}.tmp-"
     valid_root_name = candidate_root.name == CURRENT_CANDIDATE_ID or (
@@ -1668,7 +2185,7 @@ def _reconcile_preview_evidence(
         or candidate_root.parent.parent.name != "phase2-degradation-preview"
         or candidate_root.parent.parent.parent.name != "artifacts"
     ):
-        raise DegradationDecisionError("preview manifest is outside the candidate-2 scoped root")
+        raise DegradationDecisionError("preview manifest is outside the candidate-3 scoped root")
     project_root = candidate_root.parents[3]
     manifest = _read_regular_json(manifest_path, kind="preview manifest")
     membership = _read_regular_json(
@@ -1682,7 +2199,7 @@ def _reconcile_preview_evidence(
         candidate_root / "preview-publication.json", kind="preview publication"
     )
     if manifest.get("candidate_id") != CURRENT_CANDIDATE_ID:
-        raise DegradationDecisionError("preview manifest does not identify candidate 2")
+        raise DegradationDecisionError("preview manifest does not identify candidate 3")
     control_path = project_root / "configs/degradations/controlled-score-candidates.yaml"
     control = load_degradation_control(control_path)
     registry_bytes = _read_regular_bytes(
@@ -1698,8 +2215,8 @@ def _reconcile_preview_evidence(
         "membership_sha256": canonical_sha256(membership),
         "mapping_sha256": canonical_sha256(mapping),
     }
-    if control.candidate_id != CURRENT_CANDIDATE_ID or control.version != 2:
-        raise DegradationDecisionError("preview registry no longer selects exact candidate 2")
+    if control.candidate_id != CURRENT_CANDIDATE_ID or control.version != 3:
+        raise DegradationDecisionError("preview registry no longer selects exact candidate 3")
     for key, value in expected_manifest.items():
         if manifest.get(key) != value:
             raise DegradationDecisionError(f"preview manifest differs at {key}")
@@ -1714,6 +2231,24 @@ def _reconcile_preview_evidence(
         archive_reconciliation
     ):
         raise DegradationDecisionError("legacy archive lineage differs")
+    previous_root = candidate_root.parent / PRIOR_CANDIDATE_ID
+    previous_manifest = _reconcile_prior_preview_evidence(previous_root / "preview-manifest.json")
+    previous_decision = _read_regular_json(
+        previous_root / "degradation-decision.json", kind="candidate-2 decision"
+    )
+    expected_previous = {
+        "previous_candidate_id": PRIOR_CANDIDATE_ID,
+        "previous_candidate_sha256": PRIOR_CANDIDATE_CANONICAL_SHA256,
+        "previous_candidate_decision_sha256": canonical_sha256(previous_decision),
+        "previous_candidate_evidence_inventory_sha256": canonical_sha256(
+            _regular_file_inventory(previous_root)
+        ),
+    }
+    if previous_manifest.get("candidate_sha256") != PRIOR_CANDIDATE_CANONICAL_SHA256:
+        raise DegradationDecisionError("candidate-2 predecessor manifest differs")
+    for key, value in expected_previous.items():
+        if manifest.get(key) != value:
+            raise DegradationDecisionError(f"candidate-3 predecessor lineage differs at {key}")
 
     fixture_manifest_path = project_root / "tests/fixtures/phase2/visual-fixture-manifest-v2.yaml"
     fixture_manifest = _read_regular_yaml(
@@ -1807,34 +2342,40 @@ def _reconcile_preview_evidence(
         panel_bytes = _read_regular_bytes(
             candidate_root / relative,
             maximum_bytes=_MAX_EVIDENCE_BYTES,
-            kind="candidate-2 panel",
+            kind="candidate-3 panel",
         )
         digest = hashlib.sha256(panel_bytes).hexdigest()
         if digest != panel.get("sha256") or digest != mapped.get("panel_sha256"):
-            raise DegradationDecisionError("candidate-2 panel bytes differ")
+            raise DegradationDecisionError("candidate-3 panel bytes differ")
         panel_sha256s.append(digest)
         expected_files.add(relative.as_posix())
     if panel_sha256s != manifest.get("panel_sha256s"):
-        raise DegradationDecisionError("candidate-2 panel digest order differs")
+        raise DegradationDecisionError("candidate-3 panel digest order differs")
 
     working_path = candidate_root / "preview-working.ipynb"
     working_sha256 = hashlib.sha256(
         _read_regular_bytes(
-            working_path, maximum_bytes=_MAX_EVIDENCE_BYTES, kind="candidate-2 working notebook"
+            working_path, maximum_bytes=_MAX_EVIDENCE_BYTES, kind="candidate-3 working notebook"
         )
     ).hexdigest()
+    working_logical_sha256 = logical_working_notebook_sha256(working_path, manifest_path)
+    if manifest.get("working_notebook_logical_sha256") != working_logical_sha256:
+        raise DegradationDecisionError("candidate-3 logical working notebook differs")
     expected_publication = {
         "schema_version": 1,
         "record_type": "degradation-preview-publication",
         "candidate_id": CURRENT_CANDIDATE_ID,
         "preview_manifest_sha256": canonical_sha256(manifest),
+        "working_notebook_logical_sha256": working_logical_sha256,
     }
     if any(publication.get(key) != value for key, value in expected_publication.items()) or set(
         publication
     ) != {*expected_publication, "working_notebook_sha256"}:
-        raise DegradationDecisionError("candidate-2 publication reconciliation differs")
+        raise DegradationDecisionError("candidate-3 publication reconciliation differs")
     if not allow_working_copy_refresh and publication["working_notebook_sha256"] != working_sha256:
-        raise DegradationDecisionError("candidate-2 publication reconciliation differs")
+        # Raw bytes are initial-publication provenance only. Legitimate Jupyter execution and
+        # autosave state are reconciled by the logical digest above.
+        pass
     inventory = _regular_file_inventory(candidate_root)
     allowed_optional = {
         "degradation-decision.json",
@@ -1842,7 +2383,7 @@ def _reconcile_preview_evidence(
     }
     unexpected = set(inventory) - expected_files - allowed_optional
     if unexpected or not expected_files <= inventory.keys():
-        raise DegradationDecisionError("candidate-2 publication is partial or has extra files")
+        raise DegradationDecisionError("candidate-3 publication is partial or has extra files")
     serialized = json.dumps(
         (manifest, membership, mapping, fixture_bundle), sort_keys=True
     ).casefold()
@@ -1858,7 +2399,7 @@ def _reconcile_preview_evidence(
 def refresh_degradation_preview_working_copy(
     project_root: Path, *, artifact_root: Path | None = None
 ) -> dict[str, Any]:
-    """Refresh only candidate 2's executable review presentation before a decision exists."""
+    """Refresh only candidate 3's executable review presentation before a decision exists."""
 
     project_root = Path(project_root).resolve()
     candidate_root = (
@@ -1884,6 +2425,7 @@ def refresh_degradation_preview_working_copy(
         "candidate_id": CURRENT_CANDIDATE_ID,
         "preview_manifest_sha256": canonical_sha256(manifest),
         "working_notebook_sha256": hashlib.sha256(working_payload).hexdigest(),
+        "working_notebook_logical_sha256": manifest["working_notebook_logical_sha256"],
     }
     _write_atomic(candidate_root / "preview-publication.json", _json_bytes(publication))
     _reconcile_preview_evidence(manifest_path)
@@ -1908,7 +2450,7 @@ def validate_degradation_decision(
             or decision_path.parent != preview_manifest_path.parent
         ):
             raise DegradationDecisionError(
-                "decision and manifest must share the candidate-2 scoped root"
+                "decision and manifest must share one candidate-scoped root"
             )
         manifest = _reconcile_preview_evidence(preview_manifest_path)
         decision = _read_regular_json(decision_path, kind="degradation decision")
@@ -1920,7 +2462,7 @@ def validate_degradation_decision(
             raise DegradationDecisionError("reviewed_at must be canonical UTC")
         datetime.fromisoformat(reviewed_at[:-1] + "+00:00")
         expected = {
-            "candidate_id": CURRENT_CANDIDATE_ID,
+            "candidate_id": manifest["candidate_id"],
             "candidate_sha256": manifest["candidate_sha256"],
             "notebook_source_sha256": manifest["notebook_source_sha256"],
             "preview_manifest_sha256": canonical_sha256(manifest),
@@ -1930,6 +2472,21 @@ def validate_degradation_decision(
         for field, value in expected.items():
             if decision[field] != value:
                 raise DegradationDecisionError(f"decision is stale or mismatched at {field}")
+        if manifest["candidate_id"] == PRIOR_CANDIDATE_ID:
+            if decision["decision"] != "reject":
+                raise DegradationDecisionError(
+                    "candidate 2 is immutable and may only retain rejection"
+                )
+        elif manifest["candidate_id"] == CURRENT_CANDIDATE_ID:
+            candidate3_expected = {
+                "working_notebook_logical_sha256": manifest["working_notebook_logical_sha256"],
+                "mapping_sha256": manifest["mapping_sha256"],
+            }
+            for field, value in candidate3_expected.items():
+                if decision[field] != value:
+                    raise DegradationDecisionError(f"decision is stale or mismatched at {field}")
+        else:
+            raise DegradationDecisionError("decision candidate is outside the supported history")
     except DegradationDecisionError:
         raise
     except (ContractValidationError, KeyError, TypeError, ValueError) as error:
@@ -1956,7 +2513,7 @@ def freeze_degradation_control(
     control = load_degradation_control(control_path)
     if (
         control.candidate_id != CURRENT_CANDIDATE_ID
-        or control.version != 2
+        or control.version != 3
         or control.sha256 != decision["candidate_sha256"]
     ):
         raise DegradationDecisionError("accepted decision does not bind the current candidate")
@@ -1968,11 +2525,17 @@ def freeze_degradation_control(
         "decision": decision["decision"],
         "candidate_id": CURRENT_CANDIDATE_ID,
         "candidate_sha256": decision["candidate_sha256"],
+        "previous_candidate_sha256": manifest["previous_candidate_sha256"],
+        "notebook_source_sha256": decision["notebook_source_sha256"],
+        "working_notebook_logical_sha256": decision["working_notebook_logical_sha256"],
         "candidate_registry_sha256": manifest["candidate_registry_sha256"],
         "preview_manifest_sha256": decision["preview_manifest_sha256"],
         "membership_sha256": decision["membership_sha256"],
         "mapping_sha256": manifest["mapping_sha256"],
         "legacy_evidence_reconciliation_sha256": manifest["legacy_evidence_reconciliation_sha256"],
+        "previous_candidate_evidence_inventory_sha256": manifest[
+            "previous_candidate_evidence_inventory_sha256"
+        ],
         "panel_sha256s": decision["panel_sha256s"],
         "reconciled_at": decision["reviewed_at"],
     }
@@ -1990,6 +2553,17 @@ def freeze_degradation_control(
         "candidate_sha256": control.sha256,
         "decision_sha256": canonical_sha256(decision),
         "decision_reconciliation_sha256": reconciliation_sha256,
+        "previous_candidate_sha256": manifest["previous_candidate_sha256"],
+        "notebook_source_sha256": decision["notebook_source_sha256"],
+        "working_notebook_logical_sha256": decision["working_notebook_logical_sha256"],
+        "preview_manifest_sha256": decision["preview_manifest_sha256"],
+        "membership_sha256": decision["membership_sha256"],
+        "mapping_sha256": decision["mapping_sha256"],
+        "panel_sha256s": decision["panel_sha256s"],
+        "legacy_evidence_reconciliation_sha256": manifest["legacy_evidence_reconciliation_sha256"],
+        "previous_candidate_evidence_inventory_sha256": manifest[
+            "previous_candidate_evidence_inventory_sha256"
+        ],
         "image_contract": control.image_contract,
         "alignment": control.alignment,
         "runtime": control.runtime,
@@ -2028,12 +2602,12 @@ class DegradationPreviewSession:
         self.manifest_path = self.artifact_root / "preview-manifest.json"
         self.manifest = _read_regular_json(self.manifest_path, kind="preview manifest")
         if self.manifest.get("candidate_id") != CURRENT_CANDIDATE_ID:
-            raise DegradationDecisionError("working notebook must open candidate 2 only")
+            raise DegradationDecisionError("working notebook must open candidate 3 only")
 
     def summary(self) -> None:
         from IPython.display import Image, Markdown, display
 
-        display(Markdown("## Paired candidate-2 degradation review"))
+        display(Markdown("## Paired candidate-3 degradation review"))
         panels = self.manifest.get("panels")
         if not isinstance(panels, list):
             raise DegradationDecisionError("preview panels are malformed")
@@ -2093,8 +2667,10 @@ class DegradationPreviewSession:
                 "candidate_id": manifest["candidate_id"],
                 "candidate_sha256": manifest["candidate_sha256"],
                 "notebook_source_sha256": manifest["notebook_source_sha256"],
+                "working_notebook_logical_sha256": manifest["working_notebook_logical_sha256"],
                 "preview_manifest_sha256": canonical_sha256(manifest),
                 "membership_sha256": manifest["membership_sha256"],
+                "mapping_sha256": manifest["mapping_sha256"],
                 "panel_sha256s": manifest["panel_sha256s"],
                 "authorship": "human-recorded-in-working-notebook",
             }
@@ -2107,7 +2683,7 @@ class DegradationPreviewSession:
                 status.value = f"<b>Not saved:</b> {error}"
                 return
             status.value = (
-                "<b>Decision saved durably for controlled-score-v2-candidate.</b> "
+                "<b>Decision saved durably for controlled-score-v3-candidate.</b> "
                 "Return to Codex and type <code>decision recorded</code>."
             )
 

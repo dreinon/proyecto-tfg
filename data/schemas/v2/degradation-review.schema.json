@@ -10,9 +10,15 @@
     "decision": {"enum": ["accept", "reject"]}, "reviewer": {"type": "string", "minLength": 1, "maxLength": 160},
     "reviewed_at": {"type": "string", "format": "date-time"}, "rationale": {"type": "string", "minLength": 1, "maxLength": 4000},
     "candidate_id": {"type": "string", "pattern": "^controlled-score-v[1-9][0-9]*-candidate$"},
-    "candidate_sha256": {"$ref": "#/$defs/sha256"}, "notebook_source_sha256": {"$ref": "#/$defs/sha256"}, "preview_manifest_sha256": {"$ref": "#/$defs/sha256"}, "membership_sha256": {"$ref": "#/$defs/sha256"},
+    "candidate_sha256": {"$ref": "#/$defs/sha256"}, "notebook_source_sha256": {"$ref": "#/$defs/sha256"}, "working_notebook_logical_sha256": {"$ref": "#/$defs/sha256"}, "preview_manifest_sha256": {"$ref": "#/$defs/sha256"}, "membership_sha256": {"$ref": "#/$defs/sha256"}, "mapping_sha256": {"$ref": "#/$defs/sha256"},
     "panel_sha256s": {"type": "array", "minItems": 12, "maxItems": 12, "uniqueItems": true, "items": {"$ref": "#/$defs/sha256"}},
     "authorship": {"const": "human-recorded-in-working-notebook"}
   },
+  "allOf": [
+    {
+      "if": {"properties": {"candidate_id": {"const": "controlled-score-v3-candidate"}}, "required": ["candidate_id"]},
+      "then": {"required": ["working_notebook_logical_sha256", "mapping_sha256"]}
+    }
+  ],
   "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
 }

@@ -19,13 +19,25 @@
     "control_id": {"const": "controlled-score-v1"},
     "version": {"const": 1},
     "status": {"const": "frozen"},
-    "candidate_id": {"const": "controlled-score-v2-candidate"},
-    "candidate_version": {"const": 2},
+    "candidate_id": {"const": "controlled-score-v3-candidate"},
+    "candidate_version": {"const": 3},
     "claim_boundary": {"const": "controlled-synthetic-only"},
     "master_seed": {"type": "integer", "minimum": 0},
     "candidate_sha256": {"$ref": "#/$defs/sha256"},
     "decision_sha256": {"$ref": "#/$defs/sha256"},
     "decision_reconciliation_sha256": {"$ref": "#/$defs/sha256"},
+    "previous_candidate_sha256": {"$ref": "#/$defs/sha256"},
+    "notebook_source_sha256": {"$ref": "#/$defs/sha256"},
+    "working_notebook_logical_sha256": {"$ref": "#/$defs/sha256"},
+    "preview_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "membership_sha256": {"$ref": "#/$defs/sha256"},
+    "mapping_sha256": {"$ref": "#/$defs/sha256"},
+    "panel_sha256s": {
+      "type": "array", "minItems": 12, "maxItems": 12, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/sha256"}
+    },
+    "legacy_evidence_reconciliation_sha256": {"$ref": "#/$defs/sha256"},
+    "previous_candidate_evidence_inventory_sha256": {"$ref": "#/$defs/sha256"},
     "image_contract": {"$ref": "#/$defs/candidate/properties/image_contract"},
     "alignment": {"$ref": "#/$defs/candidate/properties/alignment"},
     "runtime": {"$ref": "#/$defs/candidate/properties/runtime"},
@@ -41,6 +53,11 @@
         "control_id", "version", "status",
         "candidate_id", "candidate_version", "claim_boundary", "master_seed",
         "candidate_sha256", "decision_sha256", "decision_reconciliation_sha256",
+        "previous_candidate_sha256", "notebook_source_sha256",
+        "working_notebook_logical_sha256", "preview_manifest_sha256",
+        "membership_sha256", "mapping_sha256", "panel_sha256s",
+        "legacy_evidence_reconciliation_sha256",
+        "previous_candidate_evidence_inventory_sha256",
         "image_contract", "alignment", "runtime", "condition_order", "conditions"
       ]
     }
@@ -145,8 +162,8 @@
               "required": ["type", "sigma", "kernel"],
               "properties": {
                 "type": {"const": "gaussian"},
-                "sigma": {"enum": [0.8, 1.2, 1.6, 2.4]},
-                "kernel": {"enum": [7, 9, 11, 17]}
+                "sigma": {"enum": [0.8, 1.2, 1.6, 1.8, 2.4, 3.0]},
+                "kernel": {"enum": [7, 9, 11, 13, 17, 21]}
               }
             }
           ]
@@ -157,7 +174,7 @@
             {
               "type": "object", "additionalProperties": false,
               "required": ["type", "sigma"],
-              "properties": {"type": {"const": "gaussian"}, "sigma": {"enum": [3.0, 5.0, 8.0, 14.0]}}
+              "properties": {"type": {"const": "gaussian"}, "sigma": {"enum": [3.0, 5.0, 6.0, 8.0, 14.0]}}
             }
           ]
         },
@@ -169,7 +186,7 @@
               "type": "object", "additionalProperties": false,
               "required": ["quality", "sampling_factor", "progressive", "optimize"],
               "properties": {
-                "quality": {"enum": [40, 60, 75, 85]},
+                "quality": {"enum": [30, 40, 60, 75, 85]},
                 "sampling_factor": {"const": "4:4:4"},
                 "progressive": {"const": false},
                 "optimize": {"const": false}
