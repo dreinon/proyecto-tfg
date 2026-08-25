@@ -263,3 +263,90 @@ candidates:
         noise: {type: gaussian, sigma: 6.0}
         quantization: clip-0-255-rint-cast
         jpeg: {quality: 30, sampling_factor: "4:4:4", progressive: false, optimize: false}
+  - version: 4
+    candidate_id: controlled-score-v4-candidate
+    status: candidate
+    claim_boundary: controlled-synthetic-only
+    master_seed: 20260821
+    previous_candidate_sha256: 95a907a96af294c0d8c0b768467c4ece475bb1ad5b50cfa38ec56059b4219029
+    image_contract:
+      mode: RGB
+      dtype: uint8
+      range: [0, 255]
+      channel_degradation: achromatic-equal
+      restoration_preprocessing: none
+      forbidden_transformations:
+        - grayscale
+        - background-whitening
+        - contrast-normalization
+        - binarization
+    alignment:
+      divisibility_crop: lower-right-remainder
+      crop_edges: [bottom, right]
+      border: reflect-101
+      rounding: clip-0-255-rint-cast
+    runtime:
+      library: opencv
+      reduction_interpolation: INTER_AREA
+      opencv_threads: 1
+      opencl: false
+      jpeg_colour_order: RGB-BGR-explicit
+      jpeg_sampling_factor: "4:4:4"
+      jpeg_progressive: false
+      jpeg_optimize: false
+    condition_order: [x2-clean, x2-moderate, x2-strong, x4-clean, x4-moderate, x4-strong]
+    conditions:
+      - condition_id: x2-clean
+        scale: 2
+        severity: clean
+        operations: [reduction]
+        reduction: {interpolation: INTER_AREA}
+        blur: null
+        noise: null
+        quantization: clip-0-255-rint-cast
+        jpeg: null
+      - condition_id: x2-moderate
+        scale: 2
+        severity: moderate
+        operations: [blur, reduction, noise, clip-round, jpeg]
+        reduction: {interpolation: INTER_AREA}
+        blur: {type: gaussian, sigma: 1.8, kernel: 13}
+        noise: {type: gaussian, sigma: 3.0}
+        quantization: clip-0-255-rint-cast
+        jpeg: {quality: 60, sampling_factor: "4:4:4", progressive: false, optimize: false}
+      - condition_id: x2-strong
+        scale: 2
+        severity: strong
+        operations: [blur, reduction, noise, clip-round, jpeg]
+        reduction: {interpolation: INTER_AREA}
+        blur: {type: gaussian, sigma: 4.0, kernel: 29}
+        noise: {type: gaussian, sigma: 3.0}
+        quantization: clip-0-255-rint-cast
+        jpeg: {quality: 20, sampling_factor: "4:4:4", progressive: false, optimize: false}
+      - condition_id: x4-clean
+        scale: 4
+        severity: clean
+        operations: [reduction]
+        reduction: {interpolation: INTER_AREA}
+        blur: null
+        noise: null
+        quantization: clip-0-255-rint-cast
+        jpeg: null
+      - condition_id: x4-moderate
+        scale: 4
+        severity: moderate
+        operations: [blur, reduction, noise, clip-round, jpeg]
+        reduction: {interpolation: INTER_AREA}
+        blur: {type: gaussian, sigma: 1.8, kernel: 13}
+        noise: {type: gaussian, sigma: 3.0}
+        quantization: clip-0-255-rint-cast
+        jpeg: {quality: 60, sampling_factor: "4:4:4", progressive: false, optimize: false}
+      - condition_id: x4-strong
+        scale: 4
+        severity: strong
+        operations: [blur, reduction, noise, clip-round, jpeg]
+        reduction: {interpolation: INTER_AREA}
+        blur: {type: gaussian, sigma: 4.0, kernel: 29}
+        noise: {type: gaussian, sigma: 3.0}
+        quantization: clip-0-255-rint-cast
+        jpeg: {quality: 20, sampling_factor: "4:4:4", progressive: false, optimize: false}

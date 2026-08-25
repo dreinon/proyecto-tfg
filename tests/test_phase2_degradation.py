@@ -109,6 +109,7 @@ def _copy_preview_project(destination: Path) -> None:
         Path("configs/degradations/controlled-score-candidates.yaml"),
         Path("data/schemas/v2/degradation-control.schema.json"),
         Path("data/schemas/v2/degradation-review.schema.json"),
+        Path("docs/decision-log.md"),
         Path("tests/fixtures/phase2/fixture-manifest-v1.yaml"),
         Path("tests/fixtures/phase2/visual-fixture-manifest-v1.yaml"),
         Path("tests/fixtures/phase2/visual-fixture-manifest-v2.yaml"),

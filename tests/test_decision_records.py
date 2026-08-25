@@ -94,13 +94,28 @@ def test_material_record_validation_rejects_missing_accountability() -> None:
         _validate_material_records(incomplete)
 
 
-def test_decisions_and_deviations_keep_human_outcomes_pending() -> None:
+def test_pending_human_outcomes_remain_open_while_sanitized_scientific_decisions_are_explicit() -> (
+    None
+):
     _, decisions = _markdown_table(DECISION_PATH, "## Decision register")
     _, triggers = _markdown_table(DEVIATION_PATH, "## Pending deviation triggers")
 
     assert any(row["Record ID"] == "DEC-ACAD-01" for row in decisions)
     assert any(row["Record ID"] == "DEV-ACAD-01" for row in triggers)
-    assert all("pending" in row["Status"] for row in decisions + triggers)
+    pending_decisions = [row for row in decisions if row["Record ID"].startswith("DEC-ACAD-")]
+    assert pending_decisions
+    assert all("pending" in row["Status"] for row in pending_decisions + triggers)
+    assert [
+        (row["Record ID"], row["Status"], row["Evidence reference"])
+        for row in decisions
+        if row["Record ID"] == "DEC-SCI-01"
+    ] == [
+        (
+            "DEC-SCI-01",
+            "decided",
+            "external-ref:PHASE2-CANDIDATE3-REVIEW",
+        )
+    ]
     assert "No enacted deviations are recorded" in DEVIATION_PATH.read_text(encoding="utf-8")
 
 

@@ -16,7 +16,7 @@
   },
   "allOf": [
     {
-      "if": {"properties": {"candidate_id": {"const": "controlled-score-v3-candidate"}}, "required": ["candidate_id"]},
+      "if": {"properties": {"candidate_id": {"enum": ["controlled-score-v3-candidate", "controlled-score-v4-candidate"]}}, "required": ["candidate_id"]},
       "then": {"required": ["working_notebook_logical_sha256", "mapping_sha256"]}
     }
   ],
