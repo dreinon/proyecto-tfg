@@ -1398,3 +1398,112 @@ def test_accept_freeze_allows_only_exact_candidate_v3_human_review(
     assert frozen_control["panel_sha256s"] == decision["panel_sha256s"]
     assert frozen_control["decision_reconciliation_sha256"] == result["reconciliation_sha256"]
     decision_path.unlink()
+
+
+@pytest.mark.parametrize(
+    "display_name",
+    (
+        "Python 3 (score-super-resolution)",
+        "score-super-resolution (3.12.12)",
+    ),
+)
+def test_kernelspec_display_exact_environment_aliases_preserve_logical_identity(
+    tmp_path: Path, display_name: str
+) -> None:
+    module = _degradation()
+    artifact_root = (
+        LEGACY_ARTIFACT_ROOT / "candidates/controlled-score-v3-candidate"
+    )
+    manifest_path = artifact_root / "preview-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    notebook = json.loads(
+        (artifact_root / "preview-working.ipynb").read_text(encoding="utf-8")
+    )
+    notebook["metadata"]["kernelspec"]["display_name"] = display_name
+    working = tmp_path / "working.ipynb"
+    working.write_text(json.dumps(notebook), encoding="utf-8")
+
+    assert (
+        module.logical_working_notebook_sha256(working, manifest_path)
+        == manifest["working_notebook_logical_sha256"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "value"),
+    (
+        ("display-name", "Python 3 (score-super-resolution)-extra"),
+        ("display-name", "score-super-resolution (3.12.13)"),
+        ("kernel-name", "score-super-resolution"),
+        ("kernel-language", "Python"),
+        ("language-info-name", "Python"),
+        ("missing-kernel-name", None),
+        ("missing-kernel-language", None),
+        ("missing-language-info", None),
+    ),
+)
+def test_kernelspec_display_alias_rejects_identity_substitution(
+    tmp_path: Path, mutation: str, value: str | None
+) -> None:
+    module = _degradation()
+    artifact_root = (
+        LEGACY_ARTIFACT_ROOT / "candidates/controlled-score-v3-candidate"
+    )
+    manifest_path = artifact_root / "preview-manifest.json"
+    notebook = json.loads(
+        (artifact_root / "preview-working.ipynb").read_text(encoding="utf-8")
+    )
+    kernelspec = notebook["metadata"]["kernelspec"]
+    if mutation == "display-name":
+        kernelspec["display_name"] = value
+    elif mutation == "kernel-name":
+        kernelspec["name"] = value
+    elif mutation == "kernel-language":
+        kernelspec["language"] = value
+    elif mutation == "language-info-name":
+        notebook["metadata"]["language_info"]["name"] = value
+    elif mutation == "missing-kernel-name":
+        kernelspec.pop("name")
+    elif mutation == "missing-kernel-language":
+        kernelspec.pop("language")
+    else:
+        notebook["metadata"].pop("language_info")
+    working = tmp_path / f"{mutation}.ipynb"
+    working.write_text(json.dumps(notebook), encoding="utf-8")
+
+    with pytest.raises(module.NotebookSourceError):
+        module.logical_working_notebook_sha256(working, manifest_path)
+
+
+def test_candidate_v3_rejection_validates_read_only_after_kernelspec_display_alias(
+    tmp_path: Path,
+) -> None:
+    module = _degradation()
+    artifact_root = (
+        LEGACY_ARTIFACT_ROOT / "candidates/controlled-score-v3-candidate"
+    )
+    before = _regular_inventory(artifact_root)
+    decision = module.validate_degradation_decision(
+        artifact_root / "degradation-decision.json",
+        artifact_root / "preview-manifest.json",
+    )
+
+    assert decision["reviewer"] == "Dani"
+    assert decision["reviewed_at"] == "2026-08-25T07:00:07Z"
+    assert decision["decision"] == "reject"
+    assert decision["rationale"].strip()
+    assert decision["authorship"] == "human-recorded-in-working-notebook"
+    assert decision["candidate_sha256"] == (
+        "95a907a96af294c0d8c0b768467c4ece475bb1ad5b50cfa38ec56059b4219029"
+    )
+    result = module.freeze_degradation_control(
+        CONTROL_PATH,
+        artifact_root / "degradation-decision.json",
+        artifact_root / "preview-manifest.json",
+        tmp_path / "must-not-freeze.yaml",
+        reconciliation_path=tmp_path / "must-not-reconcile.json",
+    )
+    assert result["status"] == "blocked-rejected"
+    assert not (tmp_path / "must-not-freeze.yaml").exists()
+    assert not (tmp_path / "must-not-reconcile.json").exists()
+    assert _regular_inventory(artifact_root) == before
