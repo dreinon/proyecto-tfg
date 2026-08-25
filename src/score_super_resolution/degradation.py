@@ -50,6 +50,11 @@ PRIOR_CANDIDATE_CANONICAL_SHA256 = (
 )
 _WORKING_COPY_MARKER = "__GENERATED_PHASE2_VISUAL_REVIEW_WORKING_COPY__"
 _GENERATED_TOKEN = re.compile(r"generated:[0-9a-f]{64}")
+_CANONICAL_KERNEL_DISPLAY_NAME = "Python 3 (score-super-resolution)"
+_KERNEL_DISPLAY_NAMES = {
+    _CANONICAL_KERNEL_DISPLAY_NAME,
+    "score-super-resolution (3.12.12)",
+}
 
 EXPECTED_CONDITION_IDS = (
     "x2-clean",
@@ -1220,6 +1225,23 @@ def _strip_transient_notebook_metadata(notebook: dict[str, Any]) -> None:
                 cell_metadata.pop("jupyter")
 
 
+def _normalize_kernelspec_display_name(notebook: dict[str, Any]) -> None:
+    """Canonicalize only the two environment-controlled kernel display labels."""
+
+    metadata = notebook["metadata"]
+    kernelspec = metadata.get("kernelspec")
+    language_info = metadata.get("language_info")
+    if not isinstance(kernelspec, dict):
+        raise NotebookSourceError("kernelspec metadata must be an object")
+    if kernelspec.get("name") != "python3" or kernelspec.get("language") != "python":
+        raise NotebookSourceError("kernelspec kernel and language identity must remain exact")
+    if kernelspec.get("display_name") not in _KERNEL_DISPLAY_NAMES:
+        raise NotebookSourceError("kernelspec display label is not an allowed environment alias")
+    if not isinstance(language_info, dict) or language_info.get("name") != "python":
+        raise NotebookSourceError("Python language identity must remain exact")
+    kernelspec["display_name"] = _CANONICAL_KERNEL_DISPLAY_NAME
+
+
 def _normalize_working_copy_token(
     notebook: dict[str, Any], *, expected_token: str | None, source: bool
 ) -> None:
@@ -1264,6 +1286,7 @@ def _notebook_projection(
     if not source and (len(tokens) != 1 or tokens[0] != expected_token):
         raise NotebookSourceError("working notebook token does not bind the preview manifest")
     _normalize_working_copy_token(projected, expected_token=expected_token, source=source)
+    _normalize_kernelspec_display_name(projected)
     _strip_transient_notebook_metadata(projected)
     for cell in projected["cells"]:
         if cell.get("cell_type") == "code":
@@ -1349,6 +1372,29 @@ def _historical_working_notebook_logical_sha256(
             "preview_scientific_identity": identity,
         }
     )
+
+
+def _historical_evidence_inventory(root: Path, manifest: Mapping[str, Any]) -> dict[str, str]:
+    """Project the exact display-label alias without changing historical evidence bytes."""
+
+    inventory = _regular_file_inventory(root)
+    working_path = Path(root) / "preview-working.ipynb"
+    _historical_working_notebook_logical_sha256(working_path, manifest)
+    notebook = _notebook_document(working_path, kind="historical working notebook")
+    display_name = notebook["metadata"]["kernelspec"]["display_name"]
+    if display_name == _CANONICAL_KERNEL_DISPLAY_NAME:
+        return inventory
+    raw = _read_regular_bytes(
+        working_path,
+        maximum_bytes=_MAX_EVIDENCE_BYTES,
+        kind="historical working notebook",
+    )
+    alias = b"score-super-resolution (3.12.12)"
+    canonical = _CANONICAL_KERNEL_DISPLAY_NAME.encode("utf-8")
+    if raw.count(alias) != 1:
+        raise NotebookSourceError("historical kernel display alias is absent or ambiguous")
+    inventory["preview-working.ipynb"] = hashlib.sha256(raw.replace(alias, canonical)).hexdigest()
+    return inventory
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -2241,7 +2287,7 @@ def _reconcile_preview_evidence(
         "previous_candidate_sha256": PRIOR_CANDIDATE_CANONICAL_SHA256,
         "previous_candidate_decision_sha256": canonical_sha256(previous_decision),
         "previous_candidate_evidence_inventory_sha256": canonical_sha256(
-            _regular_file_inventory(previous_root)
+            _historical_evidence_inventory(previous_root, previous_manifest)
         ),
     }
     if previous_manifest.get("candidate_sha256") != PRIOR_CANDIDATE_CANONICAL_SHA256:

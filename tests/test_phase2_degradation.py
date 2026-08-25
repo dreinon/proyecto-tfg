@@ -1411,14 +1411,10 @@ def test_kernelspec_display_exact_environment_aliases_preserve_logical_identity(
     tmp_path: Path, display_name: str
 ) -> None:
     module = _degradation()
-    artifact_root = (
-        LEGACY_ARTIFACT_ROOT / "candidates/controlled-score-v3-candidate"
-    )
+    artifact_root = LEGACY_ARTIFACT_ROOT / "candidates/controlled-score-v3-candidate"
     manifest_path = artifact_root / "preview-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    notebook = json.loads(
-        (artifact_root / "preview-working.ipynb").read_text(encoding="utf-8")
-    )
+    notebook = json.loads((artifact_root / "preview-working.ipynb").read_text(encoding="utf-8"))
     notebook["metadata"]["kernelspec"]["display_name"] = display_name
     working = tmp_path / "working.ipynb"
     working.write_text(json.dumps(notebook), encoding="utf-8")
@@ -1446,13 +1442,9 @@ def test_kernelspec_display_alias_rejects_identity_substitution(
     tmp_path: Path, mutation: str, value: str | None
 ) -> None:
     module = _degradation()
-    artifact_root = (
-        LEGACY_ARTIFACT_ROOT / "candidates/controlled-score-v3-candidate"
-    )
+    artifact_root = LEGACY_ARTIFACT_ROOT / "candidates/controlled-score-v3-candidate"
     manifest_path = artifact_root / "preview-manifest.json"
-    notebook = json.loads(
-        (artifact_root / "preview-working.ipynb").read_text(encoding="utf-8")
-    )
+    notebook = json.loads((artifact_root / "preview-working.ipynb").read_text(encoding="utf-8"))
     kernelspec = notebook["metadata"]["kernelspec"]
     if mutation == "display-name":
         kernelspec["display_name"] = value
@@ -1479,9 +1471,7 @@ def test_candidate_v3_rejection_validates_read_only_after_kernelspec_display_ali
     tmp_path: Path,
 ) -> None:
     module = _degradation()
-    artifact_root = (
-        LEGACY_ARTIFACT_ROOT / "candidates/controlled-score-v3-candidate"
-    )
+    artifact_root = LEGACY_ARTIFACT_ROOT / "candidates/controlled-score-v3-candidate"
     before = _regular_inventory(artifact_root)
     decision = module.validate_degradation_decision(
         artifact_root / "degradation-decision.json",
