@@ -1,0 +1,196 @@
+schema_version: 2
+record_type: degradation-control
+control_id: controlled-score-v1
+version: 1
+status: frozen
+candidate_id: controlled-score-v5-candidate
+candidate_version: 5
+claim_boundary: controlled-synthetic-only
+master_seed: 20260821
+candidate_sha256: 3d001b791677ab769ce1969336776d6525d4ddb7e0fc27cb6715f89ae53ba7d1
+decision_sha256: a29695029b36415695d770c029f527147c469237619fbae37f2e8d0777de3645
+decision_reconciliation_sha256: 10ff52ba148a17ed6a246d353cd6f9060d140b07041929d46d2a9c3156be575f
+previous_candidate_sha256: aa02828f0831a8b2a536f9737e21af6ddfc3d60da7a6a62bf6ce07f03de636ef
+previous_candidate_decision_sha256: 28fc5f2c0eb9da3176283d24e3b41253bfb19cc2909e8f378d5abaad14841bff
+notebook_source_sha256: ec9a581ecb838fdb7c831093013481183ff46a67b54c2764fece337bc8b4083a
+working_notebook_logical_sha256: 385dcb0e9238f489264b8ad844cc6df615d627bebe6ad745a116200490ed689e
+preview_manifest_sha256: 06328d685a209f4e73113ef00fc76b2d679b3d243ffc123fefdf539b01cd23e0
+membership_sha256: a2ee3fe7baa4bae90d4a32d06d99fe0544113a61de2f8e02123a14613cb29377
+mapping_sha256: 69282ffedf49d8686fc651e12912077575099dc6b509a1be3c423ac9029445d5
+panel_sha256s:
+- d371ae5b2843cb0dedda32d264e8d167ba12581081940fc06bb36709eeb9b582
+- a16d8d3e0cb5c62922677d47f4ccd9649ac0a631cc57b6469ed8414e303dc415
+- 894808fa4ba2b33ea498b02bf691fad109719ea2d41445e414ad5bbfe784d30c
+- 7f8086cab844d619fe1546a44fd5a946ffc66be35fe3c8c630ebe08c08c5b6a5
+- 65fb413d6064c247ff5b6bbd9b75b9000bf2877a3f60c2ba8f348bde131dee30
+- 6467fd285d01e7467d850a4581c1416f15232c936bab4697d8d63fd0d9b1c0f0
+- 68719616118f6fe06108eb6948535fe8430c2cada3842090b5489e71cdd8e875
+- e43ffb744dc46dc11a4a05c503d89666916779692dcf01ae19981969380fad9e
+- 406593b6ca76f8fe228e281c657cca3d1e8c38ae1a523645f4d48ceffeac9911
+- 8a6485d937722cb688b676fbb8d2148eb2b26bd2f6cfbc572414f293643f37f3
+- 8e7bd279d0c9c7cbf316f493ea291b6d0e1961fe9ea82c5fe74e35815c1edc19
+- 47af7e04291085775e3c46bac5e335f714a0315d720d2af2c37d6648ad0bc5e4
+legacy_evidence_reconciliation_sha256: f323a97dc9286c182e9076dae2d8a6144eed25a6c2259e707dc54eaaa5b0c4db
+previous_candidate_evidence_inventory_sha256: 348dc24894e0b11c329fa23f2d4055275fe105d164ccd2ce6f7c9982918cc9f7
+prior_candidate_evidence_inventory_sha256s:
+  controlled-score-v1-candidate: 4b966ec33aceddf16a849ce7c36698a0d4810c7f98a285861c1894b6ee196f63
+  controlled-score-v2-candidate: 0a7cc800fa17d94a2cc2beffa36131ab05736a4843394584344d5d5478909aac
+  controlled-score-v3-candidate: 95495515ac243ac595eb4bf4ef4de13cc80a89effa396787435e6449f8a19d02
+  controlled-score-v4-candidate: 348dc24894e0b11c329fa23f2d4055275fe105d164ccd2ce6f7c9982918cc9f7
+scientific_decision_record_id: DEC-SCI-02
+scientific_decision_record_sha256: c519975aaf570f27ed2c7e4eaf2dfe3833438c75d5557332c4e2475ecf979c87
+image_contract:
+  mode: RGB
+  dtype: uint8
+  range:
+  - 0
+  - 255
+  channel_degradation: achromatic-equal
+  restoration_preprocessing: none
+  forbidden_transformations:
+  - grayscale
+  - background-whitening
+  - contrast-normalization
+  - binarization
+alignment:
+  divisibility_crop: lower-right-remainder
+  crop_edges:
+  - bottom
+  - right
+  border: reflect-101
+  rounding: clip-0-255-rint-cast
+runtime:
+  library: opencv
+  reduction_interpolation: INTER_AREA
+  opencv_threads: 1
+  opencl: false
+  jpeg_colour_order: RGB-BGR-explicit
+  jpeg_sampling_factor: '4:4:4'
+  jpeg_progressive: false
+  jpeg_optimize: false
+condition_order:
+- x2-clean
+- x2-moderate
+- x2-strong
+- x4-clean
+- x4-moderate
+- x4-strong
+conditions:
+- condition_id: x2-clean
+  scale: 2
+  severity: clean
+  operations:
+  - reduction
+  reduction:
+    interpolation: INTER_AREA
+  blur: null
+  noise: null
+  quantization: clip-0-255-rint-cast
+  jpeg: null
+- condition_id: x2-moderate
+  scale: 2
+  severity: moderate
+  operations:
+  - blur
+  - reduction
+  - noise
+  - clip-round
+  - jpeg
+  reduction:
+    interpolation: INTER_AREA
+  blur:
+    type: gaussian
+    sigma: 1.8
+    kernel: 13
+  noise:
+    type: gaussian
+    sigma: 3.0
+  quantization: clip-0-255-rint-cast
+  jpeg:
+    quality: 60
+    sampling_factor: '4:4:4'
+    progressive: false
+    optimize: false
+- condition_id: x2-strong
+  scale: 2
+  severity: strong
+  operations:
+  - blur
+  - reduction
+  - noise
+  - clip-round
+  - jpeg
+  reduction:
+    interpolation: INTER_AREA
+  blur:
+    type: gaussian
+    sigma: 6.0
+    kernel: 43
+  noise:
+    type: gaussian
+    sigma: 3.0
+  quantization: clip-0-255-rint-cast
+  jpeg:
+    quality: 10
+    sampling_factor: '4:4:4'
+    progressive: false
+    optimize: false
+- condition_id: x4-clean
+  scale: 4
+  severity: clean
+  operations:
+  - reduction
+  reduction:
+    interpolation: INTER_AREA
+  blur: null
+  noise: null
+  quantization: clip-0-255-rint-cast
+  jpeg: null
+- condition_id: x4-moderate
+  scale: 4
+  severity: moderate
+  operations:
+  - blur
+  - reduction
+  - noise
+  - clip-round
+  - jpeg
+  reduction:
+    interpolation: INTER_AREA
+  blur:
+    type: gaussian
+    sigma: 1.8
+    kernel: 13
+  noise:
+    type: gaussian
+    sigma: 3.0
+  quantization: clip-0-255-rint-cast
+  jpeg:
+    quality: 60
+    sampling_factor: '4:4:4'
+    progressive: false
+    optimize: false
+- condition_id: x4-strong
+  scale: 4
+  severity: strong
+  operations:
+  - blur
+  - reduction
+  - noise
+  - clip-round
+  - jpeg
+  reduction:
+    interpolation: INTER_AREA
+  blur:
+    type: gaussian
+    sigma: 6.0
+    kernel: 43
+  noise:
+    type: gaussian
+    sigma: 3.0
+  quantization: clip-0-255-rint-cast
+  jpeg:
+    quality: 10
+    sampling_factor: '4:4:4'
+    progressive: false
+    optimize: false
