@@ -270,3 +270,397 @@ def test_resource_result_schema_is_closed() -> None:
             {"schema_version": 2, "record_type": "resource-result"},
             version=2,
         )
+
+
+def _metric_control(
+    *,
+    item_id: str = "fixture-page-01",
+    source_group_id: str = "fixture-work-01",
+    condition_id: str = "x2-clean",
+    method_id: str = "bicubic-opencv-v1",
+) -> object:
+    from score_super_resolution.evaluation import FidelityControl, load_evaluation_control
+
+    return FidelityControl(
+        evaluation=load_evaluation_control(EVALUATION_CONTROL_PATH),
+        experiment_id="experiment-fixture-v1",
+        item_id=item_id,
+        source_group_id=source_group_id,
+        condition_id=condition_id,
+        method_id=method_id,
+        reconstruction_id=f"output-{item_id}-{condition_id}-{method_id}",
+        reference_id=f"reference-{item_id}",
+    )
+
+
+def _record(records: tuple[dict[str, object], ...], metric: str, colour: str, domain: str):
+    matches = [
+        record
+        for record in records
+        if record["metric_name"] == metric
+        and record["colour_id"] == colour
+        and record["domain_id"] == domain
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def test_metric_control_freezes_primary_and_diagnostic_roles() -> None:
+    from score_super_resolution.evaluation import load_evaluation_control
+
+    control = load_evaluation_control(EVALUATION_CONTROL_PATH)
+    assert control.evaluation_control_id == "evaluation-score-v1"
+    assert control.condition_ids == (
+        "x2-clean",
+        "x2-moderate",
+        "x2-strong",
+        "x4-clean",
+        "x4-moderate",
+        "x4-strong",
+    )
+    assert control.metric_ids == ("psnr-v1", "ssim-wang11-v1")
+    assert control.colour_ids == ("bt601-y-primary-v1", "rgb-diagnostic-v1")
+    assert control.domain_ids == (
+        "full-page-primary-v1",
+        "scale-inner-crop-sensitivity-v1",
+    )
+    assert control.bootstrap_seed == 20260823
+    assert control.bootstrap_repetitions == 10_000
+    assert control.reference_method_id == "bicubic-opencv-v1"
+    assert len(control.sha256) == 64
+
+
+def test_metric_bt601_y_anchors_and_exact_match_state_are_explicit() -> None:
+    from score_super_resolution.evaluation import bt601_y, compute_fidelity
+
+    black = np.zeros((24, 24, 3), dtype=np.uint8)
+    white = np.full((24, 24, 3), 255, dtype=np.uint8)
+    red = np.zeros((1, 1, 3), dtype=np.uint8)
+    red[..., 0] = 255
+    assert float(bt601_y(black)[0, 0]) == pytest.approx(16.0, abs=1e-12)
+    assert float(bt601_y(white)[0, 0]) == pytest.approx(235.0, abs=1e-12)
+    assert float(bt601_y(red)[0, 0]) == pytest.approx(81.481, abs=1e-3)
+
+    records = compute_fidelity(black, black.copy(), scale=2, control=_metric_control())
+    assert len(records) == 8
+    for record in records:
+        validate_instance("metric-result", record, version=2)
+        json.dumps(record, allow_nan=False, sort_keys=True)
+        assert record["direction"] == {
+            "reference": "aligned-hr",
+            "reconstruction": "method-output",
+        }
+        if record["metric_name"] == "psnr":
+            assert record["value_state"] == "positive_infinity"
+            assert record["value"] is None
+            assert record["exact_match"] is True
+        else:
+            assert record["value_state"] == "finite"
+            assert record["value"] == pytest.approx(1.0)
+            assert record["exact_match"] is True
+
+
+def test_metric_psnr_matches_analytical_rgb_value_and_domains_remain_separate() -> None:
+    from score_super_resolution.evaluation import compute_fidelity
+
+    reference = np.zeros((24, 24, 3), dtype=np.uint8)
+    estimate = np.full_like(reference, 10)
+    records = compute_fidelity(reference, estimate, scale=2, control=_metric_control())
+    full_rgb = _record(records, "psnr", "rgb-diagnostic-v1", "full-page-primary-v1")
+    crop_rgb = _record(records, "psnr", "rgb-diagnostic-v1", "scale-inner-crop-sensitivity-v1")
+    expected = 20.0 * np.log10(255.0 / 10.0)
+    assert full_rgb["value"] == pytest.approx(expected, abs=1e-12)
+    assert crop_rgb["value"] == pytest.approx(expected, abs=1e-12)
+    assert full_rgb["parameters"]["data_range"] == 255.0
+    assert full_rgb["parameters"]["channel_axis"] == -1
+    assert crop_rgb["parameters"]["crop_pixels_per_edge"] == 2
+    assert full_rgb["metric_id"] != crop_rgb["metric_id"]
+
+
+def _direct_wang_ssim(reference: np.ndarray, estimate: np.ndarray) -> float:
+    from score_super_resolution.evaluation import bt601_y
+
+    x = bt601_y(reference)
+    y = bt601_y(estimate)
+    kernel = cv2.getGaussianKernel(11, 1.5)
+    window = kernel @ kernel.T
+    ux = cv2.filter2D(x, -1, window, borderType=cv2.BORDER_REFLECT)
+    uy = cv2.filter2D(y, -1, window, borderType=cv2.BORDER_REFLECT)
+    uxx = cv2.filter2D(x * x, -1, window, borderType=cv2.BORDER_REFLECT)
+    uyy = cv2.filter2D(y * y, -1, window, borderType=cv2.BORDER_REFLECT)
+    uxy = cv2.filter2D(x * y, -1, window, borderType=cv2.BORDER_REFLECT)
+    vx = uxx - ux * ux
+    vy = uyy - uy * uy
+    vxy = uxy - ux * uy
+    c1 = (0.01 * 255.0) ** 2
+    c2 = (0.03 * 255.0) ** 2
+    score = ((2.0 * ux * uy + c1) * (2.0 * vxy + c2)) / ((ux * ux + uy * uy + c1) * (vx + vy + c2))
+    return float(score[5:-5, 5:-5].mean())
+
+
+def test_metric_ssim_matches_independent_wang_oracle_and_border_sensitivity() -> None:
+    from score_super_resolution.evaluation import compute_fidelity
+
+    rng = np.random.Generator(np.random.PCG64(717))
+    reference = rng.integers(0, 256, size=(31, 35, 3), dtype=np.uint8)
+    estimate = reference.copy()
+    estimate[12:16, 14:19] = np.clip(estimate[12:16, 14:19].astype(int) + 17, 0, 255)
+    records = compute_fidelity(reference, estimate, scale=2, control=_metric_control())
+    primary = _record(records, "ssim", "bt601-y-primary-v1", "full-page-primary-v1")
+    assert primary["value"] == pytest.approx(
+        _direct_wang_ssim(reference, estimate), rel=0, abs=2e-12
+    )
+    assert primary["parameters"] == {
+        "data_range": 255.0,
+        "gaussian_weights": True,
+        "sigma": 1.5,
+        "window_size": 11,
+        "use_sample_covariance": False,
+        "k1": 0.01,
+        "k2": 0.03,
+        "channel_axis": None,
+        "crop_pixels_per_edge": 0,
+    }
+
+    border = reference.copy()
+    border[:2] = 0
+    border[-2:] = 0
+    border[:, :2] = 0
+    border[:, -2:] = 0
+    border_records = compute_fidelity(reference, border, scale=2, control=_metric_control())
+    full = _record(border_records, "psnr", "rgb-diagnostic-v1", "full-page-primary-v1")
+    crop = _record(border_records, "psnr", "rgb-diagnostic-v1", "scale-inner-crop-sensitivity-v1")
+    assert full["value_state"] == "finite"
+    assert crop["value_state"] == "positive_infinity"
+
+
+@pytest.mark.parametrize(
+    ("reference", "estimate", "scale", "message"),
+    [
+        (_lr_page(), _lr_page()[:17], 2, "shape"),
+        (_lr_page().astype(np.float32), _lr_page(), 2, "uint8"),
+        (_lr_page(12, 12), _lr_page(12, 12), 4, "SSIM"),
+        (_lr_page(), _lr_page(), 3, "scale"),
+    ],
+)
+def test_metric_contract_fails_closed_on_invalid_arrays_or_crop(
+    reference: np.ndarray, estimate: np.ndarray, scale: int, message: str
+) -> None:
+    from score_super_resolution.evaluation import EvaluationContractError, compute_fidelity
+
+    with pytest.raises(EvaluationContractError, match=message):
+        compute_fidelity(reference, estimate, scale=scale, control=_metric_control())
+
+
+def _synthetic_metric_records(
+    *, sources: int = 2
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    from score_super_resolution.evaluation import load_evaluation_control
+
+    from score_super_resolution.identities import canonical_sha256
+
+    evaluation = load_evaluation_control(EVALUATION_CONTROL_PATH)
+    records: list[dict[str, object]] = []
+    states: list[dict[str, object]] = []
+    for cell_index, condition_id in enumerate(evaluation.condition_ids):
+        for source_index in range(sources):
+            source_id = f"fixture-work-{source_index + 1:02d}"
+            for page_index in range(2):
+                item_id = f"{source_id}-page-{page_index + 1:02d}"
+                for method_index, method_id in enumerate(evaluation.method_ids):
+                    states.append(
+                        {
+                            "item_id": item_id,
+                            "source_group_id": source_id,
+                            "condition_id": condition_id,
+                            "method_id": method_id,
+                            "state": "success",
+                            "attempt_count": 1,
+                            "exclusion_reason": None,
+                        }
+                    )
+                    for metric_name, metric_id in (("psnr", "psnr-v1"), ("ssim", "ssim-wang11-v1")):
+                        for colour_id, role in (
+                            ("bt601-y-primary-v1", "primary"),
+                            ("rgb-diagnostic-v1", "diagnostic"),
+                        ):
+                            for domain_id in evaluation.domain_ids:
+                                base = 30.0 if metric_name == "psnr" else 0.8
+                                value = (
+                                    base
+                                    + cell_index * 0.01
+                                    + source_index * 0.1
+                                    + page_index * 0.02
+                                    + method_index * 0.03
+                                )
+                                payload = {
+                                    "schema_version": 2,
+                                    "record_type": "metric-result",
+                                    "experiment_id": "experiment-fixture-v1",
+                                    "item_id": item_id,
+                                    "source_group_id": source_id,
+                                    "condition_id": condition_id,
+                                    "method_id": method_id,
+                                    "reconstruction_id": f"output-{item_id}-{condition_id}-{method_id}",
+                                    "reference_id": f"reference-{item_id}",
+                                    "metric_id": f"{metric_id}__{colour_id}__{domain_id}",
+                                    "metric_name": metric_name,
+                                    "role": role,
+                                    "colour_id": colour_id,
+                                    "domain_id": domain_id,
+                                    "direction": {
+                                        "reference": "aligned-hr",
+                                        "reconstruction": "method-output",
+                                    },
+                                    "parameters": {"fixture": True},
+                                    "value_state": "finite",
+                                    "value": value,
+                                    "exact_match": False,
+                                    "reference_pixel_sha256": "a" * 64,
+                                    "reconstruction_pixel_sha256": "b" * 64,
+                                }
+                                records.append(
+                                    {
+                                        **payload,
+                                        "metric_result_id": f"metric-{canonical_sha256(payload)}",
+                                    }
+                                )
+    return records, states
+
+
+def _aggregate_control(records: list[dict[str, object]], states: list[dict[str, object]]) -> object:
+    from score_super_resolution.evaluation import AggregateControl, load_evaluation_control
+
+    from score_super_resolution.identities import canonical_sha256
+
+    return AggregateControl(
+        evaluation=load_evaluation_control(EVALUATION_CONTROL_PATH),
+        experiment_id="experiment-fixture-v1",
+        reconciliation_id="reconciliation-fixture-v1",
+        reconciliation_sha256="c" * 64,
+        raw_metric_input_sha256=canonical_sha256(
+            sorted(records, key=lambda row: str(row["metric_result_id"]))
+        ),
+        tuple_state_input_sha256=canonical_sha256(
+            sorted(
+                states,
+                key=lambda row: (
+                    str(row["condition_id"]),
+                    str(row["source_group_id"]),
+                    str(row["item_id"]),
+                    str(row["method_id"]),
+                ),
+            )
+        ),
+    )
+
+
+def test_aggregate_is_six_cell_source_paired_and_deterministic() -> None:
+    from score_super_resolution.evaluation import aggregate_paired
+
+    records, states = _synthetic_metric_records()
+    control = _aggregate_control(records, states)
+    bundle = aggregate_paired(records, states, control=control)
+    validate_instance("aggregate-result", bundle, version=2)
+    json.dumps(bundle, allow_nan=False, sort_keys=True)
+
+    assert bundle["experiment_id"] == "experiment-fixture-v1"
+    assert bundle["reconciliation_id"] == "reconciliation-fixture-v1"
+    assert bundle["bicubic_reference_method_id"] == "bicubic-opencv-v1"
+    assert [cell["condition_id"] for cell in bundle["cells"]] == _control()["condition_order"]
+    assert len(bundle["cells"]) == 6
+    for cell in bundle["cells"]:
+        assert len(cell["comparisons"]) == 16  # 2 methods x 2 metrics x 2 colours x 2 domains
+        for comparison in cell["comparisons"]:
+            assert comparison["denominators"] == {
+                "expected_pages": 4,
+                "pairable_pages": 4,
+                "failed_pages": 0,
+                "retry_attempts": 0,
+                "excluded_pages": 0,
+            }
+            assert comparison["n_sources"] == 2
+            assert comparison["n_pages"] == 4
+            assert comparison["paired_difference"]["sample_sd"] == pytest.approx(0.0, abs=1e-14)
+            assert comparison["bootstrap"] == {
+                "state": "available",
+                "generator": "PCG64",
+                "seed": 20260823,
+                "repetitions": 10_000,
+                "confidence_level": 0.95,
+                "lower": pytest.approx(-0.06),
+                "upper": pytest.approx(-0.06),
+            }
+
+    reversed_bundle = aggregate_paired(
+        list(reversed(records)), list(reversed(states)), control=control
+    )
+    assert reversed_bundle == bundle
+
+
+def test_aggregate_declines_interval_for_one_source_and_preserves_failures() -> None:
+    from score_super_resolution.evaluation import aggregate_paired
+
+    records, states = _synthetic_metric_records(sources=1)
+    failed = next(
+        state
+        for state in states
+        if state["condition_id"] == "x2-clean"
+        and state["method_id"] == "nearest-opencv-exact-v1"
+        and state["item_id"].endswith("02")
+    )
+    failed["state"] = "failed"
+    failed["attempt_count"] = 2
+    records[:] = [
+        record
+        for record in records
+        if not (
+            record["condition_id"] == failed["condition_id"]
+            and record["method_id"] == failed["method_id"]
+            and record["item_id"] == failed["item_id"]
+        )
+    ]
+    bundle = aggregate_paired(records, states, control=_aggregate_control(records, states))
+    comparison = next(
+        value
+        for value in bundle["cells"][0]["comparisons"]
+        if value["method_id"] == "nearest-opencv-exact-v1"
+    )
+    assert comparison["denominators"] == {
+        "expected_pages": 2,
+        "pairable_pages": 1,
+        "failed_pages": 1,
+        "retry_attempts": 1,
+        "excluded_pages": 0,
+    }
+    assert comparison["n_sources"] == 1
+    assert comparison["n_pages"] == 1
+    assert comparison["bootstrap"] == {
+        "state": "unavailable_insufficient_sources",
+        "generator": "PCG64",
+        "seed": 20260823,
+        "repetitions": 10_000,
+        "confidence_level": 0.95,
+        "lower": None,
+        "upper": None,
+    }
+
+
+def test_aggregate_rejects_duplicates_digest_drift_and_incomplete_cells() -> None:
+    from score_super_resolution.evaluation import EvaluationContractError, aggregate_paired
+
+    records, states = _synthetic_metric_records()
+    control = _aggregate_control(records, states)
+    with pytest.raises(EvaluationContractError, match="duplicate"):
+        aggregate_paired([*records, records[0]], states, control=control)
+    with pytest.raises(EvaluationContractError, match="digest"):
+        aggregate_paired(records[:-1], states, control=control)
+
+    reduced_records = [record for record in records if record["condition_id"] != "x4-strong"]
+    reduced_states = [state for state in states if state["condition_id"] != "x4-strong"]
+    with pytest.raises(EvaluationContractError, match="six cells"):
+        aggregate_paired(
+            reduced_records,
+            reduced_states,
+            control=_aggregate_control(reduced_records, reduced_states),
+        )
