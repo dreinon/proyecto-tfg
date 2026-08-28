@@ -30,10 +30,27 @@ V1_RAW_SHA256 = "cabc3ad9ff1564ff2d08808c42a8e34784bebe8ff47beabaa979a7a16754853
 V1_CANONICAL_SHA256 = "52cb18aa12de1a11791e7249f8086df3a25030b2e5c4c5ef7c29948c2e22f237"
 V2_CANONICAL_SHA256 = "89b270aa56f9c0d9cd5335c645921f7447280c7bcc26e6c7d0995b720f41716a"
 V3_CANONICAL_SHA256 = "95a907a96af294c0d8c0b768467c4ece475bb1ad5b50cfa38ec56059b4219029"
+V4_CANONICAL_SHA256 = "aa02828f0831a8b2a536f9737e21af6ddfc3d60da7a6a62bf6ce07f03de636ef"
+V5_CANONICAL_SHA256 = "3d001b791677ab769ce1969336776d6525d4ddb7e0fc27cb6715f89ae53ba7d1"
 V1_ARCHIVE_ROOT = LEGACY_ARTIFACT_ROOT / "candidates/controlled-score-v1-candidate"
 V2_ARTIFACT_ROOT = LEGACY_ARTIFACT_ROOT / "candidates/controlled-score-v2-candidate"
 V3_ARTIFACT_ROOT = LEGACY_ARTIFACT_ROOT / "candidates/controlled-score-v3-candidate"
 V4_ARTIFACT_ROOT = LEGACY_ARTIFACT_ROOT / "candidates/controlled-score-v4-candidate"
+V5_ARTIFACT_ROOT = LEGACY_ARTIFACT_ROOT / "candidates/controlled-score-v5-candidate"
+HISTORICAL_INVENTORY_SHA256S = {
+    "controlled-score-v1-candidate": (
+        "4b966ec33aceddf16a849ce7c36698a0d4810c7f98a285861c1894b6ee196f63"
+    ),
+    "controlled-score-v2-candidate": (
+        "343d8b39da80a774b72aa2efb47512c0b615189e8eaf505add3efa70549a6637"
+    ),
+    "controlled-score-v3-candidate": (
+        "794e477335a78912de6b21a9c650ca111533ec9c67df92976fe40f006009f23f"
+    ),
+    "controlled-score-v4-candidate": (
+        "d7751ad8fd8b1742a430dcb5f3c200390646acba7fffe89e3ebf642f7119f21e"
+    ),
+}
 EXPECTED_CELLS = (
     "x2-clean",
     "x2-moderate",
@@ -129,6 +146,7 @@ def _copy_preview_project(destination: Path) -> None:
     shutil.copytree(V1_ARCHIVE_ROOT, candidates / V1_ARCHIVE_ROOT.name)
     shutil.copytree(V2_ARTIFACT_ROOT, candidates / V2_ARTIFACT_ROOT.name)
     shutil.copytree(V3_ARTIFACT_ROOT, candidates / V3_ARTIFACT_ROOT.name)
+    shutil.copytree(V4_ARTIFACT_ROOT, candidates / V4_ARTIFACT_ROOT.name)
 
 
 def test_degradation_contract_defines_exact_closed_six_cell_candidate() -> None:
@@ -171,27 +189,30 @@ def test_degradation_contract_defines_exact_closed_six_cell_candidate() -> None:
         assert strong["jpeg"]["quality"] == 60
 
 
-def test_candidate_registry_preserves_v1_v2_v3_and_appends_exact_candidate_v4() -> None:
+def test_candidate_registry_preserves_v1_to_v4_and_appends_exact_candidate_v5() -> None:
     module = _degradation()
     registry = _yaml(CONTROL_PATH)
 
     assert hashlib.sha256(_raw_first_candidate(CONTROL_PATH)).hexdigest() == V1_RAW_SHA256
     assert module.canonical_sha256(registry["candidates"][0]) == V1_CANONICAL_SHA256
-    assert [candidate["version"] for candidate in registry["candidates"]] == [1, 2, 3, 4]
+    assert [candidate["version"] for candidate in registry["candidates"]] == [1, 2, 3, 4, 5]
     assert [candidate["candidate_id"] for candidate in registry["candidates"]] == [
         "controlled-score-v1-candidate",
         "controlled-score-v2-candidate",
         "controlled-score-v3-candidate",
         "controlled-score-v4-candidate",
+        "controlled-score-v5-candidate",
     ]
     assert module.canonical_sha256(registry["candidates"][1]) == V2_CANONICAL_SHA256
     assert module.canonical_sha256(registry["candidates"][2]) == V3_CANONICAL_SHA256
 
     control = module.load_degradation_control(CONTROL_PATH)
-    assert control.version == 4
-    assert control.candidate_id == "controlled-score-v4-candidate"
-    candidate = registry["candidates"][3]
-    assert candidate["previous_candidate_sha256"] == V3_CANONICAL_SHA256
+    assert module.canonical_sha256(registry["candidates"][3]) == V4_CANONICAL_SHA256
+    assert control.version == 5
+    assert control.candidate_id == "controlled-score-v5-candidate"
+    assert control.sha256 == V5_CANONICAL_SHA256
+    candidate = registry["candidates"][4]
+    assert candidate["previous_candidate_sha256"] == V4_CANONICAL_SHA256
     conditions = {condition["condition_id"]: condition for condition in control.conditions}
     for scale in (2, 4):
         assert conditions[f"x{scale}-moderate"]["blur"] == {
@@ -206,33 +227,33 @@ def test_candidate_registry_preserves_v1_v2_v3_and_appends_exact_candidate_v4() 
         assert conditions[f"x{scale}-moderate"]["jpeg"]["quality"] == 60
         assert conditions[f"x{scale}-strong"]["blur"] == {
             "type": "gaussian",
-            "sigma": 4.0,
-            "kernel": 29,
+            "sigma": 6.0,
+            "kernel": 43,
         }
         assert conditions[f"x{scale}-strong"]["noise"] == {
             "type": "gaussian",
             "sigma": 3.0,
         }
-        assert conditions[f"x{scale}-strong"]["jpeg"]["quality"] == 20
+        assert conditions[f"x{scale}-strong"]["jpeg"]["quality"] == 10
 
 
 @pytest.mark.parametrize(
     "mutation", ("predecessor", "mixed-scale", "mutated-v2", "x8", "restoration")
 )
-def test_candidate_v4_mutations_fail_closed(tmp_path: Path, mutation: str) -> None:
+def test_candidate_v5_mutations_fail_closed(tmp_path: Path, mutation: str) -> None:
     module = _degradation()
     registry = _yaml(CONTROL_PATH)
     if mutation == "predecessor":
-        registry["candidates"][3]["previous_candidate_sha256"] = "0" * 64
+        registry["candidates"][4]["previous_candidate_sha256"] = "0" * 64
     elif mutation == "mixed-scale":
-        registry["candidates"][3]["conditions"][4]["noise"]["sigma"] = 4.0
+        registry["candidates"][4]["conditions"][4]["noise"]["sigma"] = 4.0
     elif mutation == "mutated-v2":
         registry["candidates"][1]["master_seed"] += 1
     elif mutation == "x8":
-        registry["candidates"][3]["conditions"][5]["condition_id"] = "x8-strong"
-        registry["candidates"][3]["conditions"][5]["scale"] = 8
+        registry["candidates"][4]["conditions"][5]["condition_id"] = "x8-strong"
+        registry["candidates"][4]["conditions"][5]["scale"] = 8
     else:
-        registry["candidates"][3]["image_contract"]["restoration_preprocessing"] = (
+        registry["candidates"][4]["image_contract"]["restoration_preprocessing"] = (
             "background-whitening"
         )
     path = tmp_path / "candidate.yaml"
@@ -240,6 +261,26 @@ def test_candidate_v4_mutations_fail_closed(tmp_path: Path, mutation: str) -> No
 
     with pytest.raises(module.DegradationContractError):
         module.load_degradation_control(path)
+
+
+def test_candidate_v5_copy_delta_changes_only_identity_predecessor_and_final_strong() -> None:
+    module = _degradation()
+    registry = _yaml(CONTROL_PATH)
+    candidate_v4 = copy.deepcopy(registry["candidates"][3])
+    candidate_v5 = copy.deepcopy(registry["candidates"][4])
+
+    assert module.canonical_sha256(candidate_v4) == V4_CANONICAL_SHA256
+    assert module.canonical_sha256(candidate_v5) == V5_CANONICAL_SHA256
+    candidate_v4.update(
+        version=5,
+        candidate_id="controlled-score-v5-candidate",
+        previous_candidate_sha256=V4_CANONICAL_SHA256,
+    )
+    for condition in candidate_v4["conditions"]:
+        if condition["severity"] == "strong":
+            condition["blur"] = {"type": "gaussian", "sigma": 6.0, "kernel": 43}
+            condition["jpeg"]["quality"] = 10
+    assert candidate_v5 == candidate_v4
 
 
 @pytest.mark.parametrize(
@@ -448,14 +489,17 @@ def test_dense_roi_manifest_v3_reuses_source_bytes_and_is_fragment_first() -> No
     )
 
 
-def test_candidate_v4_decision_log_row_is_sanitized_and_attributable() -> None:
+def test_candidate_v5_decision_log_row_is_sanitized_and_attributable() -> None:
     decision_log = (PROJECT_ROOT / "docs/decision-log.md").read_text(encoding="utf-8")
-    row = next(line for line in decision_log.splitlines() if line.startswith("| DEC-SCI-01 |"))
+    row = next(line for line in decision_log.splitlines() if line.startswith("| DEC-SCI-02 |"))
 
-    assert "| 2026-08-25 | Student | decided |" in row
+    assert "| 2026-08-28 | Student | decided |" in row
     assert "x2" in row and "x4" in row
-    assert "x6" in row and "x8" in row
-    assert "external-ref:PHASE2-CANDIDATE3-REVIEW" in row
+    assert "candidate 4" in row.casefold()
+    assert "candidate 5" in row.casefold()
+    assert "final direct" in row.casefold()
+    assert "bracket" in row.casefold()
+    assert "external-ref:PHASE2-CANDIDATE4-REVIEW" in row
     for forbidden in ("Dani", "chat", "email", "correspondence", "reviewer text"):
         assert forbidden.casefold() not in row.casefold()
 
@@ -679,12 +723,12 @@ def test_deterministic_seed_and_scientific_mutation_change_identity(tmp_path: Pa
 
     changed_path = tmp_path / "changed.yaml"
     raw = CONTROL_PATH.read_text(encoding="utf-8")
-    marker = "  - version: 4\n"
-    prefix, candidate_v4 = raw.split(marker, maxsplit=1)
-    candidate_v4 = candidate_v4.replace(
+    marker = "  - version: 5\n"
+    prefix, candidate_v5 = raw.split(marker, maxsplit=1)
+    candidate_v5 = candidate_v5.replace(
         "    master_seed: 20260821\n", "    master_seed: 20260822\n", 1
     )
-    changed_path.write_text(prefix + marker + candidate_v4, encoding="utf-8")
+    changed_path.write_text(prefix + marker + candidate_v5, encoding="utf-8")
     changed = module.load_degradation_control(changed_path)
     first = module.apply_degradation(
         _neutral_reference(),
@@ -753,7 +797,7 @@ def preview_bundle(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     return module.build_degradation_preview(project_root)
 
 
-def test_candidate_v4_preview_has_dense_fragment_first_membership_and_exact_panels(
+def test_candidate_v5_preview_has_dense_fragment_first_membership_and_exact_panels(
     preview_bundle: dict[str, Any],
 ) -> None:
     artifact_root = Path(preview_bundle["artifact_root"])
@@ -853,7 +897,7 @@ def test_native_physical_preview_panels_publish_dimensions_labels_and_pixel_orig
         assert image.shape[0] == display["canvas_dimensions"]["height"]
 
 
-def test_candidate_v4_preview_summary_groups_each_fragment_before_the_next(
+def test_candidate_v5_preview_summary_groups_each_fragment_before_the_next(
     preview_bundle: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import IPython.display
@@ -876,7 +920,7 @@ def test_candidate_v4_preview_summary_groups_each_fragment_before_the_next(
         for value in displayed
     ]
     assert presentation == [
-        ("markdown", "## Paired candidate-4 degradation review"),
+        ("markdown", "## Paired candidate-5 degradation review"),
         ("markdown", "## Fragment 1 — `review-work-03-excerpt-01`"),
         ("markdown", "### x2"),
         ("markdown", "#### clean (`x2-clean`)"),
@@ -910,7 +954,7 @@ def test_candidate_v4_preview_summary_groups_each_fragment_before_the_next(
     ]
 
 
-def test_candidate_v4_preview_uses_only_semantically_complete_engraved_review_fixtures(
+def test_candidate_v5_preview_uses_only_semantically_complete_engraved_review_fixtures(
     preview_bundle: dict[str, Any],
 ) -> None:
     artifact_root = Path(preview_bundle["artifact_root"])
@@ -933,7 +977,7 @@ def test_candidate_v4_preview_uses_only_semantically_complete_engraved_review_fi
     assert "load_dataset" not in serialized
 
 
-def test_candidate_scoped_preview_reconciles_actual_panel_bytes_and_no_smb_candidate_v4(
+def test_candidate_scoped_preview_reconciles_actual_panel_bytes_and_no_smb_candidate_v5(
     preview_bundle: dict[str, Any],
 ) -> None:
     module = _degradation()
@@ -944,9 +988,9 @@ def test_candidate_scoped_preview_reconciles_actual_panel_bytes_and_no_smb_candi
     assert artifact_root.parts[-3:] == (
         "phase2-degradation-preview",
         "candidates",
-        "controlled-score-v4-candidate",
+        "controlled-score-v5-candidate",
     )
-    assert manifest["candidate_id"] == "controlled-score-v4-candidate"
+    assert manifest["candidate_id"] == "controlled-score-v5-candidate"
     assert len(manifest["panels"]) == 12
     assert [
         hashlib.sha256((artifact_root / panel["relative_path"]).read_bytes()).hexdigest()
@@ -975,23 +1019,31 @@ def test_candidate_scoped_preview_reconciles_actual_panel_bytes_and_no_smb_candi
         decision_path.unlink(missing_ok=True)
 
 
-def test_prior_evidence_integrity_is_unchanged_by_candidate_v4_publication(
+def test_prior_evidence_integrity_is_unchanged_by_candidate_v5_publication(
     preview_bundle: dict[str, Any],
 ) -> None:
+    module = _degradation()
     project_root = Path(preview_bundle["project_root"])
     candidates_root = project_root / "artifacts/phase2-degradation-preview/candidates"
     v1_root = candidates_root / "controlled-score-v1-candidate"
     v2_root = candidates_root / "controlled-score-v2-candidate"
     v3_root = candidates_root / "controlled-score-v3-candidate"
+    v4_root = candidates_root / "controlled-score-v4-candidate"
     assert _regular_inventory(v1_root) == _regular_inventory(V1_ARCHIVE_ROOT)
     assert _regular_inventory(v2_root) == _regular_inventory(V2_ARTIFACT_ROOT)
     assert _regular_inventory(v3_root) == _regular_inventory(V3_ARTIFACT_ROOT)
+    assert _regular_inventory(v4_root) == _regular_inventory(V4_ARTIFACT_ROOT)
+    for candidate_id, expected_sha256 in HISTORICAL_INVENTORY_SHA256S.items():
+        assert (
+            module.canonical_sha256(_regular_inventory(candidates_root / candidate_id))
+            == expected_sha256
+        )
     assert hashlib.sha256((v2_root / "degradation-decision.json").read_bytes()).hexdigest() == (
         "05a4f6e914241d94e376f59783182fdd61e996a67fd0bc91b7c345bb16e9d7e1"
     )
 
 
-def test_preview_publication_candidate_v4_has_exact_inventory_and_is_idempotent(
+def test_preview_publication_candidate_v5_has_exact_inventory_and_is_idempotent(
     preview_bundle: dict[str, Any],
 ) -> None:
     module = _degradation()
@@ -1019,7 +1071,7 @@ def test_preview_publication_candidate_v4_has_exact_inventory_and_is_idempotent(
     assert _regular_inventory(artifact_root) == before
 
 
-def test_preview_publication_candidate_v4_rejects_divergence_and_symlink(
+def test_preview_publication_candidate_v5_rejects_divergence_and_symlink(
     tmp_path: Path,
 ) -> None:
     module = _degradation()
@@ -1058,14 +1110,14 @@ def test_preview_publication_candidate_v4_rejects_divergence_and_symlink(
     _copy_preview_project(symlink_project)
     candidate_root = (
         symlink_project
-        / "artifacts/phase2-degradation-preview/candidates/controlled-score-v4-candidate"
+        / "artifacts/phase2-degradation-preview/candidates/controlled-score-v5-candidate"
     )
     candidate_root.symlink_to(artifact_root, target_is_directory=True)
     with pytest.raises(module.DegradationDecisionError, match="symlink"):
         module.build_degradation_preview(symlink_project)
 
 
-def test_working_copy_execute_is_ignored_and_source_only_stays_clean_candidate_v4(
+def test_working_copy_execute_is_ignored_and_source_only_stays_clean_candidate_v5(
     preview_bundle: dict[str, Any],
 ) -> None:
     module = _degradation()
@@ -1092,7 +1144,7 @@ def test_working_copy_execute_is_ignored_and_source_only_stays_clean_candidate_v
     assert working_path.is_relative_to(artifact_root)
 
 
-def test_working_copy_refresh_changes_only_the_review_presentation_candidate_v4(
+def test_working_copy_refresh_changes_only_the_review_presentation_candidate_v5(
     preview_bundle: dict[str, Any],
 ) -> None:
     module = _degradation()
@@ -1273,14 +1325,14 @@ def test_tracked_notebook_is_explicitly_non_executable_in_place() -> None:
     assert "No executeu aquest quadern rastrejat" in serialized_sources
 
 
-def test_notebook_sanitization_and_candidate_v4_review_wording() -> None:
+def test_notebook_sanitization_and_candidate_v5_review_wording() -> None:
     module = _degradation()
     source_path = PROJECT_ROOT / "notebooks/02-degradation-preview.ipynb"
     assert module.assert_notebook_source_clean(source_path)
     notebook = json.loads(source_path.read_text(encoding="utf-8"))
     sources = "\n".join("".join(cell.get("source", [])) for cell in notebook["cells"])
     for text in (
-        "controlled-score-v4-candidate",
+        "controlled-score-v5-candidate",
         "HR",
         "LR",
         "ROI",
@@ -1354,7 +1406,7 @@ def test_human_decision_validation_rejects_candidate_scoped_substitution(
     shutil.copytree(source_project, project_root)
     artifact_root = (
         project_root
-        / "artifacts/phase2-degradation-preview/candidates/controlled-score-v4-candidate"
+        / "artifacts/phase2-degradation-preview/candidates/controlled-score-v5-candidate"
     )
     manifest_path = artifact_root / "preview-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1438,12 +1490,16 @@ def test_reject_fail_closed_for_missing_stale_agent_authored_or_rejected_review(
         reconciliation_path=reconciliation,
     )
     assert blocked["status"] == "blocked-rejected"
+    assert blocked["next_step"] == (
+        "replan a predeclared three-level calibration bracket on additional non-SMB "
+        "authored fixtures, obtain a separate human selection, then repeat the protected gate"
+    )
     assert not frozen.exists()
     assert not reconciliation.exists()
     decision_path.unlink()
 
 
-def test_accept_freeze_allows_only_exact_candidate_v4_human_review(
+def test_accept_freeze_allows_only_exact_candidate_v5_human_review(
     tmp_path: Path, preview_bundle: dict[str, Any]
 ) -> None:
     module = _degradation()
@@ -1469,7 +1525,7 @@ def test_accept_freeze_allows_only_exact_candidate_v4_human_review(
     frozen_control = _yaml(frozen)
     module.validate_instance("degradation-control", frozen_control, version=2)
     assert frozen_control["status"] == "frozen"
-    assert frozen_control["candidate_id"] == "controlled-score-v4-candidate"
+    assert frozen_control["candidate_id"] == "controlled-score-v5-candidate"
     assert frozen_control["candidate_sha256"] == decision["candidate_sha256"]
     assert frozen_control["notebook_source_sha256"] == decision["notebook_source_sha256"]
     assert (
@@ -1581,3 +1637,35 @@ def test_candidate_v3_rejection_validates_read_only_after_kernelspec_display_ali
     assert not (tmp_path / "must-not-freeze.yaml").exists()
     assert not (tmp_path / "must-not-reconcile.json").exists()
     assert _regular_inventory(artifact_root) == before
+
+
+def test_candidate_v4_rejection_validates_read_only_before_candidate_v5_publication(
+    tmp_path: Path,
+) -> None:
+    module = _degradation()
+    before = _regular_inventory(V4_ARTIFACT_ROOT)
+    decision = module.validate_degradation_decision(
+        V4_ARTIFACT_ROOT / "degradation-decision.json",
+        V4_ARTIFACT_ROOT / "preview-manifest.json",
+    )
+
+    assert decision["reviewer"] == "Dani"
+    assert decision["reviewed_at"] == "2026-08-28T19:06:41Z"
+    assert decision["decision"] == "reject"
+    assert decision["rationale"].strip()
+    assert decision["authorship"] == "human-recorded-in-working-notebook"
+    assert decision["candidate_sha256"] == V4_CANONICAL_SHA256
+    assert module.canonical_sha256(decision) == (
+        "28fc5f2c0eb9da3176283d24e3b41253bfb19cc2909e8f378d5abaad14841bff"
+    )
+    result = module.freeze_degradation_control(
+        CONTROL_PATH,
+        V4_ARTIFACT_ROOT / "degradation-decision.json",
+        V4_ARTIFACT_ROOT / "preview-manifest.json",
+        tmp_path / "must-not-freeze.yaml",
+        reconciliation_path=tmp_path / "must-not-reconcile.json",
+    )
+    assert result["status"] == "blocked-rejected"
+    assert not (tmp_path / "must-not-freeze.yaml").exists()
+    assert not (tmp_path / "must-not-reconcile.json").exists()
+    assert _regular_inventory(V4_ARTIFACT_ROOT) == before
