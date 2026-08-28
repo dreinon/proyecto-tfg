@@ -19,8 +19,8 @@
     "control_id": {"const": "controlled-score-v1"},
     "version": {"const": 1},
     "status": {"const": "frozen"},
-    "candidate_id": {"const": "controlled-score-v4-candidate"},
-    "candidate_version": {"const": 4},
+    "candidate_id": {"const": "controlled-score-v5-candidate"},
+    "candidate_version": {"const": 5},
     "claim_boundary": {"const": "controlled-synthetic-only"},
     "master_seed": {"type": "integer", "minimum": 0},
     "candidate_sha256": {"$ref": "#/$defs/sha256"},
@@ -42,14 +42,15 @@
     "prior_candidate_evidence_inventory_sha256s": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["controlled-score-v1-candidate", "controlled-score-v2-candidate", "controlled-score-v3-candidate"],
+      "required": ["controlled-score-v1-candidate", "controlled-score-v2-candidate", "controlled-score-v3-candidate", "controlled-score-v4-candidate"],
       "properties": {
         "controlled-score-v1-candidate": {"$ref": "#/$defs/sha256"},
         "controlled-score-v2-candidate": {"$ref": "#/$defs/sha256"},
-        "controlled-score-v3-candidate": {"$ref": "#/$defs/sha256"}
+        "controlled-score-v3-candidate": {"$ref": "#/$defs/sha256"},
+        "controlled-score-v4-candidate": {"$ref": "#/$defs/sha256"}
       }
     },
-    "scientific_decision_record_id": {"const": "DEC-SCI-01"},
+    "scientific_decision_record_id": {"const": "DEC-SCI-02"},
     "scientific_decision_record_sha256": {"$ref": "#/$defs/sha256"},
     "image_contract": {"$ref": "#/$defs/candidate/properties/image_contract"},
     "alignment": {"$ref": "#/$defs/candidate/properties/alignment"},
@@ -178,8 +179,8 @@
               "required": ["type", "sigma", "kernel"],
               "properties": {
                 "type": {"const": "gaussian"},
-                "sigma": {"enum": [0.8, 1.2, 1.6, 1.8, 2.4, 3.0, 4.0]},
-                "kernel": {"enum": [7, 9, 11, 13, 17, 21, 29]}
+                "sigma": {"enum": [0.8, 1.2, 1.6, 1.8, 2.4, 3.0, 4.0, 6.0]},
+                "kernel": {"enum": [7, 9, 11, 13, 17, 21, 29, 43]}
               }
             }
           ]
@@ -202,7 +203,7 @@
               "type": "object", "additionalProperties": false,
               "required": ["quality", "sampling_factor", "progressive", "optimize"],
               "properties": {
-                "quality": {"enum": [20, 30, 40, 60, 75, 85]},
+                "quality": {"enum": [10, 20, 30, 40, 60, 75, 85]},
                 "sampling_factor": {"const": "4:4:4"},
                 "progressive": {"const": false},
                 "optimize": {"const": false}
