@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import stat
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 import yaml
@@ -22,6 +26,7 @@ from score_super_resolution.identities import canonical_sha256
 
 type MetricRecord = dict[str, Any]
 type AggregateBundle = dict[str, Any]
+type QualitativeSample = dict[str, Any]
 
 EXPECTED_CONDITIONS = (
     "x2-clean",
@@ -35,6 +40,18 @@ EXPECTED_METRICS = ("psnr-v1", "ssim-wang11-v1")
 EXPECTED_COLOURS = ("bt601-y-primary-v1", "rgb-diagnostic-v1")
 EXPECTED_DOMAINS = ("full-page-primary-v1", "scale-inner-crop-sensitivity-v1")
 _MAX_CONTROL_BYTES = 1_048_576
+NOTATION_TAXONOMY = (
+    "staff-line-removal",
+    "staff-line-breakage",
+    "staff-line-thickening",
+    "staff-line-hallucination",
+    "altered-symbol",
+    "unintended-join",
+    "unintended-separation",
+    "text-or-digit-corruption",
+    "plausible-musical-change",
+    "none-observed",
+)
 
 
 class EvaluationContractError(ValueError):
@@ -82,6 +99,15 @@ class AggregateControl:
     reconciliation_sha256: str
     raw_metric_input_sha256: str
     tuple_state_input_sha256: str
+
+
+@dataclass(frozen=True)
+class QualitativeControl:
+    """Frozen evaluation definition plus the pre-run qualitative membership."""
+
+    evaluation: EvaluationControl
+    experiment_id: str
+    core_membership: Mapping[str, Any]
 
 
 def _read_control(path: Path) -> dict[str, Any]:
@@ -274,6 +300,26 @@ def load_evaluation_control(path: Path) -> EvaluationControl:
     }
     if bootstrap != expected_bootstrap:
         raise EvaluationContractError("source bootstrap convention differs")
+    expected_qualitative = {
+        "selector_id": "qualitative-score-v1",
+        "seed": 20260822,
+        "core_panels_per_cell": 2,
+        "core_panel_count": 12,
+        "additional_panel_limit": 12,
+        "total_panel_limit": 24,
+        "prefer_distinct_sources": True,
+        "additional_order": [
+            "execution-failures",
+            "lowest-bicubic-primary-y-ssim",
+            "largest-absolute-method-minus-bicubic-primary-y-ssim",
+        ],
+        "round_robin_cells": True,
+        "stable_tie_break": "canonical-item-id",
+        "notation_taxonomy": list(NOTATION_TAXONOMY),
+        "severity_values": ["minor", "material", "unusable"],
+    }
+    if payload.get("qualitative") != expected_qualitative:
+        raise EvaluationContractError("qualitative sampling convention differs")
     return EvaluationControl(
         payload=payload,
         evaluation_control_id="evaluation-score-v1",
@@ -769,3 +815,494 @@ def aggregate_paired(
     except ContractValidationError as error:
         raise EvaluationContractError(str(error)) from error
     return bundle
+
+
+def _validated_fixture_manifest(manifest: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
+    try:
+        validate_instance("fixture-manifest", manifest, version=2)
+    except ContractValidationError as error:
+        raise EvaluationContractError(str(error)) from error
+    normalized = deepcopy(dict(manifest))
+    items = normalized["items"]
+    item_ids = [str(item["item_id"]) for item in items]
+    if len(item_ids) != len(set(item_ids)):
+        raise EvaluationContractError("fixture manifest contains duplicate item identities")
+    normalized["items"] = sorted(items, key=lambda item: str(item["item_id"]))
+    return normalized, canonical_sha256(normalized)
+
+
+def _panel(item: Mapping[str, Any], condition_id: str, methods: Sequence[str]) -> dict[str, Any]:
+    identity = {
+        "condition_id": condition_id,
+        "item_id": item["item_id"],
+        "source_group_id": item["source_group_id"],
+    }
+    return {
+        "panel_id": f"panel-{canonical_sha256(identity)}",
+        **identity,
+        "roi": deepcopy(item["roi"]),
+        "method_ids": list(methods),
+    }
+
+
+def _core_record(manifest: Mapping[str, Any], *, control: EvaluationControl) -> QualitativeSample:
+    normalized, fixture_sha256 = _validated_fixture_manifest(manifest)
+    items = normalized["items"]
+    panels: list[dict[str, Any]] = []
+    for condition_id in control.condition_ids:
+        ranked = sorted(
+            items,
+            key=lambda item: (
+                canonical_sha256(
+                    {
+                        "domain": "phase2-qualitative-core-v1",
+                        "seed": 20260822,
+                        "condition_id": condition_id,
+                        "item_id": item["item_id"],
+                        "source_group_id": item["source_group_id"],
+                    }
+                ),
+                str(item["item_id"]),
+            ),
+        )
+        selected = [ranked[0]]
+        distinct = next(
+            (
+                item
+                for item in ranked[1:]
+                if item["source_group_id"] != ranked[0]["source_group_id"]
+            ),
+            None,
+        )
+        if distinct is None:
+            raise EvaluationContractError("qualitative core cannot select two distinct sources")
+        selected.append(distinct)
+        panels.extend(_panel(item, condition_id, control.method_ids) for item in selected)
+
+    core_identity = {
+        "selector_id": "qualitative-score-v1",
+        "seed": 20260822,
+        "evaluation_control_sha256": control.sha256,
+        "fixture_manifest_sha256": fixture_sha256,
+        "panels": panels,
+    }
+    record: QualitativeSample = {
+        "schema_version": 2,
+        "record_type": "qualitative-sample",
+        "membership_stage": "pre-run-core",
+        "experiment_id": "phase2-fixture-v1",
+        "selector_id": "qualitative-score-v1",
+        "evaluation_control_id": control.evaluation_control_id,
+        "evaluation_control_sha256": control.sha256,
+        "fixture_manifest_id": normalized["manifest_id"],
+        "fixture_manifest_sha256": fixture_sha256,
+        "core_membership_id": f"core-{canonical_sha256(core_identity)}",
+        "core_panels": panels,
+        "additional_panels": [],
+    }
+    record["core_sha256"] = canonical_sha256(record)
+    try:
+        validate_instance("qualitative-sample", record, version=2)
+    except ContractValidationError as error:
+        raise EvaluationContractError(str(error)) from error
+    return record
+
+
+def _canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
+    return (
+        json.dumps(value, allow_nan=False, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+
+
+def _write_new_regular(path: Path, payload: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written < 1:
+                raise OSError("short qualitative membership write")
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _publish_atomic_identical(destination: Path, payload: bytes) -> None:
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.parent.is_symlink() or not destination.parent.is_dir():
+        raise EvaluationContractError("qualitative destination parent must be a regular directory")
+    if destination.exists() or destination.is_symlink():
+        if destination.is_symlink() or not destination.is_file():
+            raise EvaluationContractError("qualitative destination must be a regular file")
+        try:
+            existing = destination.read_bytes()
+        except OSError as error:
+            raise EvaluationContractError("qualitative destination cannot be read") from error
+        if existing != payload:
+            raise EvaluationContractError("qualitative destination contains different evidence")
+        return
+    temporary = destination.with_name(f".{destination.name}.tmp-{uuid4().hex}")
+    try:
+        _write_new_regular(temporary, payload)
+        os.replace(temporary, destination)
+        directory = os.open(destination.parent, os.O_RDONLY | os.O_CLOEXEC)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def publish_qualitative_core(
+    manifest: Mapping[str, Any], *, control: EvaluationControl, destination: Path
+) -> QualitativeSample:
+    """Freeze and durably publish the outcome-independent 12-panel membership."""
+
+    record = _core_record(manifest, control=control)
+    _publish_atomic_identical(destination, _canonical_json_bytes(record))
+    return record
+
+
+def _validate_core_membership(
+    core: Mapping[str, Any], *, evaluation: EvaluationControl, fixture_sha256: str
+) -> None:
+    try:
+        validate_instance("qualitative-sample", core, version=2)
+    except ContractValidationError as error:
+        raise EvaluationContractError(str(error)) from error
+    if core.get("membership_stage") != "pre-run-core":
+        raise EvaluationContractError("qualitative core is not pre-run evidence")
+    expected_digest = canonical_sha256(
+        {key: value for key, value in core.items() if key != "core_sha256"}
+    )
+    if core.get("core_sha256") != expected_digest:
+        raise EvaluationContractError("qualitative core digest differs from its content")
+    if (
+        core.get("evaluation_control_id") != evaluation.evaluation_control_id
+        or core.get("evaluation_control_sha256") != evaluation.sha256
+        or core.get("fixture_manifest_sha256") != fixture_sha256
+    ):
+        raise EvaluationContractError("qualitative core digest bindings differ")
+
+
+def _qualitative_inputs(
+    records: Sequence[Mapping[str, Any]],
+    states: Sequence[Mapping[str, Any]],
+    items: Sequence[Mapping[str, Any]],
+    evaluation: EvaluationControl,
+) -> tuple[
+    dict[tuple[str, str, str], Mapping[str, Any]],
+    dict[tuple[str, str, str], Mapping[str, Any]],
+    str,
+    str,
+]:
+    item_sources = {str(item["item_id"]): str(item["source_group_id"]) for item in items}
+    expected = {
+        (condition_id, item_id, method_id)
+        for condition_id in evaluation.condition_ids
+        for item_id in item_sources
+        for method_id in evaluation.method_ids
+    }
+    state_index: dict[tuple[str, str, str], Mapping[str, Any]] = {}
+    state_fields = {
+        "condition_id",
+        "item_id",
+        "source_group_id",
+        "method_id",
+        "state",
+        "attempt_count",
+        "exclusion_reason",
+        "failure_stage",
+    }
+    for state in states:
+        if not set(state) <= state_fields:
+            raise EvaluationContractError("qualitative tuple state contains unknown fields")
+        try:
+            key = (str(state["condition_id"]), str(state["item_id"]), str(state["method_id"]))
+            source = str(state["source_group_id"])
+            terminal = state["state"]
+            attempts = state["attempt_count"]
+        except KeyError as error:
+            raise EvaluationContractError("qualitative tuple state is incomplete") from error
+        if key in state_index:
+            raise EvaluationContractError("duplicate qualitative tuple state")
+        if key not in expected or source != item_sources[key[1]]:
+            raise EvaluationContractError("qualitative tuple state is outside the fixture matrix")
+        if terminal not in {"success", "failed", "excluded"}:
+            raise EvaluationContractError("qualitative tuple state is not terminal")
+        if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1:
+            raise EvaluationContractError("qualitative tuple attempt count is invalid")
+        reason = state.get("exclusion_reason")
+        if (terminal == "excluded") != isinstance(reason, str):
+            raise EvaluationContractError("qualitative tuple exclusion reason is inconsistent")
+        failure_stage = state.get("failure_stage")
+        if failure_stage is not None and (
+            terminal != "failed" or not isinstance(failure_stage, str) or not failure_stage
+        ):
+            raise EvaluationContractError("qualitative failure stage is inconsistent")
+        state_index[key] = state
+    if set(state_index) != expected:
+        raise EvaluationContractError(
+            "qualitative selection requires a complete method panel matrix"
+        )
+
+    metric_index: dict[tuple[str, str, str], Mapping[str, Any]] = {}
+    seen_result_ids: set[str] = set()
+    for record in records:
+        try:
+            validate_instance("metric-result", record, version=2)
+        except ContractValidationError as error:
+            raise EvaluationContractError(str(error)) from error
+        result_id = str(record["metric_result_id"])
+        if result_id in seen_result_ids:
+            raise EvaluationContractError("duplicate qualitative metric result")
+        seen_result_ids.add(result_id)
+        if (
+            record["metric_name"] == "ssim"
+            and record["colour_id"] == "bt601-y-primary-v1"
+            and record["domain_id"] == "full-page-primary-v1"
+        ):
+            key = (
+                str(record["condition_id"]),
+                str(record["item_id"]),
+                str(record["method_id"]),
+            )
+            if key in metric_index:
+                raise EvaluationContractError("duplicate primary qualitative metric")
+            metric_index[key] = record
+    for key, state in state_index.items():
+        if state["state"] == "success" and key not in metric_index:
+            raise EvaluationContractError("successful qualitative tuple lacks primary Y-SSIM")
+        if state["state"] != "success" and key in metric_index:
+            raise EvaluationContractError("non-success qualitative tuple has a primary metric")
+
+    metric_digest = canonical_sha256(sorted(records, key=lambda row: str(row["metric_result_id"])))
+    state_digest = canonical_sha256(
+        sorted(
+            states,
+            key=lambda row: (
+                str(row["condition_id"]),
+                str(row["source_group_id"]),
+                str(row["item_id"]),
+                str(row["method_id"]),
+            ),
+        )
+    )
+    return state_index, metric_index, metric_digest, state_digest
+
+
+def select_qualitative_panels(
+    records: Sequence[Mapping[str, Any]],
+    states: Sequence[Mapping[str, Any]],
+    manifest: Mapping[str, Any],
+    *,
+    control: QualitativeControl,
+) -> QualitativeSample:
+    """Apply the predeclared failure/extreme extension without changing the core."""
+
+    normalized, fixture_sha256 = _validated_fixture_manifest(manifest)
+    _validate_core_membership(
+        control.core_membership,
+        evaluation=control.evaluation,
+        fixture_sha256=fixture_sha256,
+    )
+    items = normalized["items"]
+    item_by_id = {str(item["item_id"]): item for item in items}
+    state_index, metric_index, metric_digest, state_digest = _qualitative_inputs(
+        records, states, items, control.evaluation
+    )
+    selected_keys = {
+        (str(panel["condition_id"]), str(panel["item_id"]))
+        for panel in control.core_membership["core_panels"]
+    }
+    additions: list[dict[str, Any]] = []
+
+    failures: list[tuple[str, str, str, str]] = []
+    for (condition_id, item_id, method_id), state in state_index.items():
+        if state["state"] == "failed" and (condition_id, item_id) not in selected_keys:
+            failures.append(
+                (
+                    condition_id,
+                    str(state.get("failure_stage") or "unspecified"),
+                    method_id,
+                    item_id,
+                )
+            )
+    condition_position = {
+        value: index for index, value in enumerate(control.evaluation.condition_ids)
+    }
+    method_position = {value: index for index, value in enumerate(control.evaluation.method_ids)}
+    failures.sort(
+        key=lambda value: (
+            condition_position[value[0]],
+            value[1],
+            method_position[value[2]],
+            value[3],
+        )
+    )
+    for condition_id, failure_stage, _method_id, item_id in failures:
+        key = (condition_id, item_id)
+        if key in selected_keys or len(additions) >= 12:
+            continue
+        additions.append(
+            {
+                **_panel(item_by_id[item_id], condition_id, control.evaluation.method_ids),
+                "selection_reason": "execution-failure",
+                "selection_order": len(additions) + 1,
+                "failure_stage": failure_stage,
+            }
+        )
+        selected_keys.add(key)
+
+    reference = control.evaluation.reference_method_id
+    queue: dict[tuple[str, str], list[tuple[float, str]]] = {}
+    for condition_id in control.evaluation.condition_ids:
+        lowest: list[tuple[float, str]] = []
+        largest: list[tuple[float, str]] = []
+        for item_id in sorted(item_by_id):
+            key = (condition_id, item_id)
+            if key in selected_keys:
+                continue
+            reference_record = metric_index.get((condition_id, item_id, reference))
+            if reference_record is None:
+                continue
+            reference_value = float(reference_record["value"])
+            lowest.append((reference_value, item_id))
+            differences = [
+                abs(
+                    float(metric_index[(condition_id, item_id, method_id)]["value"])
+                    - reference_value
+                )
+                for method_id in control.evaluation.method_ids
+                if method_id != reference and (condition_id, item_id, method_id) in metric_index
+            ]
+            if differences:
+                largest.append((-max(differences), item_id))
+        queue[(condition_id, "lowest-bicubic-primary-y-ssim")] = sorted(lowest)
+        queue[(condition_id, "largest-absolute-method-minus-bicubic-primary-y-ssim")] = sorted(
+            largest
+        )
+
+    reasons = (
+        "lowest-bicubic-primary-y-ssim",
+        "largest-absolute-method-minus-bicubic-primary-y-ssim",
+    )
+    while len(additions) < 12:
+        progress = False
+        for condition_id in control.evaluation.condition_ids:
+            for reason in reasons:
+                candidates = queue[(condition_id, reason)]
+                while candidates and (condition_id, candidates[0][1]) in selected_keys:
+                    candidates.pop(0)
+                if not candidates:
+                    continue
+                _score, item_id = candidates.pop(0)
+                additions.append(
+                    {
+                        **_panel(item_by_id[item_id], condition_id, control.evaluation.method_ids),
+                        "selection_reason": reason,
+                        "selection_order": len(additions) + 1,
+                        "failure_stage": None,
+                    }
+                )
+                selected_keys.add((condition_id, item_id))
+                progress = True
+                break
+            if len(additions) >= 12:
+                break
+        if not progress:
+            break
+
+    all_panels = [*control.core_membership["core_panels"], *additions]
+    displayable = 0
+    for panel in all_panels:
+        condition_id = str(panel["condition_id"])
+        item_id = str(panel["item_id"])
+        if all(
+            state_index[(condition_id, item_id, method_id)]["state"] == "success"
+            for method_id in control.evaluation.method_ids
+        ):
+            displayable += 1
+    final: QualitativeSample = {
+        **deepcopy(dict(control.core_membership)),
+        "membership_stage": "final",
+        "experiment_id": control.experiment_id,
+        "additional_panels": additions,
+        "raw_metric_input_sha256": metric_digest,
+        "tuple_state_input_sha256": state_digest,
+        "denominators": {
+            "requested_panels": len(all_panels),
+            "displayable_panels": displayable,
+            "reviewed_panels": 0,
+            "skipped_panels": 0,
+            "failed_panels": len(all_panels) - displayable,
+        },
+    }
+    final_identity = {key: value for key, value in final.items() if key != "core_sha256"}
+    final["final_membership_id"] = f"membership-{canonical_sha256(final_identity)}"
+    final["final_membership_sha256"] = canonical_sha256(final)
+    try:
+        validate_instance("qualitative-sample", final, version=2)
+    except ContractValidationError as error:
+        raise EvaluationContractError(str(error)) from error
+    return final
+
+
+def _validate_human_cell(value: Any, *, field: str, allow_empty: bool = False) -> str:
+    if not isinstance(value, str) or (not allow_empty and not value.strip()):
+        raise EvaluationContractError(f"notation {field} must be non-empty text")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise EvaluationContractError(f"notation {field} contains control characters")
+    if value.lstrip().startswith(("=", "+", "-", "@")):
+        raise EvaluationContractError(f"notation {field} contains a spreadsheet-leading formula")
+    return value
+
+
+def validate_notation_review(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate one closed, contradiction-free, spreadsheet-safe notation review."""
+
+    candidate = deepcopy(dict(record))
+    labels = candidate.get("labels")
+    if not isinstance(labels, list) or not labels:
+        raise EvaluationContractError("notation labels must use the closed taxonomy")
+    if len(labels) != len(set(labels)) or not set(labels) <= set(NOTATION_TAXONOMY):
+        raise EvaluationContractError(
+            "notation labels contain duplicates or an unknown taxonomy value"
+        )
+    none_observed = "none-observed" in labels
+    if none_observed and labels != ["none-observed"]:
+        raise EvaluationContractError("none-observed is mutually exclusive with failure labels")
+    severity = candidate.get("severity")
+    rationale = _validate_human_cell(
+        candidate.get("rationale"), field="rationale", allow_empty=none_observed
+    )
+    _validate_human_cell(candidate.get("reviewer"), field="reviewer")
+    if none_observed:
+        if severity is not None:
+            raise EvaluationContractError("reviewed none-observed must not have severity")
+    else:
+        if severity not in {"minor", "material", "unusable"}:
+            raise EvaluationContractError("notation failure requires a closed severity")
+        if not rationale.strip():
+            raise EvaluationContractError("notation failure requires a rationale")
+    reviewed_at = candidate.get("reviewed_at")
+    if not isinstance(reviewed_at, str) or not reviewed_at.endswith("Z"):
+        raise EvaluationContractError("notation reviewed_at must be canonical UTC")
+    try:
+        parsed = datetime.fromisoformat(f"{reviewed_at[:-1]}+00:00")
+    except ValueError as error:
+        raise EvaluationContractError("notation reviewed_at must be canonical UTC") from error
+    if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != reviewed_at:
+        raise EvaluationContractError("notation reviewed_at must be canonical UTC")
+    try:
+        validate_instance("notation-review", candidate, version=2)
+    except ContractValidationError as error:
+        raise EvaluationContractError(str(error)) from error
+    return candidate

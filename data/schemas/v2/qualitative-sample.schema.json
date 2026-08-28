@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v2:qualitative-sample",
+  "title": "Bounded qualitative membership v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "membership_stage", "experiment_id", "selector_id",
+    "evaluation_control_id", "evaluation_control_sha256", "fixture_manifest_id",
+    "fixture_manifest_sha256", "core_membership_id", "core_sha256", "core_panels",
+    "additional_panels"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "record_type": {"const": "qualitative-sample"},
+    "membership_stage": {"enum": ["pre-run-core", "final"]},
+    "experiment_id": {"$ref": "#/$defs/stable_id"},
+    "selector_id": {"const": "qualitative-score-v1"},
+    "evaluation_control_id": {"const": "evaluation-score-v1"},
+    "evaluation_control_sha256": {"$ref": "#/$defs/sha256"},
+    "fixture_manifest_id": {"const": "phase2-score-fixtures-v1"},
+    "fixture_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "core_membership_id": {"$ref": "#/$defs/stable_id"},
+    "core_sha256": {"$ref": "#/$defs/sha256"},
+    "core_panels": {"type": "array", "minItems": 12, "maxItems": 12, "items": {"$ref": "#/$defs/core_panel"}},
+    "additional_panels": {"type": "array", "maxItems": 12, "items": {"$ref": "#/$defs/additional_panel"}},
+    "raw_metric_input_sha256": {"$ref": "#/$defs/sha256"},
+    "tuple_state_input_sha256": {"$ref": "#/$defs/sha256"},
+    "denominators": {
+      "type": "object", "additionalProperties": false,
+      "required": ["requested_panels", "displayable_panels", "reviewed_panels", "skipped_panels", "failed_panels"],
+      "properties": {
+        "requested_panels": {"type": "integer", "minimum": 12, "maximum": 24},
+        "displayable_panels": {"type": "integer", "minimum": 0, "maximum": 24},
+        "reviewed_panels": {"type": "integer", "minimum": 0, "maximum": 24},
+        "skipped_panels": {"type": "integer", "minimum": 0, "maximum": 24},
+        "failed_panels": {"type": "integer", "minimum": 0, "maximum": 24}
+      }
+    },
+    "final_membership_id": {"$ref": "#/$defs/stable_id"},
+    "final_membership_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "oneOf": [
+    {
+      "properties": {"membership_stage": {"const": "pre-run-core"}, "additional_panels": {"maxItems": 0}},
+      "not": {"anyOf": [
+        {"required": ["raw_metric_input_sha256"]}, {"required": ["tuple_state_input_sha256"]},
+        {"required": ["denominators"]}, {"required": ["final_membership_id"]},
+        {"required": ["final_membership_sha256"]}
+      ]}
+    },
+    {
+      "properties": {"membership_stage": {"const": "final"}},
+      "required": [
+        "raw_metric_input_sha256", "tuple_state_input_sha256", "denominators",
+        "final_membership_id", "final_membership_sha256"
+      ]
+    }
+  ],
+  "$defs": {
+    "stable_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "condition_id": {"enum": ["x2-clean", "x2-moderate", "x2-strong", "x4-clean", "x4-moderate", "x4-strong"]},
+    "method_ids": {
+      "type": "array", "prefixItems": [
+        {"const": "nearest-opencv-exact-v1"}, {"const": "bilinear-opencv-exact-v1"}, {"const": "bicubic-opencv-v1"}
+      ], "minItems": 3, "maxItems": 3
+    },
+    "roi": {
+      "type": "object", "additionalProperties": false, "required": ["x", "y", "width", "height", "purpose"],
+      "properties": {
+        "x": {"type": "integer", "minimum": 0}, "y": {"type": "integer", "minimum": 0},
+        "width": {"type": "integer", "minimum": 16}, "height": {"type": "integer", "minimum": 16},
+        "purpose": {"type": "string", "minLength": 1}
+      }
+    },
+    "core_panel": {
+      "type": "object", "additionalProperties": false,
+      "required": ["panel_id", "condition_id", "item_id", "source_group_id", "roi", "method_ids"],
+      "properties": {
+        "panel_id": {"$ref": "#/$defs/stable_id"}, "condition_id": {"$ref": "#/$defs/condition_id"},
+        "item_id": {"$ref": "#/$defs/stable_id"}, "source_group_id": {"$ref": "#/$defs/stable_id"},
+        "roi": {"$ref": "#/$defs/roi"}, "method_ids": {"$ref": "#/$defs/method_ids"}
+      }
+    },
+    "additional_panel": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "panel_id", "condition_id", "item_id", "source_group_id", "roi", "method_ids",
+        "selection_reason", "selection_order", "failure_stage"
+      ],
+      "properties": {
+        "panel_id": {"$ref": "#/$defs/stable_id"}, "condition_id": {"$ref": "#/$defs/condition_id"},
+        "item_id": {"$ref": "#/$defs/stable_id"}, "source_group_id": {"$ref": "#/$defs/stable_id"},
+        "roi": {"$ref": "#/$defs/roi"}, "method_ids": {"$ref": "#/$defs/method_ids"},
+        "selection_reason": {"enum": [
+          "execution-failure", "lowest-bicubic-primary-y-ssim",
+          "largest-absolute-method-minus-bicubic-primary-y-ssim"
+        ]},
+        "selection_order": {"type": "integer", "minimum": 1, "maximum": 12},
+        "failure_stage": {"type": ["string", "null"], "minLength": 1}
+      }
+    }
+  }
+}
