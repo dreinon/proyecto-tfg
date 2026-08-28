@@ -14,6 +14,7 @@ from score_super_resolution.degradation import DegradationResult
 
 PROJECT_ROOT = Path(__file__).parents[1]
 EVALUATION_CONTROL_PATH = PROJECT_ROOT / "configs/evaluation/evaluation-score-v1.yaml"
+FIXTURE_MANIFEST_PATH = PROJECT_ROOT / "tests/fixtures/phase2/fixture-manifest-v1.yaml"
 
 
 def _control() -> dict[str, object]:
@@ -730,3 +731,227 @@ def test_aggregate_retains_a_fully_failed_comparison_without_fabricating_statist
         }
         assert comparison["bootstrap"]["state"] == "unavailable_insufficient_sources"
     validate_instance("aggregate-result", bundle, version=2)
+
+
+def _fixture_manifest() -> dict[str, object]:
+    loaded = yaml.safe_load(FIXTURE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert isinstance(loaded, dict)
+    return loaded
+
+
+def test_qualitative_core_is_exactly_two_outcome_independent_panels_per_cell(
+    tmp_path: Path,
+) -> None:
+    from score_super_resolution.evaluation import (
+        load_evaluation_control,
+        publish_qualitative_core,
+    )
+
+    destination = tmp_path / "qualitative-core-membership.json"
+    control = load_evaluation_control(EVALUATION_CONTROL_PATH)
+    manifest = _fixture_manifest()
+    record = publish_qualitative_core(manifest, control=control, destination=destination)
+
+    assert destination.exists()
+    assert json.loads(destination.read_text(encoding="utf-8")) == record
+    assert record["membership_stage"] == "pre-run-core"
+    assert record["experiment_id"] == "phase2-fixture-v1"
+    assert record["selector_id"] == "qualitative-score-v1"
+    assert record["evaluation_control_id"] == "evaluation-score-v1"
+    assert len(record["core_panels"]) == 12
+    assert record["additional_panels"] == []
+    for condition_id in _control()["condition_order"]:
+        panels = [panel for panel in record["core_panels"] if panel["condition_id"] == condition_id]
+        assert len(panels) == 2
+        assert len({panel["source_group_id"] for panel in panels}) == 2
+        for panel in panels:
+            item = next(item for item in manifest["items"] if item["item_id"] == panel["item_id"])
+            assert panel["roi"] == item["roi"]
+            assert panel["method_ids"] == list(control.method_ids)
+    forbidden = {"metric_id", "value", "status", "ranking", "attempt", "denominators"}
+    assert not forbidden & set(record)
+    assert all(not forbidden & set(panel) for panel in record["core_panels"])
+    validate_instance("qualitative-sample", record, version=2)
+
+    reordered = copy.deepcopy(manifest)
+    reordered["items"] = list(reversed(reordered["items"]))
+    second = publish_qualitative_core(
+        reordered, control=control, destination=tmp_path / "reordered.json"
+    )
+    assert second == record
+    assert publish_qualitative_core(manifest, control=control, destination=destination) == record
+
+
+def _published_core(tmp_path: Path) -> tuple[dict[str, object], object]:
+    from score_super_resolution.evaluation import (
+        load_evaluation_control,
+        publish_qualitative_core,
+    )
+
+    evaluation = load_evaluation_control(EVALUATION_CONTROL_PATH)
+    core = publish_qualitative_core(
+        _fixture_manifest(), control=evaluation, destination=tmp_path / "core.json"
+    )
+    return core, evaluation
+
+
+def test_qualitative_selector_prioritizes_failures_then_round_robin_extremes(
+    tmp_path: Path,
+) -> None:
+    from score_super_resolution.evaluation import QualitativeControl, select_qualitative_panels
+
+    core, evaluation = _published_core(tmp_path)
+    records, states = _synthetic_metric_records(sources=4)
+    core_keys = {(panel["condition_id"], panel["item_id"]) for panel in core["core_panels"]}
+    failure_state = next(
+        state
+        for state in states
+        if (state["condition_id"], state["item_id"]) not in core_keys
+        and state["method_id"] == "nearest-opencv-exact-v1"
+    )
+    failure_state["state"] = "failed"
+    failure_state["failure_stage"] = "baseline"
+    records = [
+        record
+        for record in records
+        if not (
+            record["condition_id"] == failure_state["condition_id"]
+            and record["item_id"] == failure_state["item_id"]
+            and record["method_id"] == failure_state["method_id"]
+        )
+    ]
+    control = QualitativeControl(
+        evaluation=evaluation,
+        experiment_id="experiment-fixture-v1",
+        core_membership=core,
+    )
+    sample = select_qualitative_panels(
+        records,
+        states,
+        _fixture_manifest(),
+        control=control,
+    )
+    validate_instance("qualitative-sample", sample, version=2)
+    assert sample["membership_stage"] == "final"
+    assert sample["core_membership_id"] == core["core_membership_id"]
+    assert sample["core_sha256"] == core["core_sha256"]
+    assert len(sample["core_panels"]) == 12
+    assert len(sample["additional_panels"]) <= 12
+    assert sample["additional_panels"][0]["selection_reason"] == "execution-failure"
+    assert sample["additional_panels"][0]["failure_stage"] == "baseline"
+    final_keys = [
+        (panel["condition_id"], panel["item_id"])
+        for panel in [*sample["core_panels"], *sample["additional_panels"]]
+    ]
+    assert len(final_keys) == len(set(final_keys))
+    assert sample["denominators"] == {
+        "requested_panels": len(final_keys),
+        "displayable_panels": len(final_keys) - 1,
+        "reviewed_panels": 0,
+        "skipped_panels": 0,
+        "failed_panels": 1,
+    }
+    assert {panel["selection_reason"] for panel in sample["additional_panels"]} <= {
+        "execution-failure",
+        "lowest-bicubic-primary-y-ssim",
+        "largest-absolute-method-minus-bicubic-primary-y-ssim",
+    }
+
+    reordered = select_qualitative_panels(
+        list(reversed(records)),
+        list(reversed(states)),
+        copy.deepcopy(_fixture_manifest()),
+        control=control,
+    )
+    assert reordered == sample
+
+
+def test_qualitative_selector_rejects_incomplete_method_panels_and_core_drift(
+    tmp_path: Path,
+) -> None:
+    from score_super_resolution.evaluation import (
+        EvaluationContractError,
+        QualitativeControl,
+        select_qualitative_panels,
+    )
+
+    core, evaluation = _published_core(tmp_path)
+    records, states = _synthetic_metric_records(sources=4)
+    control = QualitativeControl(
+        evaluation=evaluation,
+        experiment_id="experiment-fixture-v1",
+        core_membership=core,
+    )
+    with pytest.raises(EvaluationContractError, match="complete method panel"):
+        select_qualitative_panels(records, states[:-1], _fixture_manifest(), control=control)
+
+    corrupted = copy.deepcopy(core)
+    corrupted["core_panels"][0]["roi"]["x"] += 1
+    with pytest.raises(EvaluationContractError, match="core digest"):
+        select_qualitative_panels(
+            records,
+            states,
+            _fixture_manifest(),
+            control=QualitativeControl(
+                evaluation=evaluation,
+                experiment_id="experiment-fixture-v1",
+                core_membership=corrupted,
+            ),
+        )
+
+
+def _notation_review(**overrides: object) -> dict[str, object]:
+    record: dict[str, object] = {
+        "schema_version": 2,
+        "record_type": "notation-review",
+        "review_id": "review-panel-01",
+        "sample_membership_id": "membership-fixture-v1",
+        "sample_sha256": "d" * 64,
+        "panel_id": "panel-fixture-01",
+        "reviewer": "Dani",
+        "reviewed_at": "2026-08-29T10:00:00Z",
+        "labels": ["none-observed"],
+        "severity": None,
+        "rationale": "",
+    }
+    record.update(overrides)
+    return record
+
+
+def test_notation_taxonomy_distinguishes_reviewed_none_and_closed_failures() -> None:
+    from score_super_resolution.evaluation import validate_notation_review
+
+    none = validate_notation_review(_notation_review())
+    assert none["labels"] == ["none-observed"]
+    failure = validate_notation_review(
+        _notation_review(
+            labels=["staff-line-breakage", "unintended-separation"],
+            severity="material",
+            rationale="A staff segment and one stem connection are visibly interrupted.",
+        )
+    )
+    assert failure["severity"] == "material"
+    validate_instance("notation-review", failure, version=2)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ({"labels": ["none-observed", "altered-symbol"]}, "none-observed"),
+        ({"labels": ["unknown-failure"], "severity": "material", "rationale": "x"}, "taxonomy"),
+        ({"labels": ["altered-symbol"], "severity": None, "rationale": "x"}, "severity"),
+        ({"labels": ["altered-symbol"], "severity": "minor", "rationale": ""}, "rationale"),
+        ({"reviewer": '=HYPERLINK("https://invalid")'}, "spreadsheet"),
+        (
+            {"rationale": "+unsafe", "labels": ["altered-symbol"], "severity": "minor"},
+            "spreadsheet",
+        ),
+    ],
+)
+def test_notation_review_rejects_contradictions_unknowns_and_unsafe_cells(
+    mutation: dict[str, object], message: str
+) -> None:
+    from score_super_resolution.evaluation import EvaluationContractError, validate_notation_review
+
+    with pytest.raises(EvaluationContractError, match=message):
+        validate_notation_review(_notation_review(**mutation))
