@@ -1,0 +1,147 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "urn:score-super-resolution:schema:v2:resource-result",
+    "title": "Full-page batch-one resource result v2",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "schema_version",
+        "record_type",
+        "resource_result_id",
+        "evaluation_control_id",
+        "degradation_control_sha256",
+        "condition_id",
+        "method_id",
+        "input_pixel_sha256",
+        "input_dimensions",
+        "output_dimensions",
+        "protocol",
+        "latency",
+        "throughput",
+        "memory",
+        "model_parameters",
+        "model_bytes",
+        "environment"
+    ],
+    "properties": {
+        "schema_version": {"const": 2},
+        "record_type": {"const": "resource-result"},
+        "resource_result_id": {"$ref": "#/$defs/stable_id"},
+        "evaluation_control_id": {"const": "evaluation-score-v1"},
+        "degradation_control_sha256": {"$ref": "#/$defs/sha256"},
+        "condition_id": {
+            "enum": ["x2-clean", "x2-moderate", "x2-strong", "x4-clean", "x4-moderate", "x4-strong"]
+        },
+        "method_id": {
+            "enum": ["nearest-opencv-exact-v1", "bilinear-opencv-exact-v1", "bicubic-opencv-v1"]
+        },
+        "input_pixel_sha256": {"$ref": "#/$defs/sha256"},
+        "input_dimensions": {"$ref": "#/$defs/dimensions"},
+        "output_dimensions": {"$ref": "#/$defs/dimensions"},
+        "protocol": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "device",
+                "page_mode",
+                "batch_size",
+                "tiling",
+                "warmup_repetitions",
+                "timed_repetitions",
+                "timer",
+                "output_encoding_timed"
+            ],
+            "properties": {
+                "device": {"const": "cpu"},
+                "page_mode": {"const": "full-page"},
+                "batch_size": {"const": 1},
+                "tiling": {"const": "not_applicable"},
+                "warmup_repetitions": {"const": 1},
+                "timed_repetitions": {"const": 5},
+                "timer": {"const": "perf_counter_ns"},
+                "output_encoding_timed": {"const": false}
+            }
+        },
+        "latency": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["unit", "repeats_ns", "median_ns", "q1_ns", "q3_ns"],
+            "properties": {
+                "unit": {"const": "ns"},
+                "repeats_ns": {
+                    "type": "array",
+                    "minItems": 5,
+                    "maxItems": 5,
+                    "items": {"type": "integer", "minimum": 1}
+                },
+                "median_ns": {"type": "number", "exclusiveMinimum": 0},
+                "q1_ns": {"type": "number", "exclusiveMinimum": 0},
+                "q3_ns": {"type": "number", "exclusiveMinimum": 0}
+            }
+        },
+        "throughput": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["unit", "value"],
+            "properties": {
+                "unit": {"const": "pages_per_second"},
+                "value": {"type": "number", "exclusiveMinimum": 0}
+            }
+        },
+        "memory": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["measurement", "unit", "baseline_rss", "peak_rss"],
+            "properties": {
+                "measurement": {"const": "isolated_linux_child_peak_rss"},
+                "unit": {"const": "KiB"},
+                "baseline_rss": {"type": "integer", "minimum": 1},
+                "peak_rss": {"type": "integer", "minimum": 1}
+            }
+        },
+        "model_parameters": {"$ref": "#/$defs/not_applicable"},
+        "model_bytes": {"$ref": "#/$defs/not_applicable"},
+        "environment": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "python_version",
+                "platform",
+                "machine",
+                "cpu_model",
+                "logical_cpu_count",
+                "opencv_version",
+                "opencv_build_sha256"
+            ],
+            "properties": {
+                "python_version": {"type": "string", "minLength": 1},
+                "platform": {"const": "Linux"},
+                "machine": {"type": "string", "minLength": 1},
+                "cpu_model": {"type": "string", "minLength": 1},
+                "logical_cpu_count": {"type": "integer", "minimum": 1},
+                "opencv_version": {"type": "string", "minLength": 1},
+                "opencv_build_sha256": {"$ref": "#/$defs/sha256"}
+            }
+        }
+    },
+    "$defs": {
+        "stable_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "dimensions": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["width", "height", "channels"],
+            "properties": {
+                "width": {"type": "integer", "minimum": 1},
+                "height": {"type": "integer", "minimum": 1},
+                "channels": {"const": 3}
+            }
+        },
+        "not_applicable": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["state", "value"],
+            "properties": {"state": {"const": "not_applicable"}, "value": {"type": "null"}}
+        }
+    }
+}

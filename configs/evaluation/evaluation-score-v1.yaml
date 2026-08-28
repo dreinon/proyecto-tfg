@@ -1,0 +1,132 @@
+schema_version: 1
+record_type: evaluation-control
+evaluation_control_id: evaluation-score-v1
+status: frozen
+claim_boundary: fixture-instrumentation-only
+degradation_control:
+  control_id: controlled-score-v1
+  sha256: 6a61d9a28d2524c9b4e8b2138a23d93bb6fe10e37b8cd1d439cb35dcbdcd9949
+condition_order:
+- x2-clean
+- x2-moderate
+- x2-strong
+- x4-clean
+- x4-moderate
+- x4-strong
+methods:
+- method_id: nearest-opencv-exact-v1
+  interpolation: INTER_NEAREST_EXACT
+  role: transparent-low-complexity-reference
+- method_id: bilinear-opencv-exact-v1
+  interpolation: INTER_LINEAR_EXACT
+  role: transparent-smooth-reference
+- method_id: bicubic-opencv-v1
+  interpolation: INTER_CUBIC
+  role: principal-simple-reference
+image_contract:
+  mode: RGB
+  dtype: uint8
+  range: [0, 255]
+  aligned_shape_required: true
+metrics:
+  direction:
+    reference: aligned-hr
+    reconstruction: method-output
+  colour_spaces:
+  - colour_id: bt601-y-primary-v1
+    role: primary
+    transform: skimage-rgb2ycbcr-float64-rgb-div-255-y-channel
+    nominal_range: [16.0, 235.0]
+    data_range: 255.0
+  - colour_id: rgb-diagnostic-v1
+    role: diagnostic
+    transform: float64-rgb-0-255
+    data_range: 255.0
+    channel_axis: -1
+  metric_definitions:
+  - metric_id: psnr-v1
+    kind: psnr
+    direction: higher-is-better
+    implementation: skimage.metrics.peak_signal_noise_ratio
+    exact_match_state: positive_infinity
+  - metric_id: ssim-wang11-v1
+    kind: ssim
+    direction: higher-is-better
+    implementation: skimage.metrics.structural_similarity
+    gaussian_weights: true
+    sigma: 1.5
+    window_size: 11
+    use_sample_covariance: false
+    k1: 0.01
+    k2: 0.03
+  domains:
+  - domain_id: full-page-primary-v1
+    role: primary
+    crop_hr_pixels_per_edge: 0
+  - domain_id: scale-inner-crop-sensitivity-v1
+    role: sensitivity
+    crop_hr_pixels_per_edge: scale
+aggregation:
+  independent_unit: source_group_id
+  page_pair_key: item_id
+  reference_method_id: bicubic-opencv-v1
+  page_pairing: complete-method-reference-intersection
+  within_source: arithmetic-mean-of-paired-pages
+  dispersion:
+  - sample-standard-deviation
+  - median
+  - linear-q1
+  - linear-q3
+  - iqr
+  p_values: forbidden
+bootstrap:
+  generator: PCG64
+  seed: 20260823
+  repetitions: 10000
+  resampling_unit: source_group_id
+  statistic: mean-paired-difference
+  interval: percentile
+  confidence_level: 0.95
+  quantile_method: linear
+  minimum_sources: 2
+resource:
+  device: cpu
+  page_mode: full-page
+  batch_size: 1
+  tiling: not_applicable
+  warmup_repetitions: 1
+  timed_repetitions: 5
+  timer: perf_counter_ns
+  output_encoding_timed: false
+  process_isolation: linux-child
+  peak_rss_measurement: ru_maxrss
+  peak_rss_unit: KiB
+  timeout_seconds: 30
+  model_parameters: not_applicable
+  model_bytes: not_applicable
+qualitative:
+  selector_id: qualitative-score-v1
+  seed: 20260822
+  core_panels_per_cell: 2
+  core_panel_count: 12
+  additional_panel_limit: 12
+  total_panel_limit: 24
+  prefer_distinct_sources: true
+  additional_order:
+  - execution-failures
+  - lowest-bicubic-primary-y-ssim
+  - largest-absolute-method-minus-bicubic-primary-y-ssim
+  round_robin_cells: true
+  stable_tie_break: canonical-item-id
+  notation_taxonomy:
+  - staff-line-removal
+  - staff-line-breakage
+  - staff-line-thickening
+  - staff-line-hallucination
+  - altered-symbol
+  - unintended-join
+  - unintended-separation
+  - text-or-digit-corruption
+  - plausible-musical-change
+  - none-observed
+  severity_values: [minor, material, unusable]

@@ -12,7 +12,6 @@ import yaml
 from score_super_resolution.contracts import ContractValidationError, validate_instance
 from score_super_resolution.degradation import DegradationResult
 
-
 PROJECT_ROOT = Path(__file__).parents[1]
 EVALUATION_CONTROL_PATH = PROJECT_ROOT / "configs/evaluation/evaluation-score-v1.yaml"
 
@@ -154,7 +153,9 @@ def test_baseline_method_contract_rejects_unknown_identity_or_shape(
         run_baseline(method_id, _lr_page(), target_shape=target_shape, condition_id=condition_id)
 
 
-def test_baseline_method_contract_rejects_non_positive_timing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_baseline_method_contract_rejects_non_positive_timing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import score_super_resolution.baselines as module
 
     values = iter((100, 100))
@@ -208,7 +209,10 @@ def test_resource_protocol_is_full_page_batch_one_and_schema_valid() -> None:
 
 
 def test_resource_protocol_rejects_corrupted_input_control_environment_and_units() -> None:
-    from score_super_resolution.resources import ResourceMeasurementError, measure_baseline_resources
+    from score_super_resolution.resources import (
+        ResourceMeasurementError,
+        measure_baseline_resources,
+    )
 
     valid_environment = {
         "python_version": "3.12.12",
