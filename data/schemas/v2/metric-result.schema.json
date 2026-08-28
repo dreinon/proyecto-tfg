@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v2:metric-result",
+  "title": "Per-item fidelity metric result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "metric_result_id", "experiment_id", "item_id",
+    "source_group_id", "condition_id", "method_id", "reconstruction_id", "reference_id",
+    "metric_id", "metric_name", "role", "colour_id", "domain_id", "direction", "parameters",
+    "value_state", "value", "exact_match", "reference_pixel_sha256",
+    "reconstruction_pixel_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "record_type": {"const": "metric-result"},
+    "metric_result_id": {"$ref": "#/$defs/stable_id"},
+    "experiment_id": {"$ref": "#/$defs/stable_id"},
+    "item_id": {"$ref": "#/$defs/stable_id"},
+    "source_group_id": {"$ref": "#/$defs/stable_id"},
+    "condition_id": {"$ref": "#/$defs/condition_id"},
+    "method_id": {"$ref": "#/$defs/method_id"},
+    "reconstruction_id": {"$ref": "#/$defs/stable_id"},
+    "reference_id": {"$ref": "#/$defs/stable_id"},
+    "metric_id": {"$ref": "#/$defs/stable_id"},
+    "metric_name": {"enum": ["psnr", "ssim"]},
+    "role": {"enum": ["primary", "diagnostic"]},
+    "colour_id": {"enum": ["bt601-y-primary-v1", "rgb-diagnostic-v1"]},
+    "domain_id": {"enum": ["full-page-primary-v1", "scale-inner-crop-sensitivity-v1"]},
+    "direction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["reference", "reconstruction"],
+      "properties": {"reference": {"const": "aligned-hr"}, "reconstruction": {"const": "method-output"}}
+    },
+    "parameters": {
+      "type": "object", "minProperties": 1,
+      "additionalProperties": {"type": ["string", "number", "integer", "boolean", "null"]}
+    },
+    "value_state": {"enum": ["finite", "positive_infinity"]},
+    "value": {"type": ["number", "null"]},
+    "exact_match": {"type": "boolean"},
+    "reference_pixel_sha256": {"$ref": "#/$defs/sha256"},
+    "reconstruction_pixel_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "stable_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "condition_id": {"enum": ["x2-clean", "x2-moderate", "x2-strong", "x4-clean", "x4-moderate", "x4-strong"]},
+    "method_id": {"enum": ["nearest-opencv-exact-v1", "bilinear-opencv-exact-v1", "bicubic-opencv-v1"]}
+  }
+}

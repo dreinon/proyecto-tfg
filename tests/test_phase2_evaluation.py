@@ -330,6 +330,17 @@ def test_metric_control_freezes_primary_and_diagnostic_roles() -> None:
     assert len(control.sha256) == 64
 
 
+def test_metric_control_rejects_convention_mutation_before_calculation(tmp_path: Path) -> None:
+    from score_super_resolution.evaluation import EvaluationContractError, load_evaluation_control
+
+    mutated = copy.deepcopy(_control())
+    mutated["metrics"]["metric_definitions"][1]["use_sample_covariance"] = True
+    path = tmp_path / "evaluation.yaml"
+    path.write_text(yaml.safe_dump(mutated, sort_keys=False), encoding="utf-8")
+    with pytest.raises(EvaluationContractError, match="metric convention"):
+        load_evaluation_control(path)
+
+
 def test_metric_bt601_y_anchors_and_exact_match_state_are_explicit() -> None:
     from score_super_resolution.evaluation import bt601_y, compute_fidelity
 
@@ -449,14 +460,18 @@ def test_metric_contract_fails_closed_on_invalid_arrays_or_crop(
     from score_super_resolution.evaluation import EvaluationContractError, compute_fidelity
 
     with pytest.raises(EvaluationContractError, match=message):
-        compute_fidelity(reference, estimate, scale=scale, control=_metric_control())
+        compute_fidelity(
+            reference,
+            estimate,
+            scale=scale,
+            control=_metric_control(condition_id=f"x{scale}-clean"),
+        )
 
 
 def _synthetic_metric_records(
     *, sources: int = 2
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     from score_super_resolution.evaluation import load_evaluation_control
-
     from score_super_resolution.identities import canonical_sha256
 
     evaluation = load_evaluation_control(EVALUATION_CONTROL_PATH)
@@ -501,7 +516,9 @@ def _synthetic_metric_records(
                                     "source_group_id": source_id,
                                     "condition_id": condition_id,
                                     "method_id": method_id,
-                                    "reconstruction_id": f"output-{item_id}-{condition_id}-{method_id}",
+                                    "reconstruction_id": (
+                                        f"output-{item_id}-{condition_id}-{method_id}"
+                                    ),
                                     "reference_id": f"reference-{item_id}",
                                     "metric_id": f"{metric_id}__{colour_id}__{domain_id}",
                                     "metric_name": metric_name,
@@ -530,7 +547,6 @@ def _synthetic_metric_records(
 
 def _aggregate_control(records: list[dict[str, object]], states: list[dict[str, object]]) -> object:
     from score_super_resolution.evaluation import AggregateControl, load_evaluation_control
-
     from score_super_resolution.identities import canonical_sha256
 
     return AggregateControl(
@@ -582,14 +598,17 @@ def test_aggregate_is_six_cell_source_paired_and_deterministic() -> None:
             assert comparison["n_sources"] == 2
             assert comparison["n_pages"] == 4
             assert comparison["paired_difference"]["sample_sd"] == pytest.approx(0.0, abs=1e-14)
+            expected_difference = (
+                -0.06 if comparison["method_id"] == "nearest-opencv-exact-v1" else -0.03
+            )
             assert comparison["bootstrap"] == {
                 "state": "available",
                 "generator": "PCG64",
                 "seed": 20260823,
                 "repetitions": 10_000,
                 "confidence_level": 0.95,
-                "lower": pytest.approx(-0.06),
-                "upper": pytest.approx(-0.06),
+                "lower": pytest.approx(expected_difference),
+                "upper": pytest.approx(expected_difference),
             }
 
     reversed_bundle = aggregate_paired(
@@ -664,3 +683,50 @@ def test_aggregate_rejects_duplicates_digest_drift_and_incomplete_cells() -> Non
             reduced_states,
             control=_aggregate_control(reduced_records, reduced_states),
         )
+
+
+def test_aggregate_retains_a_fully_failed_comparison_without_fabricating_statistics() -> None:
+    from score_super_resolution.evaluation import aggregate_paired
+
+    records, states = _synthetic_metric_records()
+    failed_items = {
+        state["item_id"]
+        for state in states
+        if state["condition_id"] == "x2-clean" and state["method_id"] == "nearest-opencv-exact-v1"
+    }
+    for state in states:
+        if state["condition_id"] == "x2-clean" and state["method_id"] == "nearest-opencv-exact-v1":
+            state["state"] = "failed"
+    records = [
+        record
+        for record in records
+        if not (
+            record["condition_id"] == "x2-clean"
+            and record["method_id"] == "nearest-opencv-exact-v1"
+            and record["item_id"] in failed_items
+        )
+    ]
+    bundle = aggregate_paired(records, states, control=_aggregate_control(records, states))
+    comparisons = [
+        comparison
+        for comparison in bundle["cells"][0]["comparisons"]
+        if comparison["method_id"] == "nearest-opencv-exact-v1"
+    ]
+    assert len(comparisons) == 8
+    for comparison in comparisons:
+        assert comparison["denominators"]["expected_pages"] == 4
+        assert comparison["denominators"]["pairable_pages"] == 0
+        assert comparison["denominators"]["failed_pages"] == 4
+        assert comparison["n_sources"] == 0
+        assert comparison["n_pages"] == 0
+        assert comparison["paired_difference"] == {
+            "state": "unavailable_no_pairs",
+            "mean": None,
+            "sample_sd": None,
+            "median": None,
+            "q1": None,
+            "q3": None,
+            "iqr": None,
+        }
+        assert comparison["bootstrap"]["state"] == "unavailable_insufficient_sources"
+    validate_instance("aggregate-result", bundle, version=2)

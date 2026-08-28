@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v2:aggregate-result",
+  "title": "Closed six-cell source-paired aggregate bundle v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "aggregate_result_id", "experiment_id",
+    "reconciliation_id", "reconciliation_sha256", "degradation_control_sha256",
+    "evaluation_control_id", "evaluation_control_sha256", "bicubic_reference_method_id",
+    "raw_metric_input_sha256", "tuple_state_input_sha256", "cells"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "record_type": {"const": "aggregate-result"},
+    "aggregate_result_id": {"$ref": "#/$defs/stable_id"},
+    "experiment_id": {"$ref": "#/$defs/stable_id"},
+    "reconciliation_id": {"$ref": "#/$defs/stable_id"},
+    "reconciliation_sha256": {"$ref": "#/$defs/sha256"},
+    "degradation_control_sha256": {"$ref": "#/$defs/sha256"},
+    "evaluation_control_id": {"const": "evaluation-score-v1"},
+    "evaluation_control_sha256": {"$ref": "#/$defs/sha256"},
+    "bicubic_reference_method_id": {"const": "bicubic-opencv-v1"},
+    "raw_metric_input_sha256": {"$ref": "#/$defs/sha256"},
+    "tuple_state_input_sha256": {"$ref": "#/$defs/sha256"},
+    "cells": {
+      "type": "array", "minItems": 6, "maxItems": 6,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["condition_id", "comparisons"],
+        "properties": {
+          "condition_id": {"$ref": "#/$defs/condition_id"},
+          "comparisons": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/comparison"}}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "stable_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "condition_id": {"enum": ["x2-clean", "x2-moderate", "x2-strong", "x4-clean", "x4-moderate", "x4-strong"]},
+    "method_id": {"enum": ["nearest-opencv-exact-v1", "bilinear-opencv-exact-v1"]},
+    "summary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "mean", "sample_sd", "median", "q1", "q3", "iqr"],
+      "properties": {
+        "state": {"enum": ["available", "unavailable_no_pairs"]},
+        "mean": {"type": ["number", "null"]}, "sample_sd": {"type": ["number", "null"]},
+        "median": {"type": ["number", "null"]}, "q1": {"type": ["number", "null"]},
+        "q3": {"type": ["number", "null"]}, "iqr": {"type": ["number", "null"]}
+      }
+    },
+    "comparison": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "comparison_id", "method_id", "reference_method_id", "metric_id", "metric_name",
+        "role", "colour_id", "domain_id", "denominators", "n_sources", "n_pages",
+        "method_summary", "reference_summary", "paired_difference", "bootstrap"
+      ],
+      "properties": {
+        "comparison_id": {"$ref": "#/$defs/stable_id"},
+        "method_id": {"$ref": "#/$defs/method_id"},
+        "reference_method_id": {"const": "bicubic-opencv-v1"},
+        "metric_id": {"$ref": "#/$defs/stable_id"},
+        "metric_name": {"enum": ["psnr", "ssim"]},
+        "role": {"enum": ["primary", "diagnostic"]},
+        "colour_id": {"enum": ["bt601-y-primary-v1", "rgb-diagnostic-v1"]},
+        "domain_id": {"enum": ["full-page-primary-v1", "scale-inner-crop-sensitivity-v1"]},
+        "denominators": {
+          "type": "object", "additionalProperties": false,
+          "required": ["expected_pages", "pairable_pages", "failed_pages", "retry_attempts", "excluded_pages"],
+          "properties": {
+            "expected_pages": {"type": "integer", "minimum": 0},
+            "pairable_pages": {"type": "integer", "minimum": 0},
+            "failed_pages": {"type": "integer", "minimum": 0},
+            "retry_attempts": {"type": "integer", "minimum": 0},
+            "excluded_pages": {"type": "integer", "minimum": 0}
+          }
+        },
+        "n_sources": {"type": "integer", "minimum": 0},
+        "n_pages": {"type": "integer", "minimum": 0},
+        "method_summary": {"$ref": "#/$defs/summary"},
+        "reference_summary": {"$ref": "#/$defs/summary"},
+        "paired_difference": {"$ref": "#/$defs/summary"},
+        "bootstrap": {
+          "type": "object", "additionalProperties": false,
+          "required": ["state", "generator", "seed", "repetitions", "confidence_level", "lower", "upper"],
+          "properties": {
+            "state": {"enum": ["available", "unavailable_insufficient_sources"]},
+            "generator": {"const": "PCG64"}, "seed": {"const": 20260823},
+            "repetitions": {"const": 10000}, "confidence_level": {"const": 0.95},
+            "lower": {"type": ["number", "null"]}, "upper": {"type": ["number", "null"]}
+          }
+        }
+      }
+    }
+  }
+}
