@@ -1,0 +1,152 @@
+schema_version: 2
+record_type: semantic-fixture-experiment
+experiment_config_id: phase2-semantic-fixture-v1
+status: frozen
+dataset_role: authored-coherent-notation-applicability-only
+claim_boundary: authored-coherent-notation-applicability-only
+visual_manifest:
+  manifest_id: phase2-engraved-visual-fixtures-v3
+  manifest_path: tests/fixtures/phase2/visual-fixture-manifest-v3.yaml
+  manifest_sha256: 7b6983d9e05dc2e8c223b53103ca5eeea4a0d83d78a714719d660f363998a7ae
+controls:
+  degradation_id: controlled-score-v1
+  degradation_path: configs/degradations/controlled-score-v1.yaml
+  degradation_sha256: 6a61d9a28d2524c9b4e8b2138a23d93bb6fe10e37b8cd1d439cb35dcbdcd9949
+  evaluation_id: evaluation-score-v1
+  evaluation_path: configs/evaluation/evaluation-score-v1.yaml
+  evaluation_sha256: ff791711e3331932454d87850b7e08ce27533c9fa203022ad47fb9c53232c853
+  degradation_seed: 20260821
+source_order:
+  - review-work-03-excerpt-01
+  - review-work-04-excerpt-01
+sources:
+  - source_id: review-work-03-excerpt-01
+    source_group_id: review-work-03
+    source_role: visual-degradation-review
+    origin: authored-for-this-tfg-fixture-suite
+    author: TFG score-super-resolution project
+    license: CC0-1.0
+    source_path: tests/fixtures/phase2/visual-scores/compound-meter-phrase.musicxml
+    source_sha256: e4b8e4fd3527ef0c6674e23edbb2f14cab18acbed4970f6734f2a01723784b41
+    rendered_relative_path: inputs/review-work-03-excerpt-01.png
+    rendered_pixel_sha256: 2b9cbb5c99efd4e3e0ede2a2831f82d3773cb09f4e3aa11b1d6ef6ee9eff580e
+    roi: {x: 380, y: 110, width: 720, height: 410, purpose: dense-accidental-dot-beam-slur-text-digit-staff-crossing}
+  - source_id: review-work-04-excerpt-01
+    source_group_id: review-work-04
+    source_role: visual-degradation-review
+    origin: authored-for-this-tfg-fixture-suite
+    author: TFG score-super-resolution project
+    license: CC0-1.0
+    source_path: tests/fixtures/phase2/visual-scores/grand-staff-polyphony.musicxml
+    source_sha256: 175546fac8846f3d3a8368776e2f3aaf7a5f15299bb42c6ad51a79d4be28d65e
+    rendered_relative_path: inputs/review-work-04-excerpt-01.png
+    rendered_pixel_sha256: cbd1fd4f227b339519b5899a7e9269ade5d357d230487a4c13c9dd74e0c1e62c
+    roi: {x: 360, y: 80, width: 760, height: 520, purpose: dense-grand-staff-chord-tie-dynamics-text-digit-crossing}
+renderer:
+  engraver:
+    name: Verovio
+    package: verovio
+    version: 6.2.1
+    source_format: MusicXML 4.0 partwise
+    options:
+      adjustPageHeight: true
+      breaks: none
+      footer: none
+      header: none
+      landscape: false
+      pageHeight: 1800
+      pageMarginBottom: 40
+      pageMarginLeft: 40
+      pageMarginRight: 40
+      pageMarginTop: 40
+      pageWidth: 2400
+      scale: 130
+  rasterizer:
+    name: CairoSVG
+    package: cairosvg
+    version: 2.9.0
+    canvas_width: 1600
+    canvas_height: 900
+    ink_threshold: 250
+    crop_margin: 30
+    canvas_inset: 60
+condition_order: [x2-clean, x2-moderate, x2-strong, x4-clean, x4-moderate, x4-strong]
+method_order: [nearest-opencv-exact-v1, bilinear-opencv-exact-v1, bicubic-opencv-v1]
+review_membership:
+  - {panel_id: panel-01, condition_id: x2-clean, source_id: review-work-03-excerpt-01}
+  - {panel_id: panel-02, condition_id: x2-moderate, source_id: review-work-03-excerpt-01}
+  - {panel_id: panel-03, condition_id: x2-strong, source_id: review-work-03-excerpt-01}
+  - {panel_id: panel-04, condition_id: x4-clean, source_id: review-work-03-excerpt-01}
+  - {panel_id: panel-05, condition_id: x4-moderate, source_id: review-work-03-excerpt-01}
+  - {panel_id: panel-06, condition_id: x4-strong, source_id: review-work-03-excerpt-01}
+  - {panel_id: panel-07, condition_id: x2-clean, source_id: review-work-04-excerpt-01}
+  - {panel_id: panel-08, condition_id: x2-moderate, source_id: review-work-04-excerpt-01}
+  - {panel_id: panel-09, condition_id: x2-strong, source_id: review-work-04-excerpt-01}
+  - {panel_id: panel-10, condition_id: x4-clean, source_id: review-work-04-excerpt-01}
+  - {panel_id: panel-11, condition_id: x4-moderate, source_id: review-work-04-excerpt-01}
+  - {panel_id: panel-12, condition_id: x4-strong, source_id: review-work-04-excerpt-01}
+expected_tuple_keys:
+  - review-work-03-excerpt-01|x2-clean|nearest-opencv-exact-v1
+  - review-work-03-excerpt-01|x2-clean|bilinear-opencv-exact-v1
+  - review-work-03-excerpt-01|x2-clean|bicubic-opencv-v1
+  - review-work-03-excerpt-01|x2-moderate|nearest-opencv-exact-v1
+  - review-work-03-excerpt-01|x2-moderate|bilinear-opencv-exact-v1
+  - review-work-03-excerpt-01|x2-moderate|bicubic-opencv-v1
+  - review-work-03-excerpt-01|x2-strong|nearest-opencv-exact-v1
+  - review-work-03-excerpt-01|x2-strong|bilinear-opencv-exact-v1
+  - review-work-03-excerpt-01|x2-strong|bicubic-opencv-v1
+  - review-work-03-excerpt-01|x4-clean|nearest-opencv-exact-v1
+  - review-work-03-excerpt-01|x4-clean|bilinear-opencv-exact-v1
+  - review-work-03-excerpt-01|x4-clean|bicubic-opencv-v1
+  - review-work-03-excerpt-01|x4-moderate|nearest-opencv-exact-v1
+  - review-work-03-excerpt-01|x4-moderate|bilinear-opencv-exact-v1
+  - review-work-03-excerpt-01|x4-moderate|bicubic-opencv-v1
+  - review-work-03-excerpt-01|x4-strong|nearest-opencv-exact-v1
+  - review-work-03-excerpt-01|x4-strong|bilinear-opencv-exact-v1
+  - review-work-03-excerpt-01|x4-strong|bicubic-opencv-v1
+  - review-work-04-excerpt-01|x2-clean|nearest-opencv-exact-v1
+  - review-work-04-excerpt-01|x2-clean|bilinear-opencv-exact-v1
+  - review-work-04-excerpt-01|x2-clean|bicubic-opencv-v1
+  - review-work-04-excerpt-01|x2-moderate|nearest-opencv-exact-v1
+  - review-work-04-excerpt-01|x2-moderate|bilinear-opencv-exact-v1
+  - review-work-04-excerpt-01|x2-moderate|bicubic-opencv-v1
+  - review-work-04-excerpt-01|x2-strong|nearest-opencv-exact-v1
+  - review-work-04-excerpt-01|x2-strong|bilinear-opencv-exact-v1
+  - review-work-04-excerpt-01|x2-strong|bicubic-opencv-v1
+  - review-work-04-excerpt-01|x4-clean|nearest-opencv-exact-v1
+  - review-work-04-excerpt-01|x4-clean|bilinear-opencv-exact-v1
+  - review-work-04-excerpt-01|x4-clean|bicubic-opencv-v1
+  - review-work-04-excerpt-01|x4-moderate|nearest-opencv-exact-v1
+  - review-work-04-excerpt-01|x4-moderate|bilinear-opencv-exact-v1
+  - review-work-04-excerpt-01|x4-moderate|bicubic-opencv-v1
+  - review-work-04-excerpt-01|x4-strong|nearest-opencv-exact-v1
+  - review-work-04-excerpt-01|x4-strong|bilinear-opencv-exact-v1
+  - review-work-04-excerpt-01|x4-strong|bicubic-opencv-v1
+paths:
+  artifact_root: artifacts/phase2-semantic-fixture
+  manifest: semantic-experiment-manifest.json
+  applicability: applicability.json
+  traces: traces/{condition_id}/{source_id}.json
+  outputs: outputs/{condition_id}/{method_id}/{source_id}.png
+  records: records/{condition_id}/{method_id}/{source_id}.json
+  reconciliation: semantic-reconciliation.json
+  review_root: review
+limits:
+  max_sources: 2
+  max_source_bytes: 1048576
+  max_xml_nodes: 4096
+  max_xml_depth: 32
+  max_measures_per_part: 16
+  max_decoded_pixels: 4194304
+  max_output_bytes: 33554432
+  max_expected_tuples: 36
+  max_panels: 12
+  max_path_depth: 16
+non_claims:
+  - no-smb-result
+  - no-real-scan-result
+  - no-professional-recommendation
+  - no-learned-model-result
+  - no-omr-result
+  - no-restoration-result
+  - no-method-selection

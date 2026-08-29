@@ -160,24 +160,20 @@ def test_masked_review_contract_is_deterministic_and_content_addressed() -> None
     }
 
 
-def test_working_copy_execute_binds_source_and_creates_no_review() -> None:
+def test_working_copy_execute_is_superseded_without_mutation() -> None:
     from score_super_resolution.review import (
+        FixtureReviewContractError,
         execute_fixture_review_notebook,
-        notebook_source_sha256,
     )
 
     source_before = SOURCE_NOTEBOOK.read_bytes()
-    manifest = execute_fixture_review_notebook(PROJECT_ROOT)
-    working = FIXTURE_ROOT / manifest["working_notebook_relative_path"]
-
-    assert working.is_file()
-    assert manifest["notebook_source_sha256"] == notebook_source_sha256(SOURCE_NOTEBOOK)
-    assert manifest["working_notebook_sha256"] == hashlib.sha256(working.read_bytes()).hexdigest()
-    assert manifest["requested_panel_count"] == 24
-    assert manifest["displayable_panel_count"] == 24
-    assert manifest["failed_panel_count"] == 0
+    working = FIXTURE_ROOT / "review/fixture-baseline-review-working.ipynb"
+    working_before = working.read_bytes()
+    with pytest.raises(FixtureReviewContractError, match=r"D-23.*superseded"):
+        execute_fixture_review_notebook(PROJECT_ROOT)
     assert not (FIXTURE_ROOT / "review/notation-review.json").exists()
     assert SOURCE_NOTEBOOK.read_bytes() == source_before
+    assert working.read_bytes() == working_before
 
 
 def test_thin_notebook_contains_only_review_session_calls() -> None:
@@ -213,26 +209,24 @@ def test_thin_notebook_contains_only_review_session_calls() -> None:
 
 
 def test_review_contract_does_not_prefill_human_evidence() -> None:
-    from score_super_resolution.review import FixtureReviewContractError, FixtureReviewSession
-
-    manifest = execute_fixture_review_notebook_for_contract()
-    session = FixtureReviewSession(
-        PROJECT_ROOT,
-        working_copy_token=manifest["working_copy_token"],
+    from score_super_resolution.review import (
+        FixtureReviewContractError,
+        FixtureReviewSession,
+        prepare_fixture_review,
     )
-    assert session.summary()["reviewed_panels"] == 0
+
+    prepared = prepare_fixture_review(PROJECT_ROOT)
+    with pytest.raises(FixtureReviewContractError, match=r"D-23.*superseded"):
+        FixtureReviewSession(
+            PROJECT_ROOT,
+            working_copy_token=prepared["working_copy_token"],
+        )
     assert not (FIXTURE_ROOT / "review/notation-review.json").exists()
     with pytest.raises(FixtureReviewContractError):
         FixtureReviewSession(
             PROJECT_ROOT,
             working_copy_token="__GENERATED_PHASE2_FIXTURE_REVIEW_WORKING_COPY__",
         )
-
-
-def execute_fixture_review_notebook_for_contract() -> dict[str, object]:
-    from score_super_resolution.review import execute_fixture_review_notebook
-
-    return execute_fixture_review_notebook(PROJECT_ROOT)
 
 
 def test_primitive_semantic_forbidden_but_technical_panels_remain() -> None:
@@ -245,7 +239,7 @@ def test_primitive_semantic_forbidden_but_technical_panels_remain() -> None:
     prepared = prepare_fixture_review(PROJECT_ROOT)
     assert len(prepared["panels"]) == 24
     assert not (FIXTURE_ROOT / "review/notation-review.json").exists()
-    with pytest.raises(FixtureReviewContractError, match="D-23.*superseded"):
+    with pytest.raises(FixtureReviewContractError, match=r"D-23.*superseded"):
         FixtureReviewSession(
             PROJECT_ROOT,
             working_copy_token=prepared["working_copy_token"],
@@ -299,7 +293,7 @@ def test_source_coherence_rejects_tag_complete_temporal_or_relation_mutation(
     path.write_text(changed, encoding="utf-8")
     source["source_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
 
-    with pytest.raises(FixtureReviewContractError, match="coherence|duration|relation|slur"):
+    with pytest.raises(FixtureReviewContractError, match=r"coherence|duration|relation|slur"):
         validate_semantic_musicxml_source(
             path,
             source=source,
@@ -309,7 +303,10 @@ def test_source_coherence_rejects_tag_complete_temporal_or_relation_mutation(
 
 
 def test_semantic_matrix_contract_is_closed_and_identity_sensitive(tmp_path: Path) -> None:
-    from score_super_resolution.review import load_semantic_fixture_control
+    from score_super_resolution.review import (
+        FixtureReviewContractError,
+        load_semantic_fixture_control,
+    )
 
     control = load_semantic_fixture_control(PROJECT_ROOT)
     assert control["source_order"] == [
@@ -338,5 +335,6 @@ def test_semantic_matrix_contract_is_closed_and_identity_sensitive(tmp_path: Pat
     mutated["sources"][0]["roi"]["x"] += 1
     path = tmp_path / "mutated-semantic-control.yaml"
     path.write_text(yaml.safe_dump(mutated, sort_keys=False), encoding="utf-8")
-    changed = load_semantic_fixture_control(PROJECT_ROOT, path=path)
-    assert changed["semantic_experiment_sha256"] != control["semantic_experiment_sha256"]
+    assert canonical_sha256(mutated) != control["semantic_experiment_sha256"]
+    with pytest.raises(FixtureReviewContractError, match="source provenance, digest, or ROI"):
+        load_semantic_fixture_control(PROJECT_ROOT, path=path)

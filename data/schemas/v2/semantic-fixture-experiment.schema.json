@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v2:semantic-fixture-experiment",
+  "title": "Closed coherent-MusicXML applicability experiment v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "experiment_config_id", "status", "dataset_role",
+    "claim_boundary", "visual_manifest", "controls", "source_order", "sources", "renderer",
+    "condition_order", "method_order", "review_membership", "expected_tuple_keys", "paths",
+    "limits", "non_claims"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "record_type": {"const": "semantic-fixture-experiment"},
+    "experiment_config_id": {"const": "phase2-semantic-fixture-v1"},
+    "status": {"const": "frozen"},
+    "dataset_role": {"const": "authored-coherent-notation-applicability-only"},
+    "claim_boundary": {"const": "authored-coherent-notation-applicability-only"},
+    "visual_manifest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["manifest_id", "manifest_path", "manifest_sha256"],
+      "properties": {
+        "manifest_id": {"const": "phase2-engraved-visual-fixtures-v3"},
+        "manifest_path": {"const": "tests/fixtures/phase2/visual-fixture-manifest-v3.yaml"},
+        "manifest_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "controls": {
+      "type": "object", "additionalProperties": false,
+      "required": ["degradation_id", "degradation_path", "degradation_sha256", "evaluation_id", "evaluation_path", "evaluation_sha256", "degradation_seed"],
+      "properties": {
+        "degradation_id": {"const": "controlled-score-v1"},
+        "degradation_path": {"const": "configs/degradations/controlled-score-v1.yaml"},
+        "degradation_sha256": {"$ref": "#/$defs/sha256"},
+        "evaluation_id": {"const": "evaluation-score-v1"},
+        "evaluation_path": {"const": "configs/evaluation/evaluation-score-v1.yaml"},
+        "evaluation_sha256": {"$ref": "#/$defs/sha256"},
+        "degradation_seed": {"const": 20260821}
+      }
+    },
+    "source_order": {"$ref": "#/$defs/source_order"},
+    "sources": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": {"$ref": "#/$defs/source"}
+    },
+    "renderer": {"$ref": "#/$defs/renderer"},
+    "condition_order": {"$ref": "#/$defs/condition_order"},
+    "method_order": {"$ref": "#/$defs/method_order"},
+    "review_membership": {
+      "type": "array", "minItems": 12, "maxItems": 12,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["panel_id", "condition_id", "source_id"],
+        "properties": {
+          "panel_id": {"type": "string", "pattern": "^panel-[0-9]{2}$"},
+          "condition_id": {"enum": ["x2-clean", "x2-moderate", "x2-strong", "x4-clean", "x4-moderate", "x4-strong"]},
+          "source_id": {"enum": ["review-work-03-excerpt-01", "review-work-04-excerpt-01"]}
+        }
+      }
+    },
+    "expected_tuple_keys": {
+      "type": "array", "minItems": 36, "maxItems": 36, "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^review-work-0[34]-excerpt-01\\|x[24]-(clean|moderate|strong)\\|(nearest-opencv-exact-v1|bilinear-opencv-exact-v1|bicubic-opencv-v1)$"}
+    },
+    "paths": {
+      "type": "object", "additionalProperties": false,
+      "required": ["artifact_root", "manifest", "applicability", "traces", "outputs", "records", "reconciliation", "review_root"],
+      "properties": {
+        "artifact_root": {"const": "artifacts/phase2-semantic-fixture"},
+        "manifest": {"const": "semantic-experiment-manifest.json"},
+        "applicability": {"const": "applicability.json"},
+        "traces": {"const": "traces/{condition_id}/{source_id}.json"},
+        "outputs": {"const": "outputs/{condition_id}/{method_id}/{source_id}.png"},
+        "records": {"const": "records/{condition_id}/{method_id}/{source_id}.json"},
+        "reconciliation": {"const": "semantic-reconciliation.json"},
+        "review_root": {"const": "review"}
+      }
+    },
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["max_sources", "max_source_bytes", "max_xml_nodes", "max_xml_depth", "max_measures_per_part", "max_decoded_pixels", "max_output_bytes", "max_expected_tuples", "max_panels", "max_path_depth"],
+      "properties": {
+        "max_sources": {"const": 2},
+        "max_source_bytes": {"type": "integer", "minimum": 1024, "maximum": 1048576},
+        "max_xml_nodes": {"type": "integer", "minimum": 64, "maximum": 4096},
+        "max_xml_depth": {"type": "integer", "minimum": 4, "maximum": 32},
+        "max_measures_per_part": {"type": "integer", "minimum": 2, "maximum": 16},
+        "max_decoded_pixels": {"type": "integer", "minimum": 65536, "maximum": 4194304},
+        "max_output_bytes": {"type": "integer", "minimum": 1024, "maximum": 33554432},
+        "max_expected_tuples": {"const": 36},
+        "max_panels": {"const": 12},
+        "max_path_depth": {"type": "integer", "minimum": 4, "maximum": 16}
+      }
+    },
+    "non_claims": {
+      "type": "array", "minItems": 7, "maxItems": 7, "uniqueItems": true,
+      "prefixItems": [
+        {"const": "no-smb-result"}, {"const": "no-real-scan-result"},
+        {"const": "no-professional-recommendation"}, {"const": "no-learned-model-result"},
+        {"const": "no-omr-result"}, {"const": "no-restoration-result"},
+        {"const": "no-method-selection"}
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_order": {
+      "type": "array", "prefixItems": [
+        {"const": "review-work-03-excerpt-01"}, {"const": "review-work-04-excerpt-01"}
+      ], "items": false, "minItems": 2, "maxItems": 2
+    },
+    "condition_order": {
+      "type": "array", "prefixItems": [
+        {"const": "x2-clean"}, {"const": "x2-moderate"}, {"const": "x2-strong"},
+        {"const": "x4-clean"}, {"const": "x4-moderate"}, {"const": "x4-strong"}
+      ], "items": false, "minItems": 6, "maxItems": 6
+    },
+    "method_order": {
+      "type": "array", "prefixItems": [
+        {"const": "nearest-opencv-exact-v1"}, {"const": "bilinear-opencv-exact-v1"}, {"const": "bicubic-opencv-v1"}
+      ], "items": false, "minItems": 3, "maxItems": 3
+    },
+    "roi": {
+      "type": "object", "additionalProperties": false,
+      "required": ["x", "y", "width", "height", "purpose"],
+      "properties": {
+        "x": {"type": "integer", "minimum": 0}, "y": {"type": "integer", "minimum": 0},
+        "width": {"type": "integer", "minimum": 1}, "height": {"type": "integer", "minimum": 1},
+        "purpose": {"type": "string", "minLength": 1, "maxLength": 200}
+      }
+    },
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_id", "source_group_id", "source_role", "origin", "author", "license", "source_path", "source_sha256", "rendered_relative_path", "rendered_pixel_sha256", "roi"],
+      "properties": {
+        "source_id": {"enum": ["review-work-03-excerpt-01", "review-work-04-excerpt-01"]},
+        "source_group_id": {"enum": ["review-work-03", "review-work-04"]},
+        "source_role": {"const": "visual-degradation-review"},
+        "origin": {"const": "authored-for-this-tfg-fixture-suite"},
+        "author": {"const": "TFG score-super-resolution project"},
+        "license": {"const": "CC0-1.0"},
+        "source_path": {"type": "string", "pattern": "^tests/fixtures/phase2/visual-scores/[a-z0-9-]+[.]musicxml$"},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "rendered_relative_path": {"type": "string", "pattern": "^inputs/review-work-0[34]-excerpt-01[.]png$"},
+        "rendered_pixel_sha256": {"$ref": "#/$defs/sha256"},
+        "roi": {"$ref": "#/$defs/roi"}
+      }
+    },
+    "renderer": {
+      "type": "object", "additionalProperties": false,
+      "required": ["engraver", "rasterizer"],
+      "properties": {
+        "engraver": {"type": "object"},
+        "rasterizer": {"type": "object"}
+      }
+    }
+  }
+}

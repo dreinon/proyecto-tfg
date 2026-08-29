@@ -5,12 +5,15 @@ from __future__ import annotations
 import copy
 import fcntl
 import hashlib
+import importlib.metadata
 import json
 import os
 import re
 import stat
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from fractions import Fraction
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -19,6 +22,8 @@ import cv2
 import ipywidgets as widgets
 import nbformat
 import numpy as np
+import yaml
+from defusedxml import ElementTree
 from IPython.display import clear_output, display
 from nbclient import NotebookClient
 
@@ -47,10 +52,463 @@ _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_JSON_BYTES = 64 * 1024 * 1024
 _MAX_IMAGE_BYTES = 32 * 1024 * 1024
 _MAX_PIXELS = 4_194_304
+SEMANTIC_CONFIG_RELATIVE = Path("configs/experiments/phase2-semantic-fixture-v1.yaml")
+SEMANTIC_SOURCE_IDS = (
+    "review-work-03-excerpt-01",
+    "review-work-04-excerpt-01",
+)
+SEMANTIC_WORKING_COPY_MARKER = "__GENERATED_PHASE2_SEMANTIC_REVIEW_WORKING_COPY__"
+_D23_ERROR = (
+    "D-23 superseded checkpoint: primitive fixtures are technical evidence only; "
+    "semantic review persistence, reveal, and reconciliation are forbidden"
+)
 
 
 class FixtureReviewContractError(ValueError):
     """Fixed evidence, notebook, panel, or review state violates the review contract."""
+
+
+def _read_yaml(path: Path, *, kind: str, maximum_bytes: int = 1024 * 1024) -> dict[str, Any]:
+    try:
+        value = yaml.safe_load(_read_regular(path, maximum_bytes=maximum_bytes, kind=kind))
+    except (UnicodeError, yaml.YAMLError) as error:
+        raise FixtureReviewContractError(f"{kind} is malformed") from error
+    if not isinstance(value, dict):
+        raise FixtureReviewContractError(f"{kind} root must be a mapping")
+    return value
+
+
+def _assert_no_secret_or_remote_identity(value: Any, *, kind: str) -> None:
+    serialized = json.dumps(value, ensure_ascii=False, sort_keys=True).casefold()
+    forbidden = ("hf_token", "authorization", "api_key", "praig/smb", "load_dataset")
+    if any(token in serialized for token in forbidden):
+        raise FixtureReviewContractError(f"{kind} contains a secret-like or remote identity")
+
+
+def load_semantic_fixture_control(
+    project_root: Path,
+    *,
+    path: Path | None = None,
+) -> dict[str, Any]:
+    """Load the exact two-source applicability denominator before any semantic output exists."""
+
+    project_root = Path(project_root).resolve()
+    config_path = project_root / SEMANTIC_CONFIG_RELATIVE if path is None else Path(path).resolve()
+    control = _read_yaml(config_path, kind="semantic fixture control")
+    _assert_no_secret_or_remote_identity(control, kind="semantic fixture control")
+    try:
+        validate_instance("semantic-fixture-experiment", control, version=2)
+    except ContractValidationError as error:
+        raise FixtureReviewContractError("semantic fixture control fails its schema") from error
+
+    manifest_path = project_root / control["visual_manifest"]["manifest_path"]
+    manifest = _read_yaml(manifest_path, kind="visual fixture manifest")
+    if (
+        manifest.get("manifest_id") != control["visual_manifest"]["manifest_id"]
+        or canonical_sha256(manifest) != control["visual_manifest"]["manifest_sha256"]
+    ):
+        raise FixtureReviewContractError("semantic visual manifest identity differs")
+    selected = {
+        item["item_id"]: item
+        for item in manifest.get("items", [])
+        if item.get("item_id") in SEMANTIC_SOURCE_IDS
+    }
+    if (
+        tuple(control["source_order"]) != SEMANTIC_SOURCE_IDS
+        or tuple(selected) != SEMANTIC_SOURCE_IDS
+    ):
+        raise FixtureReviewContractError("semantic source order differs")
+    expected_sources: list[dict[str, Any]] = []
+    for source_id in SEMANTIC_SOURCE_IDS:
+        item = selected[source_id]
+        expected_sources.append(
+            {
+                "source_id": source_id,
+                "source_group_id": item["source_group_id"],
+                "source_role": item["source_role"],
+                "origin": item["origin"],
+                "author": item["author"],
+                "license": item["license"],
+                "source_path": f"tests/fixtures/phase2/{item['source_relative_path']}",
+                "source_sha256": item["source_sha256"],
+                "rendered_relative_path": f"inputs/{source_id}.png",
+                "rendered_pixel_sha256": item["rendered_pixel_sha256"],
+                "roi": item["roi"],
+            }
+        )
+    if control["sources"] != expected_sources:
+        raise FixtureReviewContractError("semantic source provenance, digest, or ROI differs")
+    expected_renderer = copy.deepcopy(manifest["renderer"])
+    expected_renderer["engraver"].pop("project_url", None)
+    expected_renderer["rasterizer"].pop("project_url", None)
+    if control["renderer"] != expected_renderer:
+        raise FixtureReviewContractError("semantic renderer contract differs")
+    if importlib.metadata.version("verovio") != control["renderer"]["engraver"]["version"]:
+        raise FixtureReviewContractError("semantic Verovio runtime differs")
+    if importlib.metadata.version("cairosvg") != control["renderer"]["rasterizer"]["version"]:
+        raise FixtureReviewContractError("semantic CairoSVG runtime differs")
+
+    if tuple(control["condition_order"]) != EXPECTED_CONDITIONS:
+        raise FixtureReviewContractError("semantic condition order differs")
+    if tuple(control["method_order"]) != EXPECTED_METHODS:
+        raise FixtureReviewContractError("semantic method order differs")
+    expected_tuples = [
+        f"{source_id}|{condition_id}|{method_id}"
+        for source_id in SEMANTIC_SOURCE_IDS
+        for condition_id in EXPECTED_CONDITIONS
+        for method_id in EXPECTED_METHODS
+    ]
+    if control["expected_tuple_keys"] != expected_tuples:
+        raise FixtureReviewContractError("semantic expected tuple order differs")
+    expected_membership = [
+        {
+            "panel_id": f"panel-{index:02d}",
+            "condition_id": condition_id,
+            "source_id": source_id,
+        }
+        for index, (source_id, condition_id) in enumerate(
+            (
+                (source_id, condition_id)
+                for source_id in SEMANTIC_SOURCE_IDS
+                for condition_id in EXPECTED_CONDITIONS
+            ),
+            start=1,
+        )
+    ]
+    if control["review_membership"] != expected_membership:
+        raise FixtureReviewContractError("semantic review membership differs")
+
+    for control_name, digest_name in (
+        ("degradation", "degradation_sha256"),
+        ("evaluation", "evaluation_sha256"),
+    ):
+        control_file = _read_yaml(
+            project_root / control["controls"][f"{control_name}_path"],
+            kind=f"{control_name} control",
+        )
+        if canonical_sha256(control_file) != control["controls"][digest_name]:
+            raise FixtureReviewContractError(f"semantic {control_name} control digest differs")
+    if control["controls"]["degradation_seed"] != 20260821:
+        raise FixtureReviewContractError("semantic degradation seed differs")
+
+    identity = canonical_sha256(control)
+    return copy.deepcopy(
+        {
+            **control,
+            "semantic_experiment_id": f"semantic-experiment-{identity}",
+            "semantic_experiment_sha256": identity,
+        }
+    )
+
+
+def _local_name(element: Any) -> str:
+    return str(element.tag).rsplit("}", 1)[-1]
+
+
+def _children(element: Any, name: str) -> list[Any]:
+    return [child for child in list(element) if _local_name(child) == name]
+
+
+def _child(element: Any, name: str) -> Any | None:
+    matches = _children(element, name)
+    if len(matches) > 1:
+        raise FixtureReviewContractError(f"MusicXML coherence has duplicate {name} elements")
+    return matches[0] if matches else None
+
+
+def _text(element: Any, name: str, *, required: bool = True) -> str | None:
+    child = _child(element, name)
+    if child is None:
+        if required:
+            raise FixtureReviewContractError(f"MusicXML coherence requires {name}")
+        return None
+    value = (child.text or "").strip()
+    if required and not value:
+        raise FixtureReviewContractError(f"MusicXML coherence requires non-empty {name}")
+    return value or None
+
+
+_TYPE_DURATION = {
+    "whole": Fraction(4),
+    "half": Fraction(2),
+    "quarter": Fraction(1),
+    "eighth": Fraction(1, 2),
+    "16th": Fraction(1, 4),
+    "32nd": Fraction(1, 8),
+    "64th": Fraction(1, 16),
+}
+
+
+def validate_semantic_musicxml_source(
+    source_path: Path,
+    *,
+    source: Mapping[str, Any],
+    renderer: Mapping[str, Any],
+    limits: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Reject tag-complete but temporally or relationally incoherent MusicXML."""
+
+    source_id = source.get("source_id")
+    if source_id not in SEMANTIC_SOURCE_IDS:
+        raise FixtureReviewContractError("MusicXML source is outside the semantic denominator")
+    payload = _read_regular(
+        Path(source_path),
+        maximum_bytes=int(limits["max_source_bytes"]),
+        kind="semantic MusicXML source",
+    )
+    if hashlib.sha256(payload).hexdigest() != source.get("source_sha256"):
+        raise FixtureReviewContractError("MusicXML source digest differs")
+    if (
+        source.get("source_role") != "visual-degradation-review"
+        or source.get("origin") != "authored-for-this-tfg-fixture-suite"
+        or source.get("author") != "TFG score-super-resolution project"
+        or source.get("license") != "CC0-1.0"
+    ):
+        raise FixtureReviewContractError("MusicXML provenance or licence differs")
+    if (
+        renderer.get("engraver", {}).get("source_format") != "MusicXML 4.0 partwise"
+        or renderer.get("engraver", {}).get("version") != "6.2.1"
+        or renderer.get("rasterizer", {}).get("version") != "2.9.0"
+    ):
+        raise FixtureReviewContractError("MusicXML renderer identity differs")
+    try:
+        root = ElementTree.fromstring(payload)
+    except ElementTree.ParseError as error:
+        raise FixtureReviewContractError("MusicXML coherence parse failed") from error
+    nodes = list(root.iter())
+    if len(nodes) > int(limits["max_xml_nodes"]):
+        raise FixtureReviewContractError("MusicXML coherence node bound exceeded")
+
+    def depth(element: Any, current: int = 1) -> int:
+        return max([current, *(depth(child, current + 1) for child in list(element))])
+
+    if depth(root) > int(limits["max_xml_depth"]):
+        raise FixtureReviewContractError("MusicXML coherence depth bound exceeded")
+    if _local_name(root) != "score-partwise" or root.attrib.get("version") != "4.0":
+        raise FixtureReviewContractError("MusicXML coherence requires score-partwise 4.0")
+
+    part_list = _child(root, "part-list")
+    if part_list is None:
+        raise FixtureReviewContractError("MusicXML coherence requires part-list")
+    declared_parts = [part.attrib.get("id") for part in _children(part_list, "score-part")]
+    actual_parts = [part.attrib.get("id") for part in _children(root, "part")]
+    if (
+        not declared_parts
+        or any(not value for value in declared_parts)
+        or len(set(declared_parts)) != len(declared_parts)
+        or actual_parts != declared_parts
+    ):
+        raise FixtureReviewContractError("MusicXML coherence part references differ")
+
+    open_beams: set[tuple[str, str, int, str]] = set()
+    open_slurs: set[tuple[str, str, int, str]] = set()
+    open_ties: set[tuple[str, str, int, str]] = set()
+    open_tieds: set[tuple[str, str, int, str]] = set()
+    measure_count = 0
+    note_count = 0
+    for part in _children(root, "part"):
+        part_id = str(part.attrib["id"])
+        divisions: int | None = None
+        expected_measure_duration: Fraction | None = None
+        staves = 1
+        measures = _children(part, "measure")
+        if not measures or len(measures) > int(limits["max_measures_per_part"]):
+            raise FixtureReviewContractError("MusicXML coherence measure count is invalid")
+        measure_count += len(measures)
+        for measure in measures:
+            attributes = _child(measure, "attributes")
+            if attributes is not None:
+                divisions_text = _text(attributes, "divisions", required=False)
+                if divisions_text is not None:
+                    divisions = int(divisions_text)
+                    if divisions <= 0:
+                        raise FixtureReviewContractError("MusicXML divisions must be positive")
+                staves_text = _text(attributes, "staves", required=False)
+                if staves_text is not None:
+                    staves = int(staves_text)
+                    if staves < 1:
+                        raise FixtureReviewContractError("MusicXML staves must be positive")
+                time = _child(attributes, "time")
+                if time is not None:
+                    if divisions is None:
+                        raise FixtureReviewContractError("MusicXML time requires active divisions")
+                    beats = int(_text(time, "beats"))
+                    beat_type = int(_text(time, "beat-type"))
+                    duration = Fraction(divisions * beats * 4, beat_type)
+                    if duration.denominator != 1 or duration <= 0:
+                        raise FixtureReviewContractError(
+                            "MusicXML measure duration is not integral"
+                        )
+                    expected_measure_duration = duration
+            if divisions is None or expected_measure_duration is None:
+                raise FixtureReviewContractError("MusicXML measure lacks active timing")
+
+            cursor = Fraction(0)
+            intervals: dict[tuple[str, int], list[tuple[Fraction, Fraction]]] = {}
+            last_note: tuple[str, int, Fraction, Fraction] | None = None
+            for event in list(measure):
+                tag = _local_name(event)
+                if tag == "backup":
+                    duration = Fraction(int(_text(event, "duration")))
+                    if duration <= 0 or cursor - duration < 0:
+                        raise FixtureReviewContractError("MusicXML backup duration is invalid")
+                    cursor -= duration
+                    last_note = None
+                    continue
+                if tag == "forward":
+                    duration = Fraction(int(_text(event, "duration")))
+                    if duration <= 0:
+                        raise FixtureReviewContractError("MusicXML forward duration is invalid")
+                    cursor += duration
+                    last_note = None
+                    continue
+                if tag != "note":
+                    continue
+                note_count += 1
+                pitch = _child(event, "pitch")
+                rest = _child(event, "rest")
+                if (pitch is None) == (rest is None):
+                    raise FixtureReviewContractError(
+                        "MusicXML note requires pitch/rest exclusivity"
+                    )
+                duration = Fraction(int(_text(event, "duration")))
+                if duration <= 0:
+                    raise FixtureReviewContractError("MusicXML note duration must be positive")
+                note_type = _text(event, "type")
+                if note_type not in _TYPE_DURATION:
+                    raise FixtureReviewContractError("MusicXML note type is unsupported")
+                dots = len(_children(event, "dot"))
+                dot_factor = sum((Fraction(1, 2**index) for index in range(dots + 1)), Fraction())
+                if duration != _TYPE_DURATION[note_type] * divisions * dot_factor:
+                    raise FixtureReviewContractError("MusicXML duration/type/dot coherence differs")
+                voice = str(_text(event, "voice"))
+                staff_text = _text(event, "staff", required=False)
+                staff = int(staff_text) if staff_text is not None else 1
+                if staff < 1 or staff > staves:
+                    raise FixtureReviewContractError("MusicXML staff reference is invalid")
+                chord = _child(event, "chord") is not None
+                if chord:
+                    if (
+                        last_note is None
+                        or last_note[:2] != (voice, staff)
+                        or last_note[3] != duration
+                    ):
+                        raise FixtureReviewContractError("MusicXML chord relation is inconsistent")
+                    onset = last_note[2]
+                else:
+                    onset = cursor
+                    cursor += duration
+                    last_note = (voice, staff, onset, duration)
+                    intervals.setdefault((voice, staff), []).append((onset, onset + duration))
+                pitch_key = "rest"
+                if pitch is not None:
+                    pitch_key = ":".join(
+                        (
+                            str(_text(pitch, "step")),
+                            str(_text(pitch, "alter", required=False) or "0"),
+                            str(_text(pitch, "octave")),
+                        )
+                    )
+                relation_prefix = (part_id, voice, staff, pitch_key)
+                tie_types = {tie.attrib.get("type") for tie in _children(event, "tie")}
+                notations = _child(event, "notations")
+                tied_types = (
+                    {tied.attrib.get("type") for tied in _children(notations, "tied")}
+                    if notations is not None
+                    else set()
+                )
+                if tie_types != tied_types:
+                    raise FixtureReviewContractError("MusicXML tie/tied relation differs")
+                for relation_type in tie_types:
+                    if relation_type == "start":
+                        if relation_prefix in open_ties or relation_prefix in open_tieds:
+                            raise FixtureReviewContractError("MusicXML tie relation starts twice")
+                        open_ties.add(relation_prefix)
+                        open_tieds.add(relation_prefix)
+                    elif relation_type == "stop":
+                        if relation_prefix not in open_ties or relation_prefix not in open_tieds:
+                            raise FixtureReviewContractError("MusicXML tie relation stops unopened")
+                        open_ties.remove(relation_prefix)
+                        open_tieds.remove(relation_prefix)
+                    else:
+                        raise FixtureReviewContractError("MusicXML tie relation type is invalid")
+                for beam in _children(event, "beam"):
+                    key = (part_id, voice, staff, beam.attrib.get("number", "1"))
+                    value = (beam.text or "").strip()
+                    if value == "begin":
+                        if key in open_beams:
+                            raise FixtureReviewContractError("MusicXML beam relation starts twice")
+                        open_beams.add(key)
+                    elif value == "continue":
+                        if key not in open_beams:
+                            raise FixtureReviewContractError(
+                                "MusicXML beam relation continues unopened"
+                            )
+                    elif value == "end":
+                        if key not in open_beams:
+                            raise FixtureReviewContractError("MusicXML beam relation ends unopened")
+                        open_beams.remove(key)
+                    else:
+                        raise FixtureReviewContractError("MusicXML beam relation type is invalid")
+                if notations is not None:
+                    for slur in _children(notations, "slur"):
+                        key = (part_id, voice, staff, slur.attrib.get("number", "1"))
+                        relation_type = slur.attrib.get("type")
+                        if relation_type == "start":
+                            if key in open_slurs:
+                                raise FixtureReviewContractError(
+                                    "MusicXML slur relation starts twice"
+                                )
+                            open_slurs.add(key)
+                        elif relation_type == "stop":
+                            if key not in open_slurs:
+                                raise FixtureReviewContractError(
+                                    "MusicXML slur relation stops unopened"
+                                )
+                            open_slurs.remove(key)
+                        else:
+                            raise FixtureReviewContractError(
+                                "MusicXML slur relation type is invalid"
+                            )
+
+            expected = expected_measure_duration
+            if cursor != expected:
+                raise FixtureReviewContractError("MusicXML measure duration coherence differs")
+            for voice_staff, spans in intervals.items():
+                ordered = sorted(set(spans))
+                if not ordered or ordered[0][0] != 0 or ordered[-1][1] != expected:
+                    raise FixtureReviewContractError(
+                        f"MusicXML voice/staff duration coherence differs for {voice_staff}"
+                    )
+                if any(left[1] != right[0] for left, right in pairwise(ordered)):
+                    raise FixtureReviewContractError("MusicXML voice/staff contains a timing gap")
+
+    if open_beams or open_slurs or open_ties or open_tieds:
+        raise FixtureReviewContractError("MusicXML coherence has an unbalanced relation")
+    roi = source.get("roi")
+    if (
+        not isinstance(roi, Mapping)
+        or any(
+            isinstance(roi.get(key), bool) or not isinstance(roi.get(key), int)
+            for key in ("x", "y", "width", "height")
+        )
+        or roi["x"] < 0
+        or roi["y"] < 0
+        or roi["width"] <= 0
+        or roi["height"] <= 0
+        or roi["x"] + roi["width"] > int(renderer["rasterizer"]["canvas_width"])
+        or roi["y"] + roi["height"] > int(renderer["rasterizer"]["canvas_height"])
+    ):
+        raise FixtureReviewContractError("MusicXML rendered ROI bounds differ")
+    return {
+        "source_id": source_id,
+        "source_sha256": hashlib.sha256(payload).hexdigest(),
+        "coherence_state": "structurally-coherent",
+        "measure_count": measure_count,
+        "note_count": note_count,
+        "renderer_sha256": canonical_sha256(renderer),
+        "roi": copy.deepcopy(dict(roi)),
+    }
 
 
 def _canonical_json(value: Mapping[str, Any]) -> bytes:
@@ -756,7 +1214,17 @@ def prepare_fixture_review(
 
 
 def execute_fixture_review_notebook(project_root: Path) -> dict[str, Any]:
-    """Execute the clean source out of place and bind its ignored working copy."""
+    """Reject the superseded primitive semantic notebook without mutating its bytes."""
+
+    project_root = Path(project_root).resolve()
+    review_path = project_root / "artifacts/phase2-fixture/review/notation-review.json"
+    if review_path.exists() or review_path.is_symlink():
+        raise FixtureReviewContractError(f"{_D23_ERROR}; invalid notation-review.json exists")
+    raise FixtureReviewContractError(_D23_ERROR)
+
+
+def _execute_fixture_review_notebook_legacy(project_root: Path) -> dict[str, Any]:
+    """Historical implementation retained only to explain committed technical lineage."""
 
     project_root = Path(project_root).resolve()
     prepared = prepare_fixture_review(project_root)
@@ -1000,6 +1468,12 @@ class FixtureReviewSession:
         )
         if self.project_root is None:
             raise FixtureReviewContractError("could not locate the proyecto root")
+        primitive_review = (
+            self.project_root / "artifacts/phase2-fixture/review/notation-review.json"
+        )
+        if primitive_review.exists() or primitive_review.is_symlink():
+            raise FixtureReviewContractError(f"{_D23_ERROR}; invalid notation-review.json exists")
+        raise FixtureReviewContractError(_D23_ERROR)
         if (
             not isinstance(working_copy_token, str)
             or _GENERATED_TOKEN.fullmatch(working_copy_token) is None

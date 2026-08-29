@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v2:semantic-review-session",
+  "title": "Coherent-notation masked review session v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "session_id", "semantic_experiment_id",
+    "semantic_experiment_sha256", "applicability_sha256", "reconciliation_sha256",
+    "notebook_source_sha256", "working_notebook_logical_sha256", "working_copy_token",
+    "mapping_sha256", "panels", "requested_panel_count", "displayable_panel_count",
+    "failed_panel_count", "confirmation_relative_path", "review_relative_path"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "record_type": {"const": "semantic-review-session"},
+    "session_id": {"type": "string", "pattern": "^semantic-session-[0-9a-f]{64}$"},
+    "semantic_experiment_id": {"type": "string", "pattern": "^semantic-experiment-[0-9a-f]{64}$"},
+    "semantic_experiment_sha256": {"$ref": "#/$defs/sha256"},
+    "applicability_sha256": {"$ref": "#/$defs/sha256"},
+    "reconciliation_sha256": {"$ref": "#/$defs/sha256"},
+    "notebook_source_sha256": {"$ref": "#/$defs/sha256"},
+    "working_notebook_logical_sha256": {"$ref": "#/$defs/sha256"},
+    "working_copy_token": {"type": "string", "pattern": "^generated:[0-9a-f]{64}$"},
+    "mapping_sha256": {"$ref": "#/$defs/sha256"},
+    "panels": {"type": "array", "minItems": 12, "maxItems": 12, "items": {"type": "object"}},
+    "requested_panel_count": {"const": 12},
+    "displayable_panel_count": {"const": 12},
+    "failed_panel_count": {"const": 0},
+    "confirmation_relative_path": {"const": "review/source-confirmations.json"},
+    "review_relative_path": {"const": "review/notation-review.json"}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}
