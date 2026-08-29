@@ -22,6 +22,7 @@ dependencies = [
   "safetensors>=0.8,<1",
   "scikit-image>=0.26,<0.27",
   "seaborn>=0.13.2,<0.14",
+  "spandrel==0.4.2",
   "tensorboard>=2.21,<3",
   "tqdm>=4.70,<5",
   "verovio==6.2.1",

@@ -54,4 +54,3 @@ retry_policy:
     - INTEGRITY_INVALIDATED
   exhausted_state: failed
   unexpected_exception_state: retry_pending
-

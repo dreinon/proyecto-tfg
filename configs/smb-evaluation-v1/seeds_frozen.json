@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "record_type": "smb-freeze-control",
+  "status": "frozen",
+  "artifact_kind": "seeds_control",
+  "control_id": "seeds_frozen",
+  "content": {
+    "generation_policy_id": "controlled-score-master-seed-20260821",
+    "execution_policy_id": "comparison-seed-20260829",
+    "sampling_policy_id": "pre-review-sha-rank-seed-20260818"
+  }
+}

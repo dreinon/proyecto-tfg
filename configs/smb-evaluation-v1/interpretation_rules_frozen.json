@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "record_type": "smb-freeze-control",
+  "status": "frozen",
+  "artifact_kind": "interpretation_rules_control",
+  "control_id": "interpretation_rules_frozen",
+  "content": {
+    "success_rules": [
+      "paired-within-condition-comparison-v1",
+      "fidelity-and-musical-correctness-v1"
+    ],
+    "stop_rules": [
+      "no-smb-adaptation-v1",
+      "core-before-finetuning-v1"
+    ],
+    "contradiction_rules": [
+      "aggregate-gain-with-musical-error-is-not-success-v1",
+      "metric-disagreement-requires-qualitative-review-v1"
+    ],
+    "claim_rules": [
+      "fixed-sample-only-v1",
+      "no-population-prevalence-v1",
+      "retain-negative-results-v1"
+    ]
+  }
+}

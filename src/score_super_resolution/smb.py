@@ -14,6 +14,7 @@ import yaml
 
 from score_super_resolution.benchmark_policy import (
     BenchmarkPurpose,
+    BenchmarkState,
     assert_smb_purpose_allowed,
 )
 
@@ -111,6 +112,10 @@ def load_smb(
     purpose: BenchmarkPurpose | str,
     loader: DatasetLoader | None = None,
     descriptor_path: Path = SMB_DESCRIPTOR_PATH,
+    state: BenchmarkState | str = BenchmarkState.AUDIT_LOCKED,
+    unlock_record: Mapping[str, object] | None = None,
+    project_root: Path | None = None,
+    manifest_generation_root: Path | None = None,
 ) -> object:
     """Load the sole SMB split at its immutable revision after the policy guard passes.
 
@@ -127,6 +132,10 @@ def load_smb(
     return assert_smb_purpose_allowed(
         source_descriptor=descriptor,
         purpose=purpose,
+        state=state,
+        unlock_record=unlock_record,
+        project_root=project_root,
+        manifest_generation_root=manifest_generation_root,
         callback=lambda: selected_loader(repository_id, split=split, revision=revision),
     )
 

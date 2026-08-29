@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "record_type": "smb-freeze-control",
+  "status": "frozen",
+  "artifact_kind": "controlled_conditions_control",
+  "control_id": "controlled_conditions_frozen",
+  "content": {
+    "degradation_control_ids": ["controlled-score-v1"],
+    "execution_control_ids": ["smb-pretrained-evaluation-v1"]
+  }
+}

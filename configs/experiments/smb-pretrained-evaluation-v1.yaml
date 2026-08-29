@@ -1,0 +1,68 @@
+schema_version: 1
+record_type: smb-pretrained-comparison
+experiment_id: smb-pretrained-evaluation-v1
+status: frozen
+claim_boundary: fixed-outcome-blind-64-page-smb-sample
+dataset:
+  repository_id: PRAIG/SMB
+  revision: 96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb
+  split: test
+  role: evaluation-only
+sample:
+  path: data/audits/smb-visual-sample-v1.csv
+  sha256: 993a9d03fceb733982ee2091de13b2991e57c511013e2f263041835b6e508970
+  item_count: 64
+  independent_source_group_count: 64
+  original_selection_algorithm: sha256-rank-v1
+  original_selection_seed: 20260818
+  selection_state: pre-review
+methods:
+  - bicubic-opencv-v1
+  - edsr-baseline-official-v1
+  - swinir-lightweight-official-v1
+scales: [2, 4]
+conditions:
+  - x2-clean
+  - x2-moderate
+  - x2-strong
+  - x4-clean
+  - x4-moderate
+  - x4-strong
+degradation:
+  control_path: configs/degradations/controlled-score-v1.yaml
+  file_sha256: 3b5c72a0c870232d80482ef657ddfc873eb530a8d51a87a3e278f7bbb4d2006a
+metrics:
+  primary: [psnr-bt601-y-v1, ssim-wang11-bt601-y-v1]
+  diagnostics: [psnr-rgb-v1, ssim-wang11-rgb-v1, runtime-seconds-v1]
+  aggregation_unit: source-group
+  uncertainty: source-group-cluster-bootstrap
+  bootstrap_seed: 20260829
+  bootstrap_repetitions: 2000
+inference:
+  tile_size: 256
+  tile_overlap: 32
+  window_size: 8
+  precision: float32
+qualitative:
+  selection_algorithm: sha256-rank-v1
+  selection_seed: 20260829
+  assignment:
+    - [smb-test-000683, x2-clean]
+    - [smb-test-000295, x2-moderate]
+    - [smb-test-000513, x2-strong]
+    - [smb-test-000519, x4-clean]
+    - [smb-test-000304, x4-moderate]
+    - [smb-test-000278, x4-strong]
+  failure_taxonomy:
+    - staff-line-breakage-or-removal
+    - staff-line-thickening-or-hallucination
+    - altered-or-missing-symbol
+    - unintended-join-or-separation
+    - text-or-digit-corruption
+    - plausible-musical-change
+interpretation:
+  - Compare methods only within the same scale and degradation profile.
+  - Treat SMB as evaluation-only and never tune from these outcomes.
+  - Retain all failures and negative examples.
+  - Do not claim population prevalence from the 64-page sample.
+  - Prefer fidelity and musical correctness over visually invented detail.

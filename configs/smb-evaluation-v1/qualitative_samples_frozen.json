@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "record_type": "smb-freeze-control",
+  "status": "frozen",
+  "artifact_kind": "qualitative_samples_control",
+  "control_id": "qualitative_samples_frozen",
+  "content": {
+    "outcome_independent": true,
+    "sampling_rule_id": "phase3-sha-rank-condition-assignment-v1",
+    "sampling_rule_version": 1,
+    "item_set_sha256": "d5a60c080d69bbfdf955f3a7cce1a29067595119bc0bb8b65404c2906efb1e02",
+    "item_count": 6
+  }
+}

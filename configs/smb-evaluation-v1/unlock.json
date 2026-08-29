@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "record_type": "smb-evaluation-unlock",
+  "review_status": "reviewed",
+  "reviewer": "Daniel Reinón García",
+  "reviewed_at": "2026-08-30",
+  "prerequisites": {
+    "smb_audit_complete": {
+      "prerequisite_id": "smb_audit_complete",
+      "evidence_id": "smb-audit-complete-v1",
+      "artifact_path": "configs/smb-evaluation-v1/smb_audit_complete.json",
+      "artifact_sha256": "e28aa73553afa1bfbdab99a1382bb7c693c86410595576e118779f3acbffe5c0",
+      "artifact_kind": "smb_audit_control",
+      "schema_id": "smb-freeze-control",
+      "schema_version": 1
+    },
+    "evaluation_manifest_frozen": {
+      "prerequisite_id": "evaluation_manifest_frozen",
+      "evidence_id": "smb-evaluation-manifest-v2",
+      "artifact_path": "data/manifests/smb-evaluation-v1.yaml",
+      "artifact_sha256": "89ff2e88a7e0e65ff1c21806661e8407106f4631884a396bb6f973d36745073c",
+      "artifact_kind": "manifest_active",
+      "schema_id": "manifest-active",
+      "schema_version": 2,
+      "expected_generation_id": "d97ac77f7ee672fca2c3d09b8d6fbf319719306d4ed8315e9cf8b56ec373e3fe",
+      "expected_row_count": 685,
+      "expected_records_sha256": "56cebb344ae512a3dea16ce4848bce197f971493c98c5c388fe9a094922b820b",
+      "expected_benchmark_state": "AUDITED_LOCKED"
+    },
+    "methods_frozen": {
+      "prerequisite_id": "methods_frozen",
+      "evidence_id": "smb-methods-v1",
+      "artifact_path": "configs/smb-evaluation-v1/methods_frozen.json",
+      "artifact_sha256": "093c758e483988172669a660af9e40c2a34a3bfd7a7e75c04497184630861ab8",
+      "artifact_kind": "methods_control",
+      "schema_id": "smb-freeze-control",
+      "schema_version": 1
+    },
+    "checkpoints_frozen": {
+      "prerequisite_id": "checkpoints_frozen",
+      "evidence_id": "smb-checkpoints-v1",
+      "artifact_path": "configs/smb-evaluation-v1/checkpoints_frozen.json",
+      "artifact_sha256": "e308c96a38229e5057211032e7dad0c9ab4984565fc06cd0716efff0120c766d",
+      "artifact_kind": "checkpoints_control",
+      "schema_id": "smb-freeze-control",
+      "schema_version": 1
+    },
+    "controlled_conditions_frozen": {
+      "prerequisite_id": "controlled_conditions_frozen",
+      "evidence_id": "smb-controlled-conditions-v1",
+      "artifact_path": "configs/smb-evaluation-v1/controlled_conditions_frozen.json",
+      "artifact_sha256": "7dd63181e7b02f0afe3d99f64ec59c9820385dd4865d75196e4aa639674d8edd",
+      "artifact_kind": "controlled_conditions_control",
+      "schema_id": "smb-freeze-control",
+      "schema_version": 1
+    },
+    "metrics_frozen": {
+      "prerequisite_id": "metrics_frozen",
+      "evidence_id": "smb-metrics-v1",
+      "artifact_path": "configs/smb-evaluation-v1/metrics_frozen.json",
+      "artifact_sha256": "3a96afec8fcbeeb2ae22e1cb5a6205ce7e86303c3d66cde714f40b5f2a2e9d1d",
+      "artifact_kind": "metrics_control",
+      "schema_id": "smb-freeze-control",
+      "schema_version": 1
+    },
+    "independent_units_frozen": {
+      "prerequisite_id": "independent_units_frozen",
+      "evidence_id": "smb-independent-units-v1",
+      "artifact_path": "configs/smb-evaluation-v1/independent_units_frozen.json",
+      "artifact_sha256": "2b77ef1e8fcf91b34e96af79378d42233a78d7d65a1a3ee929294bcbb6930313",
+      "artifact_kind": "independent_units_control",
+      "schema_id": "smb-freeze-control",
+      "schema_version": 1
+    },
+    "exclusions_frozen": {
+      "prerequisite_id": "exclusions_frozen",
+      "evidence_id": "smb-exclusions-v1",
+      "artifact_path": "configs/smb-evaluation-v1/exclusions_frozen.json",
+      "artifact_sha256": "d49115c645393e7cc8f8100357d8aaeb1acc6c43e822007c2ef47fc7d99c5994",
+      "artifact_kind": "exclusions_control",
+      "schema_id": "smb-freeze-control",
+      "schema_version": 1
+    },
+    "seeds_frozen": {
+      "prerequisite_id": "seeds_frozen",
+      "evidence_id": "smb-seeds-v1",
+      "artifact_path": "configs/smb-evaluation-v1/seeds_frozen.json",
+      "artifact_sha256": "793cf7b792abc3e4af040ab2e0f4c82a37ff2a2b55c9ad4cabf19124bacc99f3",
+      "artifact_kind": "seeds_control",
+      "schema_id": "smb-freeze-control",
+      "schema_version": 1
+    },
+    "qualitative_samples_frozen": {
+      "prerequisite_id": "qualitative_samples_frozen",
+      "evidence_id": "smb-qualitative-samples-v1",
+      "artifact_path": "configs/smb-evaluation-v1/qualitative_samples_frozen.json",
+      "artifact_sha256": "15ee151dcfba15b4d77266dc25ead79f26be7e3e6258714ab86c0116e4b2082a",
+      "artifact_kind": "qualitative_samples_control",
+      "schema_id": "smb-freeze-control",
+      "schema_version": 1
+    },
+    "interpretation_rules_frozen": {
+      "prerequisite_id": "interpretation_rules_frozen",
+      "evidence_id": "smb-interpretation-rules-v1",
+      "artifact_path": "configs/smb-evaluation-v1/interpretation_rules_frozen.json",
+      "artifact_sha256": "756fd457d6655ca87e4f579303df55f7853db04750dc38290f72a5594d7cc7f8",
+      "artifact_kind": "interpretation_rules_control",
+      "schema_id": "smb-freeze-control",
+      "schema_version": 1
+    },
+    "human_unlock_recorded": {
+      "prerequisite_id": "human_unlock_recorded",
+      "evidence_id": "smb-human-unlock-v1",
+      "artifact_path": "configs/smb-evaluation-v1/human_unlock_recorded.json",
+      "artifact_sha256": "3dc3411f9e5057b6f012eb7093b967a6723445130f681e60ccfadb18c84ac493",
+      "artifact_kind": "human_unlock_approval",
+      "schema_id": "smb-freeze-control",
+      "schema_version": 1
+    }
+  }
+}
