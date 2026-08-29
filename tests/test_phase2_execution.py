@@ -4,6 +4,7 @@ import copy
 import json
 import subprocess
 import sys
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -297,6 +298,10 @@ def test_writer_contention_blocks_reconcile_and_export_without_mutation(tmp_path
             reconcile_run(CONFIG_PATH, root)
         with pytest.raises(ExecutionBusyError):
             export_reconciled_run(CONFIG_PATH, root)
+        with pytest.raises(ExecutionBusyError):
+            execute_run(CONFIG_PATH, root, max_tuples=0)
+        with pytest.raises(ExecutionBusyError):
+            resume_run(CONFIG_PATH, root, max_tuples=0)
     assert snapshot_run(root) == before
 
 
@@ -371,12 +376,10 @@ def test_failpoint_matrix_resumes_without_losing_attempt_evidence(
                 raise ExecutionInterruptedError("interrupted after commit")
             raise OSError("injected publication fault")
 
-    try:
+    with suppress(ExecutionInterruptedError):
         execute_run(CONFIG_PATH, root, max_tuples=1, boundary_hook=fail)
-    except ExecutionInterruptedError:
-        pass
     before = snapshot_run(root)
     resume_run(CONFIG_PATH, root, max_tuples=1)
     after = snapshot_run(root)
-    assert after.counts.get("succeeded") == 1
+    assert after.counts.get("succeeded", 0) == before.counts.get("succeeded", 0) + 1
     assert after.attempt_count >= before.attempt_count

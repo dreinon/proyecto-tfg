@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v2:replay-report",
+  "title": "Phase 2 clean-root replay equivalence report v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "replay_id", "experiment_id", "experiment_sha256",
+    "primary_reconciliation_id", "primary_reconciliation_sha256",
+    "replay_reconciliation_id", "replay_reconciliation_sha256", "expected_tuple_count",
+    "resolved_controls_sha256", "primary_scientific_projection_sha256",
+    "replay_scientific_projection_sha256", "primary_output_pixels_sha256",
+    "replay_output_pixels_sha256", "status", "report_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "record_type": {"const": "replay-report"},
+    "replay_id": {"type": "string", "pattern": "^replay-[0-9a-f]{64}$"},
+    "experiment_id": {"type": "string", "pattern": "^experiment-[0-9a-f]{64}$"},
+    "experiment_sha256": {"$ref": "#/$defs/sha256"},
+    "primary_reconciliation_id": {"type": "string", "pattern": "^reconciliation-[0-9a-f]{64}$"},
+    "primary_reconciliation_sha256": {"$ref": "#/$defs/sha256"},
+    "replay_reconciliation_id": {"type": "string", "pattern": "^reconciliation-[0-9a-f]{64}$"},
+    "replay_reconciliation_sha256": {"$ref": "#/$defs/sha256"},
+    "expected_tuple_count": {"const": 144},
+    "resolved_controls_sha256": {"$ref": "#/$defs/sha256"},
+    "primary_scientific_projection_sha256": {"$ref": "#/$defs/sha256"},
+    "replay_scientific_projection_sha256": {"$ref": "#/$defs/sha256"},
+    "primary_output_pixels_sha256": {"$ref": "#/$defs/sha256"},
+    "replay_output_pixels_sha256": {"$ref": "#/$defs/sha256"},
+    "status": {"const": "equivalent"},
+    "report_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}

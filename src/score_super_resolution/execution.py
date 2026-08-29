@@ -34,9 +34,13 @@ from score_super_resolution.degradation import (
 )
 from score_super_resolution.environment import environment_snapshot
 from score_super_resolution.evaluation import (
+    AggregateControl,
     FidelityControl,
+    QualitativeControl,
+    aggregate_paired,
     compute_fidelity,
     load_evaluation_control,
+    select_qualitative_panels,
 )
 from score_super_resolution.identities import canonical_sha256, experiment_identity
 from score_super_resolution.resources import measure_baseline_resources
@@ -172,6 +176,18 @@ def _secret_like_key(value: Any, path: tuple[str, ...] = ()) -> str | None:
             if found is not None:
                 return found
     return None
+
+
+def _contains_absolute_string(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return any(_contains_absolute_string(child) for child in value.values())
+    if isinstance(value, list):
+        return any(_contains_absolute_string(child) for child in value)
+    if isinstance(value, str):
+        return value.startswith(("/", "\\")) or (
+            len(value) >= 3 and value[1] == ":" and value[2] in {"/", "\\"}
+        )
+    return False
 
 
 def _read_regular(path: Path, *, maximum_bytes: int, kind: str) -> bytes:
@@ -939,6 +955,8 @@ def _compute_tuple(
         "scientific_result_id": f"scientific-{digest}",
         "scientific_sha256": digest,
     }
+    if _contains_absolute_string(scientific):
+        raise ExecutionContractError("scientific result contains an absolute local path")
     validate_instance("scientific-result", scientific, version=2)
     return output_bytes, scientific
 
@@ -1086,6 +1104,8 @@ def _success_validation_error(
         if not isinstance(scientific, dict):
             raise ValueError
         validate_instance("scientific-result", scientific, version=2)
+        if _contains_absolute_string(scientific):
+            raise ValueError
     except (ExecutionContractError, ContractValidationError, json.JSONDecodeError, ValueError):
         return "SCIENTIFIC_PAYLOAD_MISMATCH", observed
     digest = _scientific_digest(scientific)
@@ -1307,15 +1327,66 @@ def _reconcile_locked(
     try:
         _recover_running(connection)
         _validate_and_repair_successes(connection, config, authority)
+        rows = connection.execute("SELECT * FROM expected_tuples ORDER BY tuple_id").fetchall()
+        attempts = int(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0])
+        incidents = int(
+            connection.execute("SELECT COUNT(*) FROM integrity_incidents").fetchone()[0]
+        )
     finally:
         connection.close()
-    snapshot = snapshot_run(authority.root)
-    nonterminal = {
-        state: count for state, count in snapshot.counts.items() if state not in TERMINAL_STATES
-    }
+    counts = Counter(str(row["state"]) for row in rows)
+    nonterminal = {state: count for state, count in counts.items() if state not in TERMINAL_STATES}
     if nonterminal:
         raise ReconciliationError(f"run contains nonterminal tuples: {nonterminal}")
-    raise ReconciliationError("reconciliation publication is implemented by Task 3")
+    if len(rows) != len(_expected_tuples(config)):
+        raise ReconciliationError("run tuple denominator differs from the experiment")
+    states = _tuple_states(rows, include_failure_stage=False)
+    records = _scientific_records(authority.root, rows, config)
+    identity_core = {
+        "experiment_id": config.experiment_id,
+        "experiment_sha256": config.experiment_sha256,
+        "tuple_state_sha256": canonical_sha256(states),
+        "scientific_records_sha256": canonical_sha256(
+            [_scientific_projection(record) for record in records]
+        ),
+        "attempt_count": attempts,
+        "integrity_incident_count": incidents,
+    }
+    reconciliation_id = f"reconciliation-{canonical_sha256(identity_core)}"
+    payload: dict[str, Any] = {
+        "schema_version": 2,
+        "record_type": "reconciliation-report",
+        "reconciliation_id": reconciliation_id,
+        "experiment_id": config.experiment_id,
+        "experiment_sha256": config.experiment_sha256,
+        "degradation_control_sha256": config.payload["controls"]["degradation_sha256"],
+        "evaluation_control_sha256": config.payload["controls"]["evaluation_sha256"],
+        "fixture_manifest_sha256": config.payload["fixture"]["manifest_sha256"],
+        "core_membership_id": config.payload["qualitative_core"]["core_membership_id"],
+        "core_sha256": config.payload["qualitative_core"]["core_sha256"],
+        "expected_tuple_count": len(rows),
+        "terminal_tuple_count": len(rows),
+        "counts": {
+            "succeeded": counts.get("succeeded", 0),
+            "failed": counts.get("failed", 0),
+            "excluded": counts.get("excluded", 0),
+        },
+        "attempt_count": attempts,
+        "integrity_incident_count": incidents,
+        "tuple_state_sha256": identity_core["tuple_state_sha256"],
+        "scientific_records_sha256": identity_core["scientific_records_sha256"],
+    }
+    payload["report_sha256"] = canonical_sha256(payload)
+    validate_instance("reconciliation-report", payload, version=2)
+    path = authority.root / "reconciliation-report.json"
+    _durable_replace(
+        path,
+        _canonical_json(payload),
+        tuple_id="reconciliation",
+        prefix="reconciliation",
+        boundary_hook=None,
+    )
+    return ReconciliationReport(payload=payload, path=path)
 
 
 def reconcile_run(config_path: Path, artifact_root: Path) -> ReconciliationReport:
@@ -1357,5 +1428,345 @@ def resume_run(
     )
 
 
-def export_reconciled_run(*_args: Any, **_kwargs: Any) -> ExportBundle:
-    raise NotImplementedError("portable export is implemented by Task 3")
+def _tuple_states(rows: list[sqlite3.Row], *, include_failure_stage: bool) -> list[dict[str, Any]]:
+    states: list[dict[str, Any]] = []
+    for row in rows:
+        state = "success" if row["state"] == "succeeded" else str(row["state"])
+        item: dict[str, Any] = {
+            "item_id": str(row["item_id"]),
+            "source_group_id": str(row["source_group_id"]),
+            "condition_id": str(row["condition_id"]),
+            "method_id": str(row["method_id"]),
+            "state": state,
+            "attempt_count": int(row["attempt_count"]),
+            "exclusion_reason": row["exclusion_reason"],
+        }
+        if include_failure_stage and state == "failed":
+            item["failure_stage"] = "execution"
+        states.append(item)
+    return sorted(
+        states,
+        key=lambda row: (
+            row["condition_id"],
+            row["source_group_id"],
+            row["item_id"],
+            row["method_id"],
+        ),
+    )
+
+
+def _scientific_records(
+    root: Path, rows: list[sqlite3.Row], config: ExperimentConfig
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for row in rows:
+        if row["state"] != "succeeded":
+            continue
+        reason, _observed = _success_validation_error(root, row, config.payload["limits"])
+        if reason:
+            raise ReconciliationError("a reconciled success no longer validates")
+        path = _confined_runtime_path(root, str(row["scientific_relative_path"]))
+        record = json.loads(
+            _read_regular(
+                path,
+                maximum_bytes=int(config.payload["limits"]["max_output_bytes"]),
+                kind="scientific record",
+            )
+        )
+        if not isinstance(record, dict):
+            raise ReconciliationError("scientific record root is invalid")
+        records.append(record)
+    return sorted(records, key=lambda record: str(record["tuple_id"]))
+
+
+def _scientific_projection(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Return only deterministic scientific fields for reconciliation and replay."""
+
+    return {
+        key: value
+        for key, value in record.items()
+        if key not in {"scientific_result_id", "scientific_sha256", "resource"}
+    }
+
+
+def _read_ledger_rows(root: Path) -> list[sqlite3.Row]:
+    connection = _connect(root, writable=False)
+    try:
+        return connection.execute("SELECT * FROM expected_tuples ORDER BY tuple_id").fetchall()
+    finally:
+        connection.close()
+
+
+def _portable_environment(config: ExperimentConfig, authority: _WriterAuthority) -> dict[str, Any]:
+    raw_path = authority.root / "attempts/local-attempt-environment.json"
+    raw = json.loads(
+        _read_regular(
+            raw_path,
+            maximum_bytes=int(config.payload["limits"]["max_output_bytes"]),
+            kind="local attempt environment",
+        )
+    )
+    environment = raw["environment"]
+    runtime = _resource_environment()
+    repositories = []
+    for role in ("workspace-planning", "proyecto", "memoria"):
+        repository = environment["repositories"][role]
+        repositories.append(
+            {
+                "role": role,
+                "revision_state": repository["revision_state"],
+                "revision": repository["revision"],
+                "dirty": repository["dirty"],
+            }
+        )
+    return {
+        "runtime": {
+            "python_version": environment["python"]["version"],
+            "implementation": environment["python"]["implementation"],
+            "platform": environment["platform"]["system"],
+            "machine": environment["platform"]["machine"],
+        },
+        "dependencies": dict(sorted(environment["packages"].items())),
+        "repositories": repositories,
+        "opencv": {
+            "version": runtime["opencv_version"],
+            "build_sha256": runtime["opencv_build_sha256"],
+        },
+        "hardware": {
+            "cpu_model": runtime["cpu_model"],
+            "logical_cpu_count": runtime["logical_cpu_count"],
+        },
+        "applicability": {"gpu": "not_used", "learned_model": "not_applicable"},
+    }
+
+
+def _evidence_file(path: Path, root: Path, *, record_count: int) -> dict[str, Any]:
+    raw = _read_regular(path, maximum_bytes=64 * 1024 * 1024, kind="portable evidence")
+    return {
+        "relative_path": path.relative_to(root).as_posix(),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "record_count": record_count,
+    }
+
+
+def _export_locked(
+    config: ExperimentConfig, authority: _WriterAuthority, reconciliation: ReconciliationReport
+) -> ExportBundle:
+    rows = _read_ledger_rows(authority.root)
+    records = _scientific_records(authority.root, rows, config)
+    metrics = sorted(
+        (dict(metric) for record in records for metric in record["metrics"]),
+        key=lambda metric: str(metric["metric_result_id"]),
+    )
+    aggregate_states = _tuple_states(rows, include_failure_stage=False)
+    evaluation = load_evaluation_control(
+        _project_relative(
+            config.project_root,
+            config.payload["controls"]["evaluation_path"],
+            kind="evaluation path",
+        )
+    )
+    aggregate = aggregate_paired(
+        metrics,
+        aggregate_states,
+        control=AggregateControl(
+            evaluation=evaluation,
+            experiment_id=config.experiment_id,
+            reconciliation_id=reconciliation.payload["reconciliation_id"],
+            reconciliation_sha256=reconciliation.payload["report_sha256"],
+            raw_metric_input_sha256=canonical_sha256(metrics),
+            tuple_state_input_sha256=canonical_sha256(aggregate_states),
+        ),
+    )
+    aggregate_path = authority.root / "evidence/aggregate-six-cell.json"
+    _durable_replace(
+        aggregate_path,
+        _canonical_json(aggregate),
+        tuple_id="aggregate",
+        prefix="aggregate",
+        boundary_hook=None,
+    )
+
+    fixture = _load_mapping(
+        _project_relative(
+            config.project_root, config.payload["fixture"]["manifest_path"], kind="fixture path"
+        ),
+        kind="fixture manifest",
+    )
+    core = _load_mapping(
+        _project_relative(
+            config.project_root,
+            config.payload["qualitative_core"]["membership_path"],
+            kind="qualitative core path",
+        ),
+        kind="qualitative core membership",
+    )
+    membership = select_qualitative_panels(
+        metrics,
+        _tuple_states(rows, include_failure_stage=True),
+        fixture,
+        control=QualitativeControl(
+            evaluation=evaluation,
+            experiment_id=config.experiment_id,
+            core_membership=core,
+        ),
+    )
+    membership_path = authority.root / "evidence/qualitative-membership.json"
+    _durable_replace(
+        membership_path,
+        _canonical_json(membership),
+        tuple_id="qualitative-membership",
+        prefix="qualitative_membership",
+        boundary_hook=None,
+    )
+
+    jsonl_path = authority.root / "export/scientific-records.jsonl"
+    jsonl = b"".join(_canonical_json(record) for record in records)
+    _durable_replace(
+        jsonl_path,
+        jsonl,
+        tuple_id="scientific-jsonl",
+        prefix="scientific_jsonl",
+        boundary_hook=None,
+    )
+    reconciliation_path = authority.root / "reconciliation-report.json"
+    manifest_core: dict[str, Any] = {
+        "schema_version": 2,
+        "record_type": "portable-export",
+        "experiment_id": config.experiment_id,
+        "experiment_sha256": config.experiment_sha256,
+        "reconciliation_id": reconciliation.payload["reconciliation_id"],
+        "reconciliation_sha256": reconciliation.payload["report_sha256"],
+        "dataset_role": config.payload["dataset_role"],
+        "controls": {
+            "degradation_sha256": config.payload["controls"]["degradation_sha256"],
+            "evaluation_sha256": config.payload["controls"]["evaluation_sha256"],
+            "fixture_manifest_sha256": config.payload["fixture"]["manifest_sha256"],
+            "core_membership_id": config.payload["qualitative_core"]["core_membership_id"],
+            "core_sha256": config.payload["qualitative_core"]["core_sha256"],
+        },
+        "scientific_records": _evidence_file(jsonl_path, authority.root, record_count=len(records)),
+        "evidence": [
+            _evidence_file(reconciliation_path, authority.root, record_count=len(rows)),
+            _evidence_file(aggregate_path, authority.root, record_count=len(aggregate["cells"])),
+            _evidence_file(
+                membership_path,
+                authority.root,
+                record_count=len(membership["core_panels"]) + len(membership["additional_panels"]),
+            ),
+        ],
+        "environment": _portable_environment(config, authority),
+    }
+    export_id = f"export-{canonical_sha256(manifest_core)}"
+    manifest = {**manifest_core, "portable_export_id": export_id}
+    manifest["manifest_sha256"] = canonical_sha256(manifest)
+    if _secret_like_key(manifest) is not None or _contains_absolute_string(manifest):
+        raise ExecutionContractError("portable export contains unsafe local metadata")
+    validate_instance("portable-export", manifest, version=2)
+    manifest_path = authority.root / "export/portable-export-manifest.json"
+    _durable_replace(
+        manifest_path,
+        _canonical_json(manifest),
+        tuple_id="portable-export",
+        prefix="portable_export",
+        boundary_hook=None,
+    )
+    return ExportBundle(
+        experiment_id=config.experiment_id,
+        reconciliation_id=reconciliation.payload["reconciliation_id"],
+        manifest_path=manifest_path,
+    )
+
+
+def export_reconciled_run(config_path: Path, artifact_root: Path) -> ExportBundle:
+    config = load_experiment_config(config_path)
+    with artifact_writer_lock(artifact_root) as authority:
+        _initialize_locked(config, authority)
+        reconciliation = _reconcile_locked(config, authority)
+        return _export_locked(config, authority, reconciliation)
+
+
+def replay_run(config_path: Path, primary_root: Path, replay_root: Path) -> dict[str, Any]:
+    """Compare two already-complete roots and publish an equivalence report in the primary."""
+
+    config = load_experiment_config(config_path)
+    replay_reconciliation = reconcile_run(config_path, replay_root)
+    replay_rows = _read_ledger_rows(Path(replay_root).resolve())
+    replay_records = _scientific_records(Path(replay_root).resolve(), replay_rows, config)
+    with artifact_writer_lock(primary_root) as authority:
+        _initialize_locked(config, authority)
+        primary_reconciliation = _reconcile_locked(config, authority)
+        primary_rows = _read_ledger_rows(authority.root)
+        primary_records = _scientific_records(authority.root, primary_rows, config)
+        primary_projection = canonical_sha256(
+            [_scientific_projection(record) for record in primary_records]
+        )
+        replay_projection = canonical_sha256(
+            [_scientific_projection(record) for record in replay_records]
+        )
+        primary_pixels = canonical_sha256([str(row["output_pixel_sha256"]) for row in primary_rows])
+        replay_pixels = canonical_sha256([str(row["output_pixel_sha256"]) for row in replay_rows])
+        controls_sha = canonical_sha256(
+            {
+                "degradation": config.payload["controls"]["degradation_sha256"],
+                "evaluation": config.payload["controls"]["evaluation_sha256"],
+                "fixture": config.payload["fixture"]["manifest_sha256"],
+                "core": config.payload["qualitative_core"]["core_sha256"],
+            }
+        )
+        if primary_projection != replay_projection or primary_pixels != replay_pixels:
+            raise ReconciliationError("clean-root replay differs from the interrupted run")
+        core = {
+            "schema_version": 2,
+            "record_type": "replay-report",
+            "experiment_id": config.experiment_id,
+            "experiment_sha256": config.experiment_sha256,
+            "primary_reconciliation_id": primary_reconciliation.payload["reconciliation_id"],
+            "primary_reconciliation_sha256": primary_reconciliation.payload["report_sha256"],
+            "replay_reconciliation_id": replay_reconciliation.payload["reconciliation_id"],
+            "replay_reconciliation_sha256": replay_reconciliation.payload["report_sha256"],
+            "expected_tuple_count": len(primary_rows),
+            "resolved_controls_sha256": controls_sha,
+            "primary_scientific_projection_sha256": primary_projection,
+            "replay_scientific_projection_sha256": replay_projection,
+            "primary_output_pixels_sha256": primary_pixels,
+            "replay_output_pixels_sha256": replay_pixels,
+            "status": "equivalent",
+        }
+        replay_id = f"replay-{canonical_sha256(core)}"
+        report = {**core, "replay_id": replay_id}
+        report["report_sha256"] = canonical_sha256(report)
+        validate_instance("replay-report", report, version=2)
+        _durable_replace(
+            authority.root / "replay-report.json",
+            _canonical_json(report),
+            tuple_id="replay-report",
+            prefix="replay_report",
+            boundary_hook=None,
+        )
+        return report
+
+
+def audit_no_smb(artifact_root: Path) -> dict[str, Any]:
+    """Boundedly verify that a stable fixture artifact tree contains no SMB/secret marker."""
+
+    with artifact_writer_lock(artifact_root) as authority:
+        checked = 0
+        for path in sorted(authority.root.rglob("*")):
+            if path.is_symlink():
+                raise ExecutionContractError("artifact root contains a symlink")
+            if not path.is_file() or path.name in {_LOCK_NAME, _LEDGER_NAME}:
+                continue
+            if path.stat().st_size > 64 * 1024 * 1024:
+                raise ExecutionContractError("artifact root contains an oversized file")
+            checked += 1
+            if path.suffix.casefold() not in {".json", ".jsonl", ".yaml", ".yml", ".txt"}:
+                continue
+            text = _read_regular(path, maximum_bytes=64 * 1024 * 1024, kind="audit evidence")
+            lowered = text.lower()
+            if any(
+                marker in lowered
+                for marker in (b"praig/smb", b"hf_token", b"authorization: bearer", b'"token":')
+            ):
+                raise ExecutionContractError("artifact root crosses the fixture-only boundary")
+        return {"status": "clean", "checked_file_count": checked}

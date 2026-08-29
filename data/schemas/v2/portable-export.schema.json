@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v2:portable-export",
+  "title": "Secret-safe portable Phase 2 export manifest v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "portable_export_id", "experiment_id",
+    "experiment_sha256", "reconciliation_id", "reconciliation_sha256", "dataset_role",
+    "controls", "scientific_records", "evidence", "environment", "manifest_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "record_type": {"const": "portable-export"},
+    "portable_export_id": {"type": "string", "pattern": "^export-[0-9a-f]{64}$"},
+    "experiment_id": {"type": "string", "pattern": "^experiment-[0-9a-f]{64}$"},
+    "experiment_sha256": {"$ref": "#/$defs/sha256"},
+    "reconciliation_id": {"type": "string", "pattern": "^reconciliation-[0-9a-f]{64}$"},
+    "reconciliation_sha256": {"$ref": "#/$defs/sha256"},
+    "dataset_role": {"const": "pipeline-validation-only"},
+    "controls": {
+      "type": "object", "additionalProperties": false,
+      "required": ["degradation_sha256", "evaluation_sha256", "fixture_manifest_sha256", "core_membership_id", "core_sha256"],
+      "properties": {
+        "degradation_sha256": {"$ref": "#/$defs/sha256"},
+        "evaluation_sha256": {"$ref": "#/$defs/sha256"},
+        "fixture_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "core_membership_id": {"type": "string", "pattern": "^core-[0-9a-f]{64}$"},
+        "core_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "scientific_records": {"$ref": "#/$defs/evidence_file"},
+    "evidence": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"$ref": "#/$defs/evidence_file"}},
+    "environment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["runtime", "dependencies", "repositories", "opencv", "hardware", "applicability"],
+      "properties": {
+        "runtime": {"type": "object", "additionalProperties": false, "required": ["python_version", "implementation", "platform", "machine"], "properties": {
+          "python_version": {"type": "string", "minLength": 1}, "implementation": {"type": "string", "minLength": 1},
+          "platform": {"type": "string", "minLength": 1}, "machine": {"type": "string", "minLength": 1}
+        }},
+        "dependencies": {"type": "object", "additionalProperties": {"type": "string"}},
+        "repositories": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "object", "additionalProperties": false, "required": ["role", "revision_state", "revision", "dirty"], "properties": {
+          "role": {"enum": ["workspace-planning", "proyecto", "memoria"]}, "revision_state": {"enum": ["committed", "unborn", "unavailable"]},
+          "revision": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"}, "dirty": {"type": ["boolean", "null"]}
+        }}},
+        "opencv": {"type": "object", "additionalProperties": false, "required": ["version", "build_sha256"], "properties": {
+          "version": {"type": "string", "minLength": 1}, "build_sha256": {"$ref": "#/$defs/sha256"}
+        }},
+        "hardware": {"type": "object", "additionalProperties": false, "required": ["cpu_model", "logical_cpu_count"], "properties": {
+          "cpu_model": {"type": "string", "minLength": 1}, "logical_cpu_count": {"type": "integer", "minimum": 1}
+        }},
+        "applicability": {"type": "object", "additionalProperties": false, "required": ["gpu", "learned_model"], "properties": {
+          "gpu": {"const": "not_used"}, "learned_model": {"const": "not_applicable"}
+        }}
+      }
+    },
+    "manifest_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "relative_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)[.][.](?:/|$))[A-Za-z0-9][A-Za-z0-9._/-]*$"},
+    "evidence_file": {"type": "object", "additionalProperties": false, "required": ["relative_path", "sha256", "record_count"], "properties": {
+      "relative_path": {"$ref": "#/$defs/relative_path"}, "sha256": {"$ref": "#/$defs/sha256"}, "record_count": {"type": "integer", "minimum": 1}
+    }}
+  }
+}
