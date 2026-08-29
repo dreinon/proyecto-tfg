@@ -13,6 +13,9 @@ from score_super_resolution.identities import canonical_sha256
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_NOTEBOOK = PROJECT_ROOT / "notebooks/02-fixture-baseline-review.ipynb"
+SEMANTIC_SOURCE_NOTEBOOK = (
+    PROJECT_ROOT / "notebooks/02-semantic-fixture-baseline-review.ipynb"
+)
 FIXTURE_ROOT = PROJECT_ROOT / "artifacts/phase2-fixture"
 
 
@@ -338,3 +341,172 @@ def test_semantic_matrix_contract_is_closed_and_identity_sensitive(tmp_path: Pat
     assert canonical_sha256(mutated) != control["semantic_experiment_sha256"]
     with pytest.raises(FixtureReviewContractError, match="source provenance, digest, or ROI"):
         load_semantic_fixture_control(PROJECT_ROOT, path=path)
+
+
+def _primitive_inventory() -> dict[str, str]:
+    return {
+        path.relative_to(FIXTURE_ROOT).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(FIXTURE_ROOT.rglob("*"))
+        if path.is_file() and not path.is_symlink()
+    }
+
+
+def test_semantic_matrix_execution_publishes_manifest_before_compute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import score_super_resolution.review as review
+
+    artifact_root = tmp_path / "phase2-semantic-fixture"
+    prepared = review.prepare_semantic_fixture_experiment(
+        PROJECT_ROOT, artifact_root=artifact_root
+    )
+    manifest_path = artifact_root / "semantic-experiment-manifest.json"
+    assert manifest_path.exists()
+    assert prepared["expected_tuple_count"] == 36
+    assert not (artifact_root / "records").exists()
+
+    degradation_calls: list[tuple[str, str]] = []
+    baseline_calls: list[tuple[str, str]] = []
+    original_degradation = review.apply_degradation
+    original_baseline = review.run_baseline
+
+    def checked_degradation(*args: object, **kwargs: object) -> object:
+        assert manifest_path.exists()
+        degradation_calls.append((str(kwargs["item_id"]), str(kwargs["condition_id"])))
+        return original_degradation(*args, **kwargs)
+
+    def checked_baseline(*args: object, **kwargs: object) -> object:
+        assert manifest_path.exists()
+        baseline_calls.append((str(args[0]), str(kwargs["condition_id"])))
+        return original_baseline(*args, **kwargs)
+
+    monkeypatch.setattr(review, "apply_degradation", checked_degradation)
+    monkeypatch.setattr(review, "run_baseline", checked_baseline)
+    executed = review.execute_semantic_fixture_experiment(
+        PROJECT_ROOT, artifact_root=artifact_root
+    )
+
+    assert executed["terminal_tuple_count"] == 36
+    assert len(degradation_calls) == 12
+    assert len(baseline_calls) == 36
+    assert len(set(degradation_calls)) == 12
+
+
+def test_semantic_manifest_reconciliation_rejects_unexpected_or_partial_tuple(
+    tmp_path: Path,
+) -> None:
+    from score_super_resolution.review import (
+        FixtureReviewContractError,
+        execute_semantic_fixture_experiment,
+        prepare_semantic_fixture_experiment,
+        reconcile_semantic_fixture_experiment,
+    )
+
+    artifact_root = tmp_path / "phase2-semantic-fixture"
+    prepare_semantic_fixture_experiment(PROJECT_ROOT, artifact_root=artifact_root)
+    execute_semantic_fixture_experiment(PROJECT_ROOT, artifact_root=artifact_root)
+    report = reconcile_semantic_fixture_experiment(PROJECT_ROOT, artifact_root=artifact_root)
+    assert report["expected_tuple_count"] == report["terminal_tuple_count"] == 36
+    assert report["counts"] == {"succeeded": 36, "failed": 0, "excluded": 0}
+
+    unexpected = artifact_root / "records/x2-clean/bicubic-opencv-v1/unexpected.json"
+    unexpected.parent.mkdir(parents=True, exist_ok=True)
+    unexpected.write_text("{}", encoding="utf-8")
+    with pytest.raises(FixtureReviewContractError, match="unexpected|closed|tuple"):
+        reconcile_semantic_fixture_experiment(PROJECT_ROOT, artifact_root=artifact_root)
+
+
+def test_semantic_masked_panels_bind_exact_systematic_membership(tmp_path: Path) -> None:
+    from score_super_resolution.review import (
+        execute_semantic_fixture_experiment,
+        prepare_semantic_fixture_experiment,
+        prepare_semantic_review,
+        reconcile_semantic_fixture_experiment,
+    )
+
+    artifact_root = tmp_path / "phase2-semantic-fixture"
+    prepare_semantic_fixture_experiment(PROJECT_ROOT, artifact_root=artifact_root)
+    execute_semantic_fixture_experiment(PROJECT_ROOT, artifact_root=artifact_root)
+    reconcile_semantic_fixture_experiment(PROJECT_ROOT, artifact_root=artifact_root)
+    prepared = prepare_semantic_review(PROJECT_ROOT, artifact_root=artifact_root)
+
+    assert len(prepared["panels"]) == len(prepared["mapping"]) == 12
+    assert [row["source_id"] for row in prepared["panels"]] == [
+        *(["review-work-03-excerpt-01"] * 6),
+        *(["review-work-04-excerpt-01"] * 6),
+    ]
+    assert [row["condition_id"] for row in prepared["panels"]] == [
+        "x2-clean",
+        "x2-moderate",
+        "x2-strong",
+        "x4-clean",
+        "x4-moderate",
+        "x4-strong",
+    ] * 2
+    for row in prepared["mapping"]:
+        assert set(row["masked_methods"]) == {"A", "B", "C"}
+        assert set(row["masked_methods"].values()) == {
+            "nearest-opencv-exact-v1",
+            "bilinear-opencv-exact-v1",
+            "bicubic-opencv-v1",
+        }
+    assert not (artifact_root / "review/source-confirmations.json").exists()
+    assert not (artifact_root / "review/notation-review.json").exists()
+
+
+def test_semantic_notebook_source_clean_and_unprefilled() -> None:
+    from score_super_resolution.review import semantic_notebook_source_sha256
+
+    first = semantic_notebook_source_sha256(SEMANTIC_SOURCE_NOTEBOOK)
+    second = semantic_notebook_source_sha256(SEMANTIC_SOURCE_NOTEBOOK)
+    notebook = json.loads(SEMANTIC_SOURCE_NOTEBOOK.read_text(encoding="utf-8"))
+    source = "\n".join(
+        "".join(cell.get("source", []))
+        if isinstance(cell.get("source"), list)
+        else str(cell.get("source", ""))
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+
+    assert first == second == canonical_sha256(notebook)
+    assert all(
+        cell.get("execution_count") is None and cell.get("outputs") == []
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+    assert "SemanticFixtureReviewSession" in source
+    assert "review.source_confirmation_widget()" in source
+    assert "review.panel_widget()" in source
+    assert "review.review_widget()" in source
+    assert "review.progress_widget()" in source
+    assert "value=True" not in source
+    assert "none_observed" not in source
+
+
+def test_primitive_evidence_immutable_across_separate_semantic_stream(tmp_path: Path) -> None:
+    from score_super_resolution.review import (
+        execute_semantic_fixture_experiment,
+        prepare_semantic_fixture_experiment,
+        prepare_semantic_review,
+        reconcile_semantic_fixture_experiment,
+    )
+
+    before = _primitive_inventory()
+    fixed_before = {
+        relative: before[relative]
+        for relative in (
+            "reconciliation-report.json",
+            "replay-report.json",
+            "evidence/aggregate-six-cell.json",
+            "evidence/qualitative-membership.json",
+        )
+    }
+    artifact_root = tmp_path / "phase2-semantic-fixture"
+    prepare_semantic_fixture_experiment(PROJECT_ROOT, artifact_root=artifact_root)
+    execute_semantic_fixture_experiment(PROJECT_ROOT, artifact_root=artifact_root)
+    reconcile_semantic_fixture_experiment(PROJECT_ROOT, artifact_root=artifact_root)
+    prepare_semantic_review(PROJECT_ROOT, artifact_root=artifact_root)
+
+    assert _primitive_inventory() == before
+    assert {relative: _primitive_inventory()[relative] for relative in fixed_before} == fixed_before
+    assert not (FIXTURE_ROOT / "review/notation-review.json").exists()
