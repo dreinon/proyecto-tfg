@@ -5,6 +5,7 @@ import json
 import shutil
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -475,6 +476,126 @@ def test_semantic_notebook_source_clean_and_unprefilled() -> None:
     assert "review.progress_widget()" in source
     assert "value=True" not in source
     assert "none_observed" not in source
+
+
+def _widget_descendants(widget: object) -> list[object]:
+    descendants = [widget]
+    for child in getattr(widget, "children", ()):
+        descendants.extend(_widget_descendants(child))
+    return descendants
+
+
+def test_semantic_panel_navigation_refreshes_image_and_visible_condition(tmp_path: Path) -> None:
+    import ipywidgets as widgets
+
+    from score_super_resolution.review import FixtureReviewSession
+
+    first = b"distinct-panel-one"
+    second = b"distinct-panel-two"
+    panels = [
+        {
+            "panel_id": "panel-01",
+            "source_id": "review-work-03-excerpt-01",
+            "condition_id": "x2-clean",
+            "relative_path": "review/panels/panel-01.png",
+            "sha256": hashlib.sha256(first).hexdigest(),
+        },
+        {
+            "panel_id": "panel-02",
+            "source_id": "review-work-03-excerpt-01",
+            "condition_id": "x2-moderate",
+            "relative_path": "review/panels/panel-02.png",
+            "sha256": hashlib.sha256(second).hexdigest(),
+        },
+    ]
+    for panel, payload in zip(panels, (first, second), strict=True):
+        path = tmp_path / panel["relative_path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+    session = SimpleNamespace(prepared={"panels": panels}, artifact_root=tmp_path)
+
+    root = FixtureReviewSession._semantic_panel_widget_template(session)
+    descendants = _widget_descendants(root)
+    selector = next(widget for widget in descendants if isinstance(widget, widgets.SelectionSlider))
+    image = next(widget for widget in descendants if isinstance(widget, widgets.Image))
+    following = next(
+        widget
+        for widget in descendants
+        if isinstance(widget, widgets.Button) and widget.description == "Siguiente →"
+    )
+    visible_text = " ".join(
+        widget.value for widget in descendants if isinstance(widget, widgets.HTML)
+    )
+
+    assert selector.options == (
+        ("1/2 · work-03 · x2-clean", 0),
+        ("2/2 · work-03 · x2-moderate", 1),
+    )
+    assert image.value == first
+    assert "1/2 · work-03 · x2-clean" in visible_text
+
+    following.click()
+    visible_text = " ".join(
+        widget.value for widget in descendants if isinstance(widget, widgets.HTML)
+    )
+    assert selector.value == 1
+    assert image.value == second
+    assert "2/2 · work-03 · x2-moderate" in visible_text
+
+
+def test_semantic_review_selection_refreshes_preview_and_explains_close_conditions(
+    tmp_path: Path,
+) -> None:
+    import ipywidgets as widgets
+
+    from score_super_resolution.review import FixtureReviewSession
+
+    first = b"review-panel-one"
+    second = b"review-panel-two"
+    panels = [
+        {
+            "panel_id": "panel-01",
+            "source_id": "review-work-04-excerpt-01",
+            "condition_id": "x4-clean",
+            "relative_path": "review/panels/panel-01.png",
+            "sha256": hashlib.sha256(first).hexdigest(),
+        },
+        {
+            "panel_id": "panel-02",
+            "source_id": "review-work-04-excerpt-01",
+            "condition_id": "x4-moderate",
+            "relative_path": "review/panels/panel-02.png",
+            "sha256": hashlib.sha256(second).hexdigest(),
+        },
+    ]
+    for panel, payload in zip(panels, (first, second), strict=True):
+        path = tmp_path / panel["relative_path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+    session = SimpleNamespace(prepared={"panels": panels}, artifact_root=tmp_path)
+
+    root = FixtureReviewSession._semantic_review_widget_template(session)
+    descendants = _widget_descendants(root)
+    selector = next(widget for widget in descendants if isinstance(widget, widgets.Dropdown))
+    image = next(widget for widget in descendants if isinstance(widget, widgets.Image))
+    visible_text = " ".join(
+        widget.value for widget in descendants if isinstance(widget, widgets.HTML)
+    )
+
+    assert selector.options == (
+        ("1/2 · work-04 · x4-clean", "panel-01"),
+        ("2/2 · work-04 · x4-moderate", "panel-02"),
+    )
+    assert image.value == first
+    assert "pueden parecerse legítimamente" in visible_text
+    assert "no tienes que ordenar" in visible_text
+
+    selector.value = "panel-02"
+    visible_text = " ".join(
+        widget.value for widget in descendants if isinstance(widget, widgets.HTML)
+    )
+    assert image.value == second
+    assert "2/2 · work-04 · x4-moderate" in visible_text
 
 
 def test_primitive_evidence_immutable_across_separate_semantic_stream(tmp_path: Path) -> None:
