@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,10 +15,13 @@ from score_super_resolution.execution import (
     ExecutionInterruptedError,
     ReconciliationError,
     artifact_writer_lock,
+    audit_no_smb,
     execute_run,
+    export_reconciled_run,
     initialize_run,
     load_experiment_config,
     reconcile_run,
+    replay_run,
     resume_run,
     snapshot_run,
 )
@@ -227,3 +232,151 @@ def test_corruption_transition_never_counts_missing_committed_output(tmp_path: P
     snapshot = snapshot_run(root)
     assert snapshot.counts == {"expected": 143, "retry_pending": 1}
     assert snapshot.integrity_incident_count == 1
+
+
+def test_report_schema_contracts_fail_closed() -> None:
+    for schema_id, record_type in (
+        ("replay-report", "replay-report"),
+        ("portable-export", "portable-export"),
+    ):
+        with pytest.raises(ContractValidationError):
+            validate_instance(
+                schema_id,
+                {"schema_version": 2, "record_type": record_type},
+                version=2,
+            )
+
+
+def test_cli_contract_emits_stable_json_and_rejects_absolute_root(tmp_path: Path) -> None:
+    valid = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "score_super_resolution.cli",
+            "validate",
+            "--config",
+            "configs/experiments/phase2-fixture-v1.yaml",
+        ],
+        cwd=PROJECT_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert valid.returncode == 0
+    payload = json.loads(valid.stdout)
+    assert payload["status"] == "valid"
+    assert payload["experiment_id"].startswith("experiment-")
+
+    rejected = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "score_super_resolution.cli",
+            "status",
+            "--artifact-root",
+            str(tmp_path / "absolute"),
+        ],
+        cwd=PROJECT_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rejected.returncode != 0
+    assert json.loads(rejected.stdout) == {
+        "code": "invalid_request",
+        "status": "error",
+    }
+
+
+def test_writer_contention_blocks_reconcile_and_export_without_mutation(tmp_path: Path) -> None:
+    root = tmp_path / "run"
+    initialize_run(CONFIG_PATH, root)
+    before = snapshot_run(root)
+    with artifact_writer_lock(root):
+        with pytest.raises(ExecutionBusyError):
+            reconcile_run(CONFIG_PATH, root)
+        with pytest.raises(ExecutionBusyError):
+            export_reconciled_run(CONFIG_PATH, root)
+    assert snapshot_run(root) == before
+
+
+@pytest.fixture(scope="module")
+def acceptance_runs(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+    parent = tmp_path_factory.mktemp("phase2-acceptance")
+    interrupted = parent / "interrupted"
+    clean = parent / "clean"
+
+    def stop_after_commit(boundary: str, _tuple_id: str) -> None:
+        if boundary == "after_tuple_commit":
+            raise ExecutionInterruptedError("acceptance interruption")
+
+    with pytest.raises(ExecutionInterruptedError):
+        execute_run(CONFIG_PATH, interrupted, boundary_hook=stop_after_commit)
+    assert snapshot_run(interrupted).counts == {"expected": 143, "succeeded": 1}
+    resume_run(CONFIG_PATH, interrupted)
+    reconcile_run(CONFIG_PATH, interrupted)
+    export_reconciled_run(CONFIG_PATH, interrupted)
+
+    execute_run(CONFIG_PATH, clean)
+    reconcile_run(CONFIG_PATH, clean)
+    replay_run(CONFIG_PATH, interrupted, clean)
+    return interrupted, clean
+
+
+def test_interrupted_acceptance_run_publishes_closed_export(
+    acceptance_runs: tuple[Path, Path],
+) -> None:
+    interrupted, _clean = acceptance_runs
+    assert snapshot_run(interrupted).counts == {"succeeded": 144}
+    for relative in (
+        "reconciliation-report.json",
+        "evidence/aggregate-six-cell.json",
+        "evidence/qualitative-membership.json",
+        "export/portable-export-manifest.json",
+    ):
+        assert (interrupted / relative).is_file()
+    assert audit_no_smb(interrupted)["status"] == "clean"
+
+
+def test_second_root_replay_matches_scientific_projection(
+    acceptance_runs: tuple[Path, Path],
+) -> None:
+    interrupted, clean = acceptance_runs
+    report = json.loads((interrupted / "replay-report.json").read_text())
+    validate_instance("replay-report", report, version=2)
+    assert report["status"] == "equivalent"
+    assert report["expected_tuple_count"] == 144
+    assert snapshot_run(clean).counts == {"succeeded": 144}
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        "before_output_fsync",
+        "after_output_replace_before_ledger",
+        "after_tuple_commit",
+    ],
+)
+def test_failpoint_matrix_resumes_without_losing_attempt_evidence(
+    tmp_path: Path, boundary: str
+) -> None:
+    root = tmp_path / boundary
+    fired = False
+
+    def fail(observed: str, _tuple_id: str) -> None:
+        nonlocal fired
+        if not fired and observed == boundary:
+            fired = True
+            if boundary == "after_tuple_commit":
+                raise ExecutionInterruptedError("interrupted after commit")
+            raise OSError("injected publication fault")
+
+    try:
+        execute_run(CONFIG_PATH, root, max_tuples=1, boundary_hook=fail)
+    except ExecutionInterruptedError:
+        pass
+    before = snapshot_run(root)
+    resume_run(CONFIG_PATH, root, max_tuples=1)
+    after = snapshot_run(root)
+    assert after.counts.get("succeeded") == 1
+    assert after.attempt_count >= before.attempt_count
