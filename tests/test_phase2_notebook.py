@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
+import yaml
 
 from score_super_resolution.identities import canonical_sha256
 
@@ -231,3 +233,110 @@ def execute_fixture_review_notebook_for_contract() -> dict[str, object]:
     from score_super_resolution.review import execute_fixture_review_notebook
 
     return execute_fixture_review_notebook(PROJECT_ROOT)
+
+
+def test_primitive_semantic_forbidden_but_technical_panels_remain() -> None:
+    from score_super_resolution.review import (
+        FixtureReviewContractError,
+        FixtureReviewSession,
+        prepare_fixture_review,
+    )
+
+    prepared = prepare_fixture_review(PROJECT_ROOT)
+    assert len(prepared["panels"]) == 24
+    assert not (FIXTURE_ROOT / "review/notation-review.json").exists()
+    with pytest.raises(FixtureReviewContractError, match="D-23.*superseded"):
+        FixtureReviewSession(
+            PROJECT_ROOT,
+            working_copy_token=prepared["working_copy_token"],
+        )
+    assert not (FIXTURE_ROOT / "review/notation-review.json").exists()
+
+
+def test_semantic_musicxml_applicability_accepts_exact_selected_sources() -> None:
+    from score_super_resolution.review import (
+        load_semantic_fixture_control,
+        validate_semantic_musicxml_source,
+    )
+
+    control = load_semantic_fixture_control(PROJECT_ROOT)
+    reports = [
+        validate_semantic_musicxml_source(
+            PROJECT_ROOT / source["source_path"],
+            source=source,
+            renderer=control["renderer"],
+            limits=control["limits"],
+        )
+        for source in control["sources"]
+    ]
+
+    assert [report["source_id"] for report in reports] == [
+        "review-work-03-excerpt-01",
+        "review-work-04-excerpt-01",
+    ]
+    assert all(report["coherence_state"] == "structurally-coherent" for report in reports)
+    assert all(report["measure_count"] == 2 for report in reports)
+
+
+@pytest.mark.parametrize("mutation", ["duration", "slur"])
+def test_source_coherence_rejects_tag_complete_temporal_or_relation_mutation(
+    tmp_path: Path, mutation: str
+) -> None:
+    from score_super_resolution.review import (
+        FixtureReviewContractError,
+        load_semantic_fixture_control,
+        validate_semantic_musicxml_source,
+    )
+
+    control = load_semantic_fixture_control(PROJECT_ROOT)
+    source = deepcopy(control["sources"][0])
+    original = (PROJECT_ROOT / source["source_path"]).read_text(encoding="utf-8")
+    if mutation == "duration":
+        changed = original.replace("<duration>3</duration>", "<duration>4</duration>", 1)
+    else:
+        changed = original.replace('<slur type="stop" number="1"/>', "", 1)
+    path = tmp_path / "tag-complete-but-incoherent.musicxml"
+    path.write_text(changed, encoding="utf-8")
+    source["source_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    with pytest.raises(FixtureReviewContractError, match="coherence|duration|relation|slur"):
+        validate_semantic_musicxml_source(
+            path,
+            source=source,
+            renderer=control["renderer"],
+            limits=control["limits"],
+        )
+
+
+def test_semantic_matrix_contract_is_closed_and_identity_sensitive(tmp_path: Path) -> None:
+    from score_super_resolution.review import load_semantic_fixture_control
+
+    control = load_semantic_fixture_control(PROJECT_ROOT)
+    assert control["source_order"] == [
+        "review-work-03-excerpt-01",
+        "review-work-04-excerpt-01",
+    ]
+    assert control["condition_order"] == [
+        "x2-clean",
+        "x2-moderate",
+        "x2-strong",
+        "x4-clean",
+        "x4-moderate",
+        "x4-strong",
+    ]
+    assert control["method_order"] == [
+        "nearest-opencv-exact-v1",
+        "bilinear-opencv-exact-v1",
+        "bicubic-opencv-v1",
+    ]
+    assert len(control["expected_tuple_keys"]) == 36
+    assert len(set(control["expected_tuple_keys"])) == 36
+    assert len(control["review_membership"]) == 12
+
+    source_path = PROJECT_ROOT / "configs/experiments/phase2-semantic-fixture-v1.yaml"
+    mutated = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+    mutated["sources"][0]["roi"]["x"] += 1
+    path = tmp_path / "mutated-semantic-control.yaml"
+    path.write_text(yaml.safe_dump(mutated, sort_keys=False), encoding="utf-8")
+    changed = load_semantic_fixture_control(PROJECT_ROOT, path=path)
+    assert changed["semantic_experiment_sha256"] != control["semantic_experiment_sha256"]
