@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v2:scientific-result",
+  "title": "Canonical Phase 2 tuple scientific result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "scientific_result_id", "experiment_id", "tuple_id", "item_id", "source_group_id", "condition_id", "method_id", "output_relative_path", "output_encoded_sha256", "output_pixel_sha256", "degradation_trace", "baseline_evidence", "metrics", "resource", "scientific_sha256"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "record_type": {"const": "scientific-result"},
+    "scientific_result_id": {"type": "string", "pattern": "^scientific-[0-9a-f]{64}$"},
+    "experiment_id": {"type": "string", "pattern": "^experiment-[0-9a-f]{64}$"},
+    "tuple_id": {"type": "string", "pattern": "^tuple-[0-9a-f]{64}$"},
+    "item_id": {"$ref": "#/$defs/stable_id"},
+    "source_group_id": {"$ref": "#/$defs/stable_id"},
+    "condition_id": {"enum": ["x2-clean", "x2-moderate", "x2-strong", "x4-clean", "x4-moderate", "x4-strong"]},
+    "method_id": {"enum": ["nearest-opencv-exact-v1", "bilinear-opencv-exact-v1", "bicubic-opencv-v1"]},
+    "output_relative_path": {"$ref": "#/$defs/relative_path"},
+    "output_encoded_sha256": {"$ref": "#/$defs/sha256"},
+    "output_pixel_sha256": {"$ref": "#/$defs/sha256"},
+    "degradation_trace": {"type": "object"},
+    "baseline_evidence": {"type": "object"},
+    "metrics": {"type": "array", "minItems": 8, "maxItems": 8, "items": {"type": "object"}},
+    "resource": {"type": "object"},
+    "scientific_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "stable_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "relative_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9][A-Za-z0-9._/-]*$"}
+  }
+}
+

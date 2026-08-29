@@ -19,7 +19,6 @@ from score_super_resolution.execution import (
 )
 from score_super_resolution.identities import experiment_identity
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "configs/experiments/phase2-fixture-v1.yaml"
 
@@ -65,9 +64,7 @@ def test_experiment_v2_is_closed_and_identity_is_mutation_sensitive() -> None:
 
 
 def test_experiment_v2_preserves_v1_contract_validation() -> None:
-    fixture = json.loads(
-        (PROJECT_ROOT / "tests/fixtures/contracts/valid-records.json").read_text()
-    )
+    fixture = json.loads((PROJECT_ROOT / "tests/fixtures/contracts/valid-records.json").read_text())
     for case in fixture.values():
         validate_instance(case["schema_id"], case["instance"])
 

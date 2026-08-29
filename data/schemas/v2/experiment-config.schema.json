@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v2:experiment-config",
+  "title": "Closed Phase 2 fixture experiment configuration v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "experiment_config_id", "status", "dataset_role", "claim_boundary", "fixture", "controls", "qualitative_core", "methods", "conditions", "seeds", "limits", "retry_policy"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "record_type": {"const": "experiment-config"},
+    "experiment_config_id": {"const": "phase2-fixture-v1"},
+    "status": {"const": "frozen"},
+    "dataset_role": {"const": "pipeline-validation-only"},
+    "claim_boundary": {"const": "fixture-instrumentation-only"},
+    "fixture": {
+      "type": "object", "additionalProperties": false,
+      "required": ["manifest_id", "manifest_path", "manifest_sha256", "item_count"],
+      "properties": {
+        "manifest_id": {"const": "phase2-score-fixtures-v1"},
+        "manifest_path": {"const": "tests/fixtures/phase2/fixture-manifest-v1.yaml"},
+        "manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "item_count": {"const": 8}
+      }
+    },
+    "controls": {
+      "type": "object", "additionalProperties": false,
+      "required": ["degradation_id", "degradation_path", "degradation_sha256", "evaluation_id", "evaluation_path", "evaluation_sha256"],
+      "properties": {
+        "degradation_id": {"const": "controlled-score-v1"},
+        "degradation_path": {"const": "configs/degradations/controlled-score-v1.yaml"},
+        "degradation_sha256": {"$ref": "#/$defs/sha256"},
+        "evaluation_id": {"const": "evaluation-score-v1"},
+        "evaluation_path": {"const": "configs/evaluation/evaluation-score-v1.yaml"},
+        "evaluation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "qualitative_core": {
+      "type": "object", "additionalProperties": false,
+      "required": ["membership_path", "core_membership_id", "core_sha256", "membership_sha256"],
+      "properties": {
+        "membership_path": {"const": "artifacts/phase2-fixture/pre-run/qualitative-core-membership.json"},
+        "core_membership_id": {"type": "string", "pattern": "^core-[0-9a-f]{64}$"},
+        "core_sha256": {"$ref": "#/$defs/sha256"},
+        "membership_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "methods": {
+      "type": "array", "prefixItems": [
+        {"const": "nearest-opencv-exact-v1"},
+        {"const": "bilinear-opencv-exact-v1"},
+        {"const": "bicubic-opencv-v1"}
+      ], "items": false, "minItems": 3, "maxItems": 3
+    },
+    "conditions": {
+      "type": "array", "prefixItems": [
+        {"const": "x2-clean"}, {"const": "x2-moderate"}, {"const": "x2-strong"},
+        {"const": "x4-clean"}, {"const": "x4-moderate"}, {"const": "x4-strong"}
+      ], "items": false, "minItems": 6, "maxItems": 6
+    },
+    "seeds": {
+      "type": "object", "additionalProperties": false,
+      "required": ["degradation", "qualitative", "bootstrap"],
+      "properties": {
+        "degradation": {"type": "integer", "minimum": 0},
+        "qualitative": {"type": "integer", "minimum": 0},
+        "bootstrap": {"type": "integer", "minimum": 0}
+      }
+    },
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["max_items", "max_conditions", "max_methods", "max_expected_tuples", "max_attempts_per_tuple", "max_path_depth", "max_config_bytes", "max_input_bytes", "max_output_bytes", "max_decoded_pixels"],
+      "properties": {
+        "max_items": {"type": "integer", "minimum": 8, "maximum": 16},
+        "max_conditions": {"const": 6},
+        "max_methods": {"const": 3},
+        "max_expected_tuples": {"type": "integer", "minimum": 144, "maximum": 288},
+        "max_attempts_per_tuple": {"type": "integer", "minimum": 1, "maximum": 5},
+        "max_path_depth": {"type": "integer", "minimum": 4, "maximum": 16},
+        "max_config_bytes": {"type": "integer", "minimum": 1024, "maximum": 1048576},
+        "max_input_bytes": {"type": "integer", "minimum": 1024, "maximum": 8388608},
+        "max_output_bytes": {"type": "integer", "minimum": 1024, "maximum": 33554432},
+        "max_decoded_pixels": {"type": "integer", "minimum": 65536, "maximum": 4194304}
+      }
+    },
+    "retry_policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["retryable_codes", "exhausted_state", "unexpected_exception_state"],
+      "properties": {
+        "retryable_codes": {
+          "type": "array", "prefixItems": [{"const": "INTERRUPTED"}, {"const": "TRANSIENT_COMPUTATION"}, {"const": "INTEGRITY_INVALIDATED"}],
+          "items": false, "minItems": 3, "maxItems": 3
+        },
+        "exhausted_state": {"const": "failed"},
+        "unexpected_exception_state": {"const": "retry_pending"}
+      }
+    }
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}
+

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v2:integrity-incident",
+  "title": "Immutable invalidated-success incident v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "incident_id", "experiment_id", "tuple_id", "attempt_id", "reason_code", "prior_scientific_sha256", "observed_sha256", "quarantine_relative_path", "quarantine_sha256"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "record_type": {"const": "integrity-incident"},
+    "incident_id": {"type": "string", "pattern": "^incident-[0-9a-f]{64}$"},
+    "experiment_id": {"type": "string", "pattern": "^experiment-[0-9a-f]{64}$"},
+    "tuple_id": {"type": "string", "pattern": "^tuple-[0-9a-f]{64}$"},
+    "attempt_id": {"type": "string", "pattern": "^attempt-[0-9a-f]{64}$"},
+    "reason_code": {"enum": ["MISSING_OUTPUT", "ENCODED_DIGEST_MISMATCH", "PIXEL_DIGEST_MISMATCH", "SCIENTIFIC_PAYLOAD_MISMATCH", "PATH_OR_FILE_TYPE_INVALID"]},
+    "prior_scientific_sha256": {"$ref": "#/$defs/sha256"},
+    "observed_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "quarantine_relative_path": {"oneOf": [{"$ref": "#/$defs/relative_path"}, {"type": "null"}]},
+    "quarantine_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "relative_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9][A-Za-z0-9._/-]*$"}
+  }
+}
+

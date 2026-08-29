@@ -1,0 +1,57 @@
+schema_version: 2
+record_type: experiment-config
+experiment_config_id: phase2-fixture-v1
+status: frozen
+dataset_role: pipeline-validation-only
+claim_boundary: fixture-instrumentation-only
+fixture:
+  manifest_id: phase2-score-fixtures-v1
+  manifest_path: tests/fixtures/phase2/fixture-manifest-v1.yaml
+  manifest_sha256: 16dd2f7a9059f71f426b94feffe302eac4118e0c7e9ddc20ecaa3e6752299209
+  item_count: 8
+controls:
+  degradation_id: controlled-score-v1
+  degradation_path: configs/degradations/controlled-score-v1.yaml
+  degradation_sha256: 6a61d9a28d2524c9b4e8b2138a23d93bb6fe10e37b8cd1d439cb35dcbdcd9949
+  evaluation_id: evaluation-score-v1
+  evaluation_path: configs/evaluation/evaluation-score-v1.yaml
+  evaluation_sha256: ff791711e3331932454d87850b7e08ce27533c9fa203022ad47fb9c53232c853
+qualitative_core:
+  membership_path: artifacts/phase2-fixture/pre-run/qualitative-core-membership.json
+  core_membership_id: core-c8353d45be988f353074cfa6fcb354e95f5e38cd535700287a977de5011af294
+  core_sha256: 13136057e363df861692f9458be26cc07b0e423c1a56cd4960cf0453e577a23c
+  membership_sha256: d45de7ec2e7e74c353f17b799bd969fd9bab2f18e6c11e413c3f2ebdf1089e9f
+methods:
+  - nearest-opencv-exact-v1
+  - bilinear-opencv-exact-v1
+  - bicubic-opencv-v1
+conditions:
+  - x2-clean
+  - x2-moderate
+  - x2-strong
+  - x4-clean
+  - x4-moderate
+  - x4-strong
+seeds:
+  degradation: 20260821
+  qualitative: 20260822
+  bootstrap: 20260823
+limits:
+  max_items: 16
+  max_conditions: 6
+  max_methods: 3
+  max_expected_tuples: 288
+  max_attempts_per_tuple: 3
+  max_path_depth: 12
+  max_config_bytes: 1048576
+  max_input_bytes: 8388608
+  max_output_bytes: 33554432
+  max_decoded_pixels: 4194304
+retry_policy:
+  retryable_codes:
+    - INTERRUPTED
+    - TRANSIENT_COMPUTATION
+    - INTEGRITY_INVALIDATED
+  exhausted_state: failed
+  unexpected_exception_state: retry_pending
+
