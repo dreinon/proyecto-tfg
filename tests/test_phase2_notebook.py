@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import shutil
@@ -41,8 +40,14 @@ def test_notebook_source_clean_is_output_free_and_digest_stable() -> None:
     notebook = json.loads(SOURCE_NOTEBOOK.read_text(encoding="utf-8"))
 
     assert first == second == canonical_sha256(notebook)
-    assert all(cell.get("execution_count") is None for cell in notebook["cells"] if cell["cell_type"] == "code")
-    assert all(cell.get("outputs") == [] for cell in notebook["cells"] if cell["cell_type"] == "code")
+    assert all(
+        cell.get("execution_count") is None
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+    assert all(
+        cell.get("outputs") == [] for cell in notebook["cells"] if cell["cell_type"] == "code"
+    )
     serialized = json.dumps(notebook).casefold()
     assert "image/png" not in serialized
     assert "image/jpeg" not in serialized
@@ -98,7 +103,10 @@ def test_consume_acceptance_reports_validates_fixed_replay_without_regeneration(
 
 
 def test_membership_and_report_substitution_fail_closed(tmp_path: Path) -> None:
-    from score_super_resolution.review import FixtureReviewContractError, validate_fixture_review_inputs
+    from score_super_resolution.review import (
+        FixtureReviewContractError,
+        validate_fixture_review_inputs,
+    )
 
     artifact_root = _copy_fixed_review_inputs(tmp_path / "phase2-fixture")
     replay_path = artifact_root / "replay-report.json"
@@ -123,7 +131,9 @@ def test_masked_review_contract_is_deterministic_and_content_addressed() -> None
     first = prepare_fixture_review(PROJECT_ROOT)
     first_mapping = (FIXTURE_ROOT / "review/method-mapping.json").read_bytes()
     first_panels = {
-        panel["panel_id"]: hashlib.sha256((FIXTURE_ROOT / panel["relative_path"]).read_bytes()).hexdigest()
+        panel["panel_id"]: hashlib.sha256(
+            (FIXTURE_ROOT / panel["relative_path"]).read_bytes()
+        ).hexdigest()
         for panel in first["panels"]
     }
     second = prepare_fixture_review(PROJECT_ROOT)
@@ -141,13 +151,18 @@ def test_masked_review_contract_is_deterministic_and_content_addressed() -> None
             "bicubic-opencv-v1",
         }
     assert first_panels == {
-        panel["panel_id"]: hashlib.sha256((FIXTURE_ROOT / panel["relative_path"]).read_bytes()).hexdigest()
+        panel["panel_id"]: hashlib.sha256(
+            (FIXTURE_ROOT / panel["relative_path"]).read_bytes()
+        ).hexdigest()
         for panel in second["panels"]
     }
 
 
 def test_working_copy_execute_binds_source_and_creates_no_review() -> None:
-    from score_super_resolution.review import execute_fixture_review_notebook, notebook_source_sha256
+    from score_super_resolution.review import (
+        execute_fixture_review_notebook,
+        notebook_source_sha256,
+    )
 
     source_before = SOURCE_NOTEBOOK.read_bytes()
     manifest = execute_fixture_review_notebook(PROJECT_ROOT)
@@ -166,7 +181,9 @@ def test_working_copy_execute_binds_source_and_creates_no_review() -> None:
 def test_thin_notebook_contains_only_review_session_calls() -> None:
     notebook = json.loads(SOURCE_NOTEBOOK.read_text(encoding="utf-8"))
     source = "\n".join(
-        "".join(cell.get("source", [])) if isinstance(cell.get("source"), list) else str(cell.get("source", ""))
+        "".join(cell.get("source", []))
+        if isinstance(cell.get("source"), list)
+        else str(cell.get("source", ""))
         for cell in notebook["cells"]
         if cell["cell_type"] == "code"
     )
@@ -194,7 +211,7 @@ def test_thin_notebook_contains_only_review_session_calls() -> None:
 
 
 def test_review_contract_does_not_prefill_human_evidence() -> None:
-    from score_super_resolution.review import FixtureReviewSession, FixtureReviewContractError
+    from score_super_resolution.review import FixtureReviewContractError, FixtureReviewSession
 
     manifest = execute_fixture_review_notebook_for_contract()
     session = FixtureReviewSession(
