@@ -3,21 +3,43 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
+import platform
 import sqlite3
 import stat
+import sys
 from collections import Counter
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
+import cv2
+import numpy as np
 import yaml
 
+from score_super_resolution.baselines import pixel_sha256, run_baseline
 from score_super_resolution.contracts import ContractValidationError, validate_instance
+from score_super_resolution.degradation import (
+    DegradationControl,
+    DegradationResult,
+    align_reference,
+    apply_degradation,
+    generate_fixture_bundle,
+)
+from score_super_resolution.environment import environment_snapshot
+from score_super_resolution.evaluation import (
+    FidelityControl,
+    compute_fidelity,
+    load_evaluation_control,
+)
 from score_super_resolution.identities import canonical_sha256, experiment_identity
+from score_super_resolution.resources import measure_baseline_resources
 
 EXPECTED_METHODS = (
     "nearest-opencv-exact-v1",
@@ -49,6 +71,10 @@ class ExecutionBusyError(ExecutionContractError):
 
 class ReconciliationError(ExecutionContractError):
     """The closed expected tuple set cannot yet be reconciled."""
+
+
+class ExecutionInterruptedError(RuntimeError):
+    """A deliberate acceptance failpoint stopped execution after a durable boundary."""
 
 
 @dataclass(frozen=True, order=True)
@@ -560,9 +586,729 @@ def snapshot_run(artifact_root: Path) -> RunSnapshot:
         connection.close()
 
 
+def _canonical_json(value: Mapping[str, Any]) -> bytes:
+    return (
+        json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _boundary(
+    name: str,
+    tuple_id: str,
+    hook: Callable[[str, str], None] | None,
+) -> None:
+    if hook is not None:
+        hook(name, tuple_id)
+    failpoint = os.environ.get("SCORE_SR_PHASE2_FAILPOINT")
+    if failpoint == f"{name}:raise":
+        raise OSError(f"injected execution failure at {name}")
+    if failpoint == f"{name}:exit":
+        os._exit(91)
+
+
+def _durable_replace(
+    path: Path,
+    payload: bytes,
+    *,
+    tuple_id: str,
+    prefix: str,
+    boundary_hook: Callable[[str, str], None] | None,
+) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if path.is_symlink():
+        raise ExecutionContractError("publication target must not be a symlink")
+    temporary = path.parent / f".{path.name}.tmp-{uuid4().hex}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(temporary, flags, 0o600)
+    replaced = False
+    try:
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written < 1:
+                raise OSError("short publication write")
+            view = view[written:]
+        _boundary(f"before_{prefix}_fsync", tuple_id, boundary_hook)
+        os.fsync(descriptor)
+        _boundary(f"after_{prefix}_fsync", tuple_id, boundary_hook)
+        os.close(descriptor)
+        descriptor = -1
+        os.replace(temporary, path)
+        replaced = True
+        _boundary(f"after_{prefix}_replace", tuple_id, boundary_hook)
+        _fsync_directory(path.parent)
+        _boundary(f"after_{prefix}_parent_fsync", tuple_id, boundary_hook)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if not replaced:
+            with suppress(FileNotFoundError):
+                temporary.unlink()
+
+
+def _degradation_control(config: ExperimentConfig) -> DegradationControl:
+    payload = _load_mapping(
+        _project_relative(
+            config.project_root,
+            config.payload["controls"]["degradation_path"],
+            kind="degradation path",
+        ),
+        kind="frozen degradation control",
+    )
+    return DegradationControl(
+        version=int(payload["candidate_version"]),
+        candidate_id=str(payload["control_id"]),
+        status=str(payload["status"]),
+        claim_boundary=str(payload["claim_boundary"]),
+        master_seed=int(payload["master_seed"]),
+        image_contract=dict(payload["image_contract"]),
+        alignment=dict(payload["alignment"]),
+        runtime=dict(payload["runtime"]),
+        condition_ids=tuple(payload["condition_order"]),
+        conditions=tuple(dict(condition) for condition in payload["conditions"]),
+        sha256=canonical_sha256(payload),
+    )
+
+
+def _resource_environment() -> dict[str, Any]:
+    build = cv2.getBuildInformation()
+    cpu_model = platform.processor() or "unknown-cpu"
+    try:
+        for line in Path("/proc/cpuinfo").read_text(encoding="utf-8").splitlines():
+            if line.casefold().startswith("model name"):
+                cpu_model = line.split(":", maxsplit=1)[1].strip()
+                break
+    except OSError:
+        pass
+    return {
+        "python_version": platform.python_version(),
+        "platform": platform.system(),
+        "machine": platform.machine(),
+        "cpu_model": cpu_model,
+        "logical_cpu_count": os.cpu_count() or 1,
+        "opencv_version": cv2.__version__,
+        "opencv_build_sha256": hashlib.sha256(build.encode("utf-8")).hexdigest(),
+    }
+
+
+def _write_attempt_environment(config: ExperimentConfig, authority: _WriterAuthority) -> None:
+    destination = authority.root / "attempts" / "local-attempt-environment.json"
+    snapshot = environment_snapshot(
+        config.project_root,
+        workspace_root=config.project_root.parent,
+        memoria_repository=config.project_root.parent / "memoria",
+    )
+    payload = {
+        "record_type": "local-attempt-environment",
+        "experiment_id": config.experiment_id,
+        "recorded_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "artifact_root": str(authority.root),
+        "python_executable": sys.executable,
+        "environment": snapshot,
+    }
+    if _secret_like_key(payload) is not None:
+        raise ExecutionContractError("local attempt environment contains a secret-like key")
+    _durable_replace(
+        destination,
+        _canonical_json(payload),
+        tuple_id="run-environment",
+        prefix="attempt_environment",
+        boundary_hook=None,
+    )
+
+
+def _prepare_fixture_inputs(
+    config: ExperimentConfig, authority: _WriterAuthority
+) -> dict[str, Path]:
+    manifest_path = _project_relative(
+        config.project_root,
+        config.payload["fixture"]["manifest_path"],
+        kind="fixture manifest path",
+    )
+    bundle = generate_fixture_bundle(manifest_path, authority.root / "fixture-input")
+    if (
+        bundle["manifest_id"] != config.payload["fixture"]["manifest_id"]
+        or bundle["manifest_sha256"] != config.payload["fixture"]["manifest_sha256"]
+    ):
+        raise ExecutionContractError("materialized fixture identity differs")
+    return {
+        item["item_id"]: authority.root / "fixture-input" / item["relative_path"]
+        for item in bundle["items"]
+    }
+
+
+def _load_rgb(path: Path, *, maximum_bytes: int, maximum_pixels: int) -> np.ndarray:
+    raw = _read_regular(path, maximum_bytes=maximum_bytes, kind="fixture image")
+    decoded = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if decoded is None:
+        raise ExecutionContractError("fixture image cannot be decoded")
+    if decoded.shape[0] * decoded.shape[1] > maximum_pixels:
+        raise ExecutionContractError("fixture image exceeds the pixel bound")
+    return np.ascontiguousarray(cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB))
+
+
+def _claim_next(
+    connection: sqlite3.Connection,
+    config: ExperimentConfig,
+) -> tuple[sqlite3.Row, str] | None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        row = connection.execute(
+            """SELECT * FROM expected_tuples
+               WHERE state IN ('retry_pending','expected')
+               ORDER BY CASE state WHEN 'retry_pending' THEN 0 ELSE 1 END,
+                        condition_id,item_id,method_id
+               LIMIT 1"""
+        ).fetchone()
+        if row is None:
+            connection.commit()
+            return None
+        ordinal = int(row["attempt_count"]) + 1
+        if ordinal > int(config.payload["limits"]["max_attempts_per_tuple"]):
+            connection.execute(
+                "UPDATE expected_tuples SET state='failed' WHERE tuple_id=?",
+                (row["tuple_id"],),
+            )
+            connection.commit()
+            return _claim_next(connection, config)
+        attempt_id = (
+            f"attempt-{canonical_sha256({'tuple_id': row['tuple_id'], 'ordinal': ordinal})}"
+        )
+        connection.execute(
+            "INSERT INTO attempts (attempt_id,tuple_id,ordinal,outcome) VALUES (?,?,?,'running')",
+            (attempt_id, row["tuple_id"], ordinal),
+        )
+        changed = connection.execute(
+            """UPDATE expected_tuples
+               SET state='running',attempt_count=?,current_attempt_id=?
+               WHERE tuple_id=? AND state IN ('retry_pending','expected')""",
+            (ordinal, attempt_id, row["tuple_id"]),
+        ).rowcount
+        if changed != 1:
+            raise ExecutionContractError("tuple claim lost its transactional precondition")
+        connection.commit()
+        claimed = connection.execute(
+            "SELECT * FROM expected_tuples WHERE tuple_id=?", (row["tuple_id"],)
+        ).fetchone()
+        return claimed, attempt_id
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+
+
+def _recover_running(connection: sqlite3.Connection) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        running = connection.execute(
+            "SELECT tuple_id,current_attempt_id FROM expected_tuples WHERE state='running'"
+        ).fetchall()
+        for row in running:
+            connection.execute(
+                """UPDATE attempts SET outcome='interrupted',failure_code='INTERRUPTED'
+                   WHERE attempt_id=? AND outcome='running'""",
+                (row["current_attempt_id"],),
+            )
+            connection.execute(
+                "UPDATE expected_tuples SET state='retry_pending' WHERE tuple_id=?",
+                (row["tuple_id"],),
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def _relative_result_paths(row: Mapping[str, Any]) -> tuple[str, str]:
+    stem = f"{row['condition_id']}/{row['method_id']}/{row['item_id']}"
+    return f"outputs/{stem}.png", f"scientific/{stem}.json"
+
+
+def _compute_tuple(
+    config: ExperimentConfig,
+    row: Mapping[str, Any],
+    fixture_paths: Mapping[str, Path],
+    degradation_control: DegradationControl,
+) -> tuple[bytes, dict[str, Any]]:
+    limits = config.payload["limits"]
+    reference = _load_rgb(
+        fixture_paths[str(row["item_id"])],
+        maximum_bytes=int(limits["max_input_bytes"]),
+        maximum_pixels=int(limits["max_decoded_pixels"]),
+    )
+    degraded = apply_degradation(
+        reference,
+        control=degradation_control,
+        condition_id=str(row["condition_id"]),
+        item_id=str(row["item_id"]),
+        source_group_id=str(row["source_group_id"]),
+        fixture_manifest_id=config.payload["fixture"]["manifest_id"],
+        purpose="benchmark",
+    )
+    aligned_dimensions = degraded.trace["aligned_dimensions"]
+    target_shape = (
+        int(aligned_dimensions["height"]),
+        int(aligned_dimensions["width"]),
+        int(aligned_dimensions["channels"]),
+    )
+    baseline = run_baseline(
+        str(row["method_id"]),
+        degraded.pixels,
+        target_shape=target_shape,
+        condition_id=str(row["condition_id"]),
+    )
+    output_relative, _ = _relative_result_paths(row)
+    success, encoded = cv2.imencode(
+        ".png", cv2.cvtColor(baseline.pixels, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_PNG_COMPRESSION, 9]
+    )
+    if not success:
+        raise ExecutionContractError("baseline output PNG encoding failed")
+    output_bytes = encoded.tobytes()
+    if len(output_bytes) > int(limits["max_output_bytes"]):
+        raise ExecutionContractError("baseline output exceeds the byte bound")
+    evaluation = load_evaluation_control(
+        _project_relative(
+            config.project_root,
+            config.payload["controls"]["evaluation_path"],
+            kind="evaluation path",
+        )
+    )
+    fidelity = FidelityControl(
+        evaluation=evaluation,
+        experiment_id=config.experiment_id,
+        item_id=str(row["item_id"]),
+        source_group_id=str(row["source_group_id"]),
+        condition_id=str(row["condition_id"]),
+        method_id=str(row["method_id"]),
+        reconstruction_id=str(row["tuple_id"]),
+        reference_id=f"reference-{row['item_id']}-{row['condition_id']}",
+    )
+    scale = int(str(row["condition_id"])[1])
+    aligned_reference = align_reference(reference, scale).pixels
+    metrics = list(
+        compute_fidelity(aligned_reference, baseline.pixels, scale=scale, control=fidelity)
+    )
+    resource_input = DegradationResult(
+        pixels=degraded.pixels,
+        encoded_bytes=degraded.encoded_bytes,
+        trace={**degraded.trace, "output_pixel_sha256": pixel_sha256(degraded.pixels)},
+    )
+    resource = measure_baseline_resources(
+        str(row["method_id"]),
+        resource_input,
+        control=evaluation.payload,
+        environment=_resource_environment(),
+    )
+    core: dict[str, Any] = {
+        "schema_version": 2,
+        "record_type": "scientific-result",
+        "experiment_id": config.experiment_id,
+        "tuple_id": str(row["tuple_id"]),
+        "item_id": str(row["item_id"]),
+        "source_group_id": str(row["source_group_id"]),
+        "condition_id": str(row["condition_id"]),
+        "method_id": str(row["method_id"]),
+        "output_relative_path": output_relative,
+        "output_encoded_sha256": hashlib.sha256(output_bytes).hexdigest(),
+        "output_pixel_sha256": pixel_sha256(baseline.pixels),
+        "degradation_trace": degraded.trace,
+        "baseline_evidence": baseline.evidence,
+        "metrics": metrics,
+        "resource": resource,
+    }
+    digest = canonical_sha256(core)
+    scientific = {
+        **core,
+        "scientific_result_id": f"scientific-{digest}",
+        "scientific_sha256": digest,
+    }
+    validate_instance("scientific-result", scientific, version=2)
+    return output_bytes, scientific
+
+
+def _mark_attempt_failure(
+    connection: sqlite3.Connection,
+    config: ExperimentConfig,
+    tuple_id: str,
+    attempt_id: str,
+    *,
+    code: str,
+) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        row = connection.execute(
+            "SELECT attempt_count,state FROM expected_tuples WHERE tuple_id=?", (tuple_id,)
+        ).fetchone()
+        if row is None or row["state"] != "running":
+            raise ExecutionContractError("failed attempt no longer owns its running tuple")
+        retryable = code in set(config.payload["retry_policy"]["retryable_codes"])
+        retry = retryable and int(row["attempt_count"]) < int(
+            config.payload["limits"]["max_attempts_per_tuple"]
+        )
+        state = "retry_pending" if retry else "failed"
+        connection.execute(
+            "UPDATE attempts SET outcome=?,failure_code=? WHERE attempt_id=? AND outcome='running'",
+            (state, code, attempt_id),
+        )
+        connection.execute(
+            "UPDATE expected_tuples SET state=? WHERE tuple_id=?",
+            (state, tuple_id),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def _commit_success(
+    connection: sqlite3.Connection,
+    row: Mapping[str, Any],
+    attempt_id: str,
+    scientific: Mapping[str, Any],
+    scientific_relative: str,
+) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        changed_attempt = connection.execute(
+            """UPDATE attempts SET outcome='succeeded',scientific_sha256=?,output_encoded_sha256=?
+               WHERE attempt_id=? AND outcome='running'""",
+            (
+                scientific["scientific_sha256"],
+                scientific["output_encoded_sha256"],
+                attempt_id,
+            ),
+        ).rowcount
+        changed_tuple = connection.execute(
+            """UPDATE expected_tuples
+               SET state='succeeded',scientific_relative_path=?,output_relative_path=?,
+                   scientific_sha256=?,output_encoded_sha256=?,output_pixel_sha256=?
+               WHERE tuple_id=? AND state='running' AND current_attempt_id=?""",
+            (
+                scientific_relative,
+                scientific["output_relative_path"],
+                scientific["scientific_sha256"],
+                scientific["output_encoded_sha256"],
+                scientific["output_pixel_sha256"],
+                row["tuple_id"],
+                attempt_id,
+            ),
+        ).rowcount
+        if changed_attempt != 1 or changed_tuple != 1:
+            raise ExecutionContractError("success commit lost its claimed tuple")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def _confined_runtime_path(root: Path, relative: str) -> Path:
+    if not isinstance(relative, str) or relative.startswith("/") or "\\" in relative:
+        raise ExecutionContractError("runtime evidence path must be relative")
+    parts = Path(relative).parts
+    if any(part in {"", ".", ".."} for part in parts) or len(parts) > 12:
+        raise ExecutionContractError("runtime evidence path is noncanonical or too deep")
+    path = (root / relative).resolve()
+    if not path.is_relative_to(root):
+        raise ExecutionContractError("runtime evidence path escapes the artifact root")
+    return path
+
+
+def _scientific_digest(record: Mapping[str, Any]) -> str:
+    core = {
+        key: value
+        for key, value in record.items()
+        if key not in {"scientific_result_id", "scientific_sha256"}
+    }
+    return canonical_sha256(core)
+
+
+def _success_validation_error(
+    root: Path,
+    row: Mapping[str, Any],
+    limits: Mapping[str, Any],
+) -> tuple[str, str | None]:
+    try:
+        output_path = _confined_runtime_path(root, str(row["output_relative_path"]))
+        scientific_path = _confined_runtime_path(root, str(row["scientific_relative_path"]))
+    except ExecutionContractError:
+        return "PATH_OR_FILE_TYPE_INVALID", None
+    if not output_path.exists():
+        return "MISSING_OUTPUT", None
+    if output_path.is_symlink() or not output_path.is_file():
+        return "PATH_OR_FILE_TYPE_INVALID", None
+    try:
+        output = _read_regular(
+            output_path,
+            maximum_bytes=int(limits["max_output_bytes"]),
+            kind="committed tuple output",
+        )
+    except ExecutionContractError:
+        return "PATH_OR_FILE_TYPE_INVALID", None
+    observed = hashlib.sha256(output).hexdigest()
+    if observed != row["output_encoded_sha256"]:
+        return "ENCODED_DIGEST_MISMATCH", observed
+    decoded = cv2.imdecode(np.frombuffer(output, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if decoded is None:
+        return "PIXEL_DIGEST_MISMATCH", observed
+    rgb = np.ascontiguousarray(cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB))
+    if pixel_sha256(rgb) != row["output_pixel_sha256"]:
+        return "PIXEL_DIGEST_MISMATCH", observed
+    if (
+        not scientific_path.exists()
+        or scientific_path.is_symlink()
+        or not scientific_path.is_file()
+    ):
+        return "SCIENTIFIC_PAYLOAD_MISMATCH", observed
+    try:
+        raw = _read_regular(
+            scientific_path,
+            maximum_bytes=int(limits["max_output_bytes"]),
+            kind="committed scientific payload",
+        )
+        scientific = json.loads(raw)
+        if not isinstance(scientific, dict):
+            raise ValueError
+        validate_instance("scientific-result", scientific, version=2)
+    except (ExecutionContractError, ContractValidationError, json.JSONDecodeError, ValueError):
+        return "SCIENTIFIC_PAYLOAD_MISMATCH", observed
+    digest = _scientific_digest(scientific)
+    if (
+        scientific["tuple_id"] != row["tuple_id"]
+        or scientific["scientific_sha256"] != digest
+        or scientific["scientific_result_id"] != f"scientific-{digest}"
+        or digest != row["scientific_sha256"]
+        or scientific["output_encoded_sha256"] != observed
+        or scientific["output_pixel_sha256"] != row["output_pixel_sha256"]
+        or scientific["output_relative_path"] != row["output_relative_path"]
+    ):
+        return "SCIENTIFIC_PAYLOAD_MISMATCH", observed
+    return "", observed
+
+
+def _quarantine_invalid_success(
+    connection: sqlite3.Connection,
+    config: ExperimentConfig,
+    authority: _WriterAuthority,
+    row: Mapping[str, Any],
+    *,
+    reason_code: str,
+    observed_sha256: str | None,
+) -> None:
+    paths: list[tuple[str, Path]] = []
+    for label, field in (
+        ("output", "output_relative_path"),
+        ("scientific", "scientific_relative_path"),
+    ):
+        value = row[field]
+        if isinstance(value, str):
+            try:
+                path = _confined_runtime_path(authority.root, value)
+            except ExecutionContractError:
+                continue
+            if path.exists() or path.is_symlink():
+                paths.append((label, path))
+    address = canonical_sha256(
+        {
+            "tuple_id": row["tuple_id"],
+            "attempt_id": row["current_attempt_id"],
+            "reason_code": reason_code,
+            "prior_scientific_sha256": row["scientific_sha256"],
+            "observed_sha256": observed_sha256,
+        }
+    )
+    quarantine_root = authority.root / "quarantine" / str(row["tuple_id"]) / address
+    quarantine_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    moved: list[tuple[str, Path, str]] = []
+    for label, source in paths:
+        destination = quarantine_root / f"{label}{source.suffix}"
+        if destination.exists():
+            existing = _read_regular(
+                destination,
+                maximum_bytes=int(config.payload["limits"]["max_output_bytes"]),
+                kind="quarantine evidence",
+            )
+            source_bytes = _read_regular(
+                source,
+                maximum_bytes=int(config.payload["limits"]["max_output_bytes"]),
+                kind="invalidated evidence",
+            )
+            if existing != source_bytes:
+                raise ExecutionContractError("quarantine address collision")
+            source.unlink()
+        else:
+            os.replace(source, destination)
+        _fsync_directory(quarantine_root)
+        relative = destination.relative_to(authority.root).as_posix()
+        digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+        moved.append((relative, destination, digest))
+    quarantine_relative = moved[0][0] if moved else None
+    quarantine_sha = moved[0][2] if moved else None
+    core = {
+        "schema_version": 2,
+        "record_type": "integrity-incident",
+        "experiment_id": config.experiment_id,
+        "tuple_id": str(row["tuple_id"]),
+        "attempt_id": str(row["current_attempt_id"]),
+        "reason_code": reason_code,
+        "prior_scientific_sha256": str(row["scientific_sha256"]),
+        "observed_sha256": observed_sha256,
+        "quarantine_relative_path": quarantine_relative,
+        "quarantine_sha256": quarantine_sha,
+    }
+    incident = {**core, "incident_id": f"incident-{canonical_sha256(core)}"}
+    validate_instance("integrity-incident", incident, version=2)
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        connection.execute(
+            "INSERT OR IGNORE INTO integrity_incidents VALUES (?,?,?,?)",
+            (
+                incident["incident_id"],
+                row["tuple_id"],
+                row["current_attempt_id"],
+                json.dumps(incident, separators=(",", ":"), sort_keys=True),
+            ),
+        )
+        retry = int(row["attempt_count"]) < int(config.payload["limits"]["max_attempts_per_tuple"])
+        state = "retry_pending" if retry else "failed"
+        connection.execute(
+            "UPDATE expected_tuples SET state=? WHERE tuple_id=? AND state='succeeded'",
+            (state, row["tuple_id"]),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def _validate_and_repair_successes(
+    connection: sqlite3.Connection,
+    config: ExperimentConfig,
+    authority: _WriterAuthority,
+) -> None:
+    rows = connection.execute(
+        "SELECT * FROM expected_tuples WHERE state='succeeded' ORDER BY tuple_id"
+    ).fetchall()
+    for row in rows:
+        reason, observed = _success_validation_error(authority.root, row, config.payload["limits"])
+        if reason:
+            _quarantine_invalid_success(
+                connection,
+                config,
+                authority,
+                row,
+                reason_code=reason,
+                observed_sha256=observed,
+            )
+
+
+def _execute_locked(
+    config: ExperimentConfig,
+    authority: _WriterAuthority,
+    *,
+    max_tuples: int | None,
+    boundary_hook: Callable[[str, str], None] | None,
+) -> ExecutionReport:
+    if max_tuples is not None and (
+        isinstance(max_tuples, bool) or not isinstance(max_tuples, int) or max_tuples < 0
+    ):
+        raise ExecutionContractError("max_tuples must be a nonnegative integer or null")
+    _initialize_locked(config, authority)
+    _write_attempt_environment(config, authority)
+    fixture_paths = _prepare_fixture_inputs(config, authority)
+    degradation_control = _degradation_control(config)
+    connection = _connect(authority.root, writable=True)
+    claimed = succeeded = failed = skipped = 0
+    try:
+        _recover_running(connection)
+        before_success = snapshot_run(authority.root).counts.get("succeeded", 0)
+        _validate_and_repair_successes(connection, config, authority)
+        after_success = snapshot_run(authority.root).counts.get("succeeded", 0)
+        skipped = min(before_success, after_success)
+        while max_tuples is None or claimed < max_tuples:
+            claim = _claim_next(connection, config)
+            if claim is None:
+                break
+            row, attempt_id = claim
+            claimed += 1
+            try:
+                output_bytes, scientific = _compute_tuple(
+                    config, row, fixture_paths, degradation_control
+                )
+                output_relative, scientific_relative = _relative_result_paths(row)
+                _durable_replace(
+                    authority.root / output_relative,
+                    output_bytes,
+                    tuple_id=str(row["tuple_id"]),
+                    prefix="output",
+                    boundary_hook=boundary_hook,
+                )
+                _boundary(
+                    "after_output_replace_before_ledger",
+                    str(row["tuple_id"]),
+                    boundary_hook,
+                )
+                _durable_replace(
+                    authority.root / scientific_relative,
+                    _canonical_json(scientific),
+                    tuple_id=str(row["tuple_id"]),
+                    prefix="scientific",
+                    boundary_hook=boundary_hook,
+                )
+                _commit_success(connection, row, attempt_id, scientific, scientific_relative)
+                succeeded += 1
+                _boundary("after_tuple_commit", str(row["tuple_id"]), boundary_hook)
+            except ExecutionInterruptedError:
+                raise
+            except BaseException as error:
+                # Keyboard/SystemExit remain interruptions; ordinary tuple failures are durable.
+                if not isinstance(error, Exception):
+                    raise
+                _mark_attempt_failure(
+                    connection,
+                    config,
+                    str(row["tuple_id"]),
+                    attempt_id,
+                    code="TRANSIENT_COMPUTATION",
+                )
+                failed += 1
+    finally:
+        connection.close()
+    return ExecutionReport(
+        experiment_id=config.experiment_id,
+        claimed=claimed,
+        succeeded=succeeded,
+        failed=failed,
+        skipped=skipped,
+        interrupted=False,
+    )
+
+
 def _reconcile_locked(
     config: ExperimentConfig, authority: _WriterAuthority
 ) -> ReconciliationReport:
+    connection = _connect(authority.root, writable=True)
+    try:
+        _recover_running(connection)
+        _validate_and_repair_successes(connection, config, authority)
+    finally:
+        connection.close()
     snapshot = snapshot_run(authority.root)
     nonterminal = {
         state: count for state, count in snapshot.counts.items() if state not in TERMINAL_STATES
@@ -579,12 +1325,36 @@ def reconcile_run(config_path: Path, artifact_root: Path) -> ReconciliationRepor
         return _reconcile_locked(config, authority)
 
 
-def execute_run(*_args: Any, **_kwargs: Any) -> ExecutionReport:
-    raise NotImplementedError("tuple execution is implemented by Task 2")
+def execute_run(
+    config_path: Path,
+    artifact_root: Path,
+    *,
+    max_tuples: int | None = None,
+    boundary_hook: Callable[[str, str], None] | None = None,
+) -> ExecutionReport:
+    config = load_experiment_config(config_path)
+    with artifact_writer_lock(artifact_root) as authority:
+        return _execute_locked(
+            config,
+            authority,
+            max_tuples=max_tuples,
+            boundary_hook=boundary_hook,
+        )
 
 
-def resume_run(*args: Any, **kwargs: Any) -> ExecutionReport:
-    return execute_run(*args, **kwargs)
+def resume_run(
+    config_path: Path,
+    artifact_root: Path,
+    *,
+    max_tuples: int | None = None,
+    boundary_hook: Callable[[str, str], None] | None = None,
+) -> ExecutionReport:
+    return execute_run(
+        config_path,
+        artifact_root,
+        max_tuples=max_tuples,
+        boundary_hook=boundary_hook,
+    )
 
 
 def export_reconciled_run(*_args: Any, **_kwargs: Any) -> ExportBundle:

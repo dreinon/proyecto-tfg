@@ -10,7 +10,7 @@ import yaml
 from score_super_resolution.contracts import ContractValidationError, validate_instance
 from score_super_resolution.execution import (
     ExecutionBusyError,
-    ExecutionInterrupted,
+    ExecutionInterruptedError,
     ReconciliationError,
     artifact_writer_lock,
     execute_run,
@@ -161,9 +161,9 @@ def test_resume_unit_skips_committed_valid_success_after_interruption(tmp_path: 
 
     def interrupt(boundary: str, _tuple_id: str) -> None:
         if boundary == "after_tuple_commit":
-            raise ExecutionInterrupted("injected interruption")
+            raise ExecutionInterruptedError("injected interruption")
 
-    with pytest.raises(ExecutionInterrupted):
+    with pytest.raises(ExecutionInterruptedError):
         execute_run(CONFIG_PATH, root, boundary_hook=interrupt)
     partial = snapshot_run(root)
     assert partial.counts == {"expected": 143, "succeeded": 1}
