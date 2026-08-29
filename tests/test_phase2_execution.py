@@ -10,11 +10,14 @@ import yaml
 from score_super_resolution.contracts import ContractValidationError, validate_instance
 from score_super_resolution.execution import (
     ExecutionBusyError,
+    ExecutionInterrupted,
     ReconciliationError,
     artifact_writer_lock,
+    execute_run,
     initialize_run,
     load_experiment_config,
     reconcile_run,
+    resume_run,
     snapshot_run,
 )
 from score_super_resolution.identities import experiment_identity
@@ -151,3 +154,76 @@ def test_scientific_and_reconciliation_schemas_fail_closed(
 def test_authored_experiment_yaml_is_schema_valid() -> None:
     payload = yaml.safe_load(CONFIG_PATH.read_text())
     validate_instance("experiment-config", payload, version=2)
+
+
+def test_resume_unit_skips_committed_valid_success_after_interruption(tmp_path: Path) -> None:
+    root = tmp_path / "run"
+
+    def interrupt(boundary: str, _tuple_id: str) -> None:
+        if boundary == "after_tuple_commit":
+            raise ExecutionInterrupted("injected interruption")
+
+    with pytest.raises(ExecutionInterrupted):
+        execute_run(CONFIG_PATH, root, boundary_hook=interrupt)
+    partial = snapshot_run(root)
+    assert partial.counts == {"expected": 143, "succeeded": 1}
+    assert partial.attempt_count == 1
+
+    report = resume_run(CONFIG_PATH, root, max_tuples=2)
+    assert report.succeeded == 2
+    resumed = snapshot_run(root)
+    assert resumed.counts == {"expected": 141, "succeeded": 3}
+    assert resumed.attempt_count == 3
+
+
+def test_resume_unit_recovers_failure_before_fsync_with_attempt_history(tmp_path: Path) -> None:
+    root = tmp_path / "run"
+
+    def fail(boundary: str, _tuple_id: str) -> None:
+        if boundary == "before_output_fsync":
+            raise OSError("injected publication failure")
+
+    report = execute_run(CONFIG_PATH, root, max_tuples=1, boundary_hook=fail)
+    assert report.failed == 1
+    partial = snapshot_run(root)
+    assert partial.counts == {"expected": 143, "retry_pending": 1}
+    assert partial.attempt_count == 1
+
+    resumed = resume_run(CONFIG_PATH, root, max_tuples=1)
+    assert resumed.succeeded == 1
+    final = snapshot_run(root)
+    assert final.counts == {"expected": 143, "succeeded": 1}
+    assert final.attempt_count == 2
+
+
+def test_integrity_lifecycle_quarantines_and_repairs_corrupted_success(tmp_path: Path) -> None:
+    root = tmp_path / "run"
+    execute_run(CONFIG_PATH, root, max_tuples=1)
+    output = next((root / "outputs").rglob("*.png"))
+    original = output.read_bytes()
+    output.write_bytes(b"corrupted committed output")
+
+    report = resume_run(CONFIG_PATH, root, max_tuples=1)
+    assert report.succeeded == 1
+    assert output.read_bytes() == original
+    snapshot = snapshot_run(root)
+    assert snapshot.counts == {"expected": 143, "succeeded": 1}
+    assert snapshot.attempt_count == 2
+    assert snapshot.integrity_incident_count == 1
+    quarantine = list((root / "quarantine").rglob("*"))
+    assert any(
+        path.is_file() and path.read_bytes() == b"corrupted committed output" for path in quarantine
+    )
+
+
+def test_corruption_transition_never_counts_missing_committed_output(tmp_path: Path) -> None:
+    root = tmp_path / "run"
+    execute_run(CONFIG_PATH, root, max_tuples=1)
+    output = next((root / "outputs").rglob("*.png"))
+    output.unlink()
+
+    # A zero-work resume still performs integrity repair before returning.
+    resume_run(CONFIG_PATH, root, max_tuples=0)
+    snapshot = snapshot_run(root)
+    assert snapshot.counts == {"expected": 143, "retry_pending": 1}
+    assert snapshot.integrity_incident_count == 1
