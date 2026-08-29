@@ -10,6 +10,7 @@ import json
 import os
 import re
 import stat
+import tempfile
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from fractions import Fraction
@@ -27,8 +28,15 @@ from defusedxml import ElementTree
 from IPython.display import clear_output, display
 from nbclient import NotebookClient
 
-from score_super_resolution.baselines import pixel_sha256
+from score_super_resolution.baselines import pixel_sha256, run_baseline
 from score_super_resolution.contracts import ContractValidationError, validate_instance
+from score_super_resolution.degradation import (
+    DegradationControl,
+    align_reference,
+    apply_degradation,
+    generate_visual_fixture_bundle,
+    native_physical_review_rois,
+)
 from score_super_resolution.evaluation import NOTATION_TAXONOMY, validate_notation_review
 from score_super_resolution.identities import canonical_sha256
 
@@ -1611,6 +1619,204 @@ class FixtureReviewSession:
         self.review = bundle
         return self.expected_review_sha256
 
+    # These four unreachable primitive-class methods are UI templates reused by the
+    # coherent-notation session below; FixtureReviewSession.__init__ always fails D-23.
+    def _semantic_source_confirmation_widget_template(self) -> widgets.Widget:
+        reviewer = widgets.Text(description="Revisor:", placeholder="Nombre")
+        checks = {
+            source_id: widgets.Checkbox(
+                value=False,
+                description=f"Confirmo música coherente: {source_id}",
+                indent=False,
+            )
+            for source_id in SEMANTIC_SOURCE_IDS
+        }
+        rationales = {
+            source_id: widgets.Textarea(
+                description="Motivo:",
+                placeholder="Describe brevemente por qué la notación es coherente y reconocible",
+                layout=widgets.Layout(width="1000px", height="70px"),
+            )
+            for source_id in SEMANTIC_SOURCE_IDS
+        }
+        show = widgets.Button(description="Mostrar anclas HR", button_style="info")
+        save = widgets.Button(description="Guardar confirmaciones", button_style="success")
+        preview = widgets.Output()
+        status = widgets.Output()
+
+        def render(_button: widgets.Button) -> None:
+            manifest = _load_semantic_manifest(self.artifact_root)
+            with preview:
+                clear_output(wait=True)
+                for row in manifest["inputs"]:
+                    raw = _read_regular(
+                        self.artifact_root / row["relative_path"],
+                        maximum_bytes=_MAX_IMAGE_BYTES,
+                        kind="semantic HR anchor",
+                    )
+                    if hashlib.sha256(raw).hexdigest() != row["encoded_sha256"]:
+                        raise FixtureReviewContractError("semantic HR anchor digest differs")
+                    print(f"{row['source_id']} · HR completa")
+                    display(widgets.Image(value=raw, format="png", width=1000))
+
+        def persist(_button: widgets.Button) -> None:
+            with status:
+                clear_output()
+                try:
+                    selected = [source_id for source_id, check in checks.items() if check.value]
+                    self.save_source_confirmations(
+                        reviewer=reviewer.value,
+                        rationales={key: value.value for key, value in rationales.items()},
+                        confirmed_sources=selected,
+                    )
+                    print("Confirmaciones HR guardadas: 2/2.")
+                except Exception as error:
+                    print(f"No se guardó: {error}")
+
+        show.on_click(render)
+        save.on_click(persist)
+        rows: list[widgets.Widget] = [reviewer, show]
+        for source_id in SEMANTIC_SOURCE_IDS:
+            rows.extend([checks[source_id], rationales[source_id]])
+        rows.extend([save, preview, status])
+        return widgets.VBox(rows)
+
+    def _semantic_panel_widget_template(self) -> widgets.Widget:
+        panels = self.prepared["panels"]
+        position = widgets.IntSlider(
+            value=0,
+            min=0,
+            max=len(panels) - 1,
+            description="Panel:",
+            continuous_update=False,
+        )
+        previous = widgets.Button(description="← Anterior")
+        following = widgets.Button(description="Siguiente →")
+        show = widgets.Button(description="Mostrar panel", button_style="info")
+        output = widgets.Output()
+
+        def render(*_args: object) -> None:
+            panel = panels[position.value]
+            raw = _read_regular(
+                self.artifact_root / panel["relative_path"],
+                maximum_bytes=_MAX_IMAGE_BYTES,
+                kind="semantic review panel",
+            )
+            if hashlib.sha256(raw).hexdigest() != panel["sha256"]:
+                raise FixtureReviewContractError("semantic review panel digest differs")
+            with output:
+                clear_output(wait=True)
+                display(widgets.Image(value=raw, format="png", width=1450))
+                print(
+                    f"{position.value + 1}/12 · {panel['source_id']} · "
+                    f"{panel['condition_id']} · métodos A/B/C enmascarados"
+                )
+
+        show.on_click(render)
+        previous.on_click(lambda _button: setattr(position, "value", max(0, position.value - 1)))
+        following.on_click(
+            lambda _button: setattr(position, "value", min(position.max, position.value + 1))
+        )
+        return widgets.VBox([widgets.HBox([position, previous, show, following]), output])
+
+    def _semantic_review_widget_template(self) -> widgets.Widget:
+        panel_ids = [row["panel_id"] for row in self.prepared["panels"]]
+        panels_by_id = {row["panel_id"]: row for row in self.prepared["panels"]}
+        panel = widgets.Dropdown(options=panel_ids, description="Panel:")
+        reviewer = widgets.Text(description="Revisor:", placeholder="Nombre")
+        checkboxes = {
+            label: widgets.Checkbox(value=False, description=label, indent=False)
+            for label in NOTATION_TAXONOMY
+        }
+        severity = widgets.Dropdown(
+            options=[("Sin severidad", None), "minor", "material", "unusable"],
+            description="Severidad:",
+        )
+        rationale = widgets.Textarea(
+            description="Justificación:", layout=widgets.Layout(width="1000px", height="90px")
+        )
+        show = widgets.Button(description="Mostrar seleccionado", button_style="info")
+        save = widgets.Button(description="Guardar revisión", button_style="success")
+        preview = widgets.Output()
+        status = widgets.Output()
+
+        def render(_button: widgets.Button) -> None:
+            selected = panels_by_id[str(panel.value)]
+            raw = _read_regular(
+                self.artifact_root / selected["relative_path"],
+                maximum_bytes=_MAX_IMAGE_BYTES,
+                kind="semantic review panel",
+            )
+            if hashlib.sha256(raw).hexdigest() != selected["sha256"]:
+                raise FixtureReviewContractError("semantic review panel digest differs")
+            with preview:
+                clear_output(wait=True)
+                display(widgets.Image(value=raw, format="png", width=1450))
+                print(
+                    f"{panel_ids.index(str(panel.value)) + 1}/12 · {selected['source_id']} · "
+                    f"{selected['condition_id']} · métodos A/B/C enmascarados"
+                )
+
+        def persist(_button: widgets.Button) -> None:
+            with status:
+                clear_output()
+                try:
+                    labels = [label for label, check in checkboxes.items() if check.value]
+                    self.save_panel_review(
+                        panel_id=str(panel.value),
+                        reviewer=reviewer.value,
+                        labels=labels,
+                        severity=severity.value,
+                        rationale=rationale.value,
+                    )
+                    print(f"Guardado: {self.summary()['reviewed_panels']}/12 paneles revisados.")
+                    index = panel_ids.index(str(panel.value))
+                    if index + 1 < len(panel_ids):
+                        panel.value = panel_ids[index + 1]
+                    for check in checkboxes.values():
+                        check.value = False
+                    severity.value = None
+                    rationale.value = ""
+                except Exception as error:
+                    print(f"No se guardó: {error}")
+
+        show.on_click(render)
+        save.on_click(persist)
+        return widgets.VBox(
+            [
+                widgets.HBox([panel, reviewer, show]),
+                preview,
+                widgets.GridBox(
+                    list(checkboxes.values()),
+                    layout=widgets.Layout(grid_template_columns="repeat(2, minmax(320px, 1fr))"),
+                ),
+                severity,
+                rationale,
+                save,
+                status,
+            ]
+        )
+
+    def _semantic_progress_widget_template(self) -> widgets.Widget:
+        button = widgets.Button(description="Comprobar progreso", button_style="info")
+        output = widgets.Output()
+
+        def check(_button: widgets.Button) -> None:
+            with output:
+                clear_output()
+                self.reload()
+                summary = self.summary()
+                print(
+                    f"Fuentes HR confirmadas: {summary['confirmed_sources']}/2 · "
+                    f"paneles revisados: {summary['reviewed_panels']}/12 · "
+                    f"omitidos: {summary['skipped_panels']} · fallidos: {summary['failed_panels']}"
+                )
+                if summary["confirmed_sources"] == 2 and summary["reviewed_panels"] == 12:
+                    print("Revisión semántica completa. Comunica: semantic review complete")
+
+        button.on_click(check)
+        return widgets.VBox([button, output])
+
     def panel_widget(self) -> widgets.Widget:
         panels = self.prepared["panels"]
         position = widgets.IntSlider(
@@ -1746,3 +1952,1294 @@ class FixtureReviewSession:
 
         button.on_click(check)
         return widgets.VBox([button, output])
+
+
+def _fixture_pixel_sha256(pixels: np.ndarray) -> str:
+    height, width, channels = pixels.shape
+    framed = (
+        b"phase2-fixture-rgb8-v1\0"
+        + width.to_bytes(4, "big")
+        + height.to_bytes(4, "big")
+        + channels.to_bytes(1, "big")
+        + pixels.tobytes(order="C")
+    )
+    return hashlib.sha256(framed).hexdigest()
+
+
+def _semantic_artifact_root(project_root: Path, artifact_root: Path | None) -> Path:
+    project_root = Path(project_root).resolve()
+    root = (
+        Path(artifact_root).resolve()
+        if artifact_root is not None
+        else project_root / "artifacts/phase2-semantic-fixture"
+    )
+    if root == project_root or root.is_symlink() or (root.exists() and not root.is_dir()):
+        raise FixtureReviewContractError("semantic artifact root is unavailable or unsafe")
+    return root
+
+
+def _artifact_inventory(root: Path, *, kind: str) -> dict[str, str]:
+    if not root.is_dir() or root.is_symlink():
+        raise FixtureReviewContractError(f"{kind} root is unavailable or unsafe")
+    inventory: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            raise FixtureReviewContractError(f"{kind} contains a symlink: {relative}")
+        if path.is_file():
+            payload = _read_regular(path, maximum_bytes=128 * 1024 * 1024, kind=kind)
+            inventory[relative] = hashlib.sha256(payload).hexdigest()
+        elif not path.is_dir():
+            raise FixtureReviewContractError(f"{kind} contains a non-regular entry")
+    return inventory
+
+
+def _degradation_control(project_root: Path, semantic: Mapping[str, Any]) -> DegradationControl:
+    raw = _read_yaml(
+        project_root / semantic["controls"]["degradation_path"],
+        kind="frozen degradation control",
+    )
+    if canonical_sha256(raw) != semantic["controls"]["degradation_sha256"]:
+        raise FixtureReviewContractError("frozen degradation control identity differs")
+    if (
+        raw.get("control_id") != semantic["controls"]["degradation_id"]
+        or raw.get("status") != "frozen"
+        or raw.get("master_seed") != semantic["controls"]["degradation_seed"]
+        or tuple(raw.get("condition_order", ())) != EXPECTED_CONDITIONS
+    ):
+        raise FixtureReviewContractError("frozen degradation control content differs")
+    return DegradationControl(
+        version=int(raw["version"]),
+        candidate_id=str(raw["candidate_id"]),
+        status=str(raw["status"]),
+        claim_boundary=str(raw["claim_boundary"]),
+        master_seed=int(raw["master_seed"]),
+        image_contract=copy.deepcopy(raw["image_contract"]),
+        alignment=copy.deepcopy(raw["alignment"]),
+        runtime=copy.deepcopy(raw["runtime"]),
+        condition_ids=tuple(raw["condition_order"]),
+        conditions=tuple(copy.deepcopy(raw["conditions"])),
+        sha256=canonical_sha256(raw),
+    )
+
+
+def _load_semantic_manifest(root: Path) -> dict[str, Any]:
+    manifest = _read_json(root / "semantic-experiment-manifest.json", kind="semantic manifest")
+    _require_self_digest(manifest, "manifest_sha256", kind="semantic manifest")
+    if manifest.get("record_type") != "semantic-experiment-manifest":
+        raise FixtureReviewContractError("semantic manifest record type differs")
+    return manifest
+
+
+def prepare_semantic_fixture_experiment(
+    project_root: Path, *, artifact_root: Path | None = None
+) -> dict[str, Any]:
+    """Publish the exact applicability inputs and expected 36-key matrix before compute."""
+
+    project_root = Path(project_root).resolve()
+    semantic = load_semantic_fixture_control(project_root)
+    root = _semantic_artifact_root(project_root, artifact_root)
+    root.mkdir(parents=True, exist_ok=True)
+    primitive_root = project_root / "artifacts/phase2-fixture"
+    primitive_review = primitive_root / "review/notation-review.json"
+    if primitive_review.exists() or primitive_review.is_symlink():
+        raise FixtureReviewContractError(f"{_D23_ERROR}; invalid notation-review.json exists")
+    primitive_inventory = _artifact_inventory(primitive_root, kind="primitive evidence")
+    primitive_fixed = validate_fixture_review_inputs(project_root)
+
+    applicability_rows = [
+        validate_semantic_musicxml_source(
+            project_root / source["source_path"],
+            source=source,
+            renderer=semantic["renderer"],
+            limits=semantic["limits"],
+        )
+        for source in semantic["sources"]
+    ]
+    manifest_path = project_root / semantic["visual_manifest"]["manifest_path"]
+    source_root = project_root / "tests/fixtures/phase2"
+    with tempfile.TemporaryDirectory(prefix="phase2-semantic-render-") as temporary_name:
+        temporary = Path(temporary_name)
+        first = generate_visual_fixture_bundle(
+            manifest_path, source_root=source_root, output_root=temporary / "first"
+        )
+        second = generate_visual_fixture_bundle(
+            manifest_path, source_root=source_root, output_root=temporary / "second"
+        )
+        first_by_id = {row["item_id"]: row for row in first["items"]}
+        second_by_id = {row["item_id"]: row for row in second["items"]}
+        input_rows: list[dict[str, Any]] = []
+        for source in semantic["sources"]:
+            source_id = source["source_id"]
+            left = first_by_id[source_id]
+            right = second_by_id[source_id]
+            left_payload = _read_regular(
+                temporary / "first" / left["relative_path"],
+                maximum_bytes=semantic["limits"]["max_output_bytes"],
+                kind="first deterministic engraving",
+            )
+            right_payload = _read_regular(
+                temporary / "second" / right["relative_path"],
+                maximum_bytes=semantic["limits"]["max_output_bytes"],
+                kind="second deterministic engraving",
+            )
+            if (
+                left != right
+                or left_payload != right_payload
+                or left["pixel_sha256"] != source["rendered_pixel_sha256"]
+            ):
+                raise FixtureReviewContractError("semantic engraving is not deterministic")
+            destination = _safe_relative(root, source["rendered_relative_path"], kind="HR input")
+            _publish_identical(destination, left_payload, kind="semantic HR input")
+            input_rows.append(
+                {
+                    "source_id": source_id,
+                    "source_group_id": source["source_group_id"],
+                    "source_sha256": source["source_sha256"],
+                    "relative_path": source["rendered_relative_path"],
+                    "encoded_sha256": hashlib.sha256(left_payload).hexdigest(),
+                    "pixel_sha256": left["pixel_sha256"],
+                    "width": left["width"],
+                    "height": left["height"],
+                    "roi": copy.deepcopy(source["roi"]),
+                }
+            )
+
+    applicability_core = {
+        "schema_version": 2,
+        "record_type": "semantic-applicability",
+        "semantic_experiment_id": semantic["semantic_experiment_id"],
+        "semantic_experiment_sha256": semantic["semantic_experiment_sha256"],
+        "claim_boundary": semantic["claim_boundary"],
+        "renderer": copy.deepcopy(semantic["renderer"]),
+        "sources": applicability_rows,
+        "deterministic_render_count_per_source": 2,
+        "input_records": input_rows,
+        "non_claims": copy.deepcopy(semantic["non_claims"]),
+    }
+    applicability = {
+        **applicability_core,
+        "applicability_sha256": canonical_sha256(applicability_core),
+    }
+    _publish_identical(
+        root / semantic["paths"]["applicability"],
+        _canonical_json(applicability),
+        kind="semantic applicability",
+    )
+
+    manifest_core = {
+        "schema_version": 2,
+        "record_type": "semantic-experiment-manifest",
+        "semantic_experiment_id": semantic["semantic_experiment_id"],
+        "semantic_experiment_sha256": semantic["semantic_experiment_sha256"],
+        "claim_boundary": semantic["claim_boundary"],
+        "expected_tuple_keys": copy.deepcopy(semantic["expected_tuple_keys"]),
+        "expected_tuple_count": 36,
+        "source_order": copy.deepcopy(semantic["source_order"]),
+        "condition_order": copy.deepcopy(semantic["condition_order"]),
+        "method_order": copy.deepcopy(semantic["method_order"]),
+        "review_membership": copy.deepcopy(semantic["review_membership"]),
+        "controls": copy.deepcopy(semantic["controls"]),
+        "inputs": input_rows,
+        "applicability_sha256": applicability["applicability_sha256"],
+        "primitive_inventory": primitive_inventory,
+        "primitive_inventory_sha256": canonical_sha256(primitive_inventory),
+        "primitive_fixed_identities": {
+            "experiment_id": primitive_fixed["experiment_id"],
+            "reconciliation_id": primitive_fixed["reconciliation_id"],
+            "reconciliation_sha256": primitive_fixed["reconciliation_sha256"],
+            "replay_id": primitive_fixed["replay_id"],
+            "replay_sha256": primitive_fixed["replay_sha256"],
+            "aggregate_file_sha256": primitive_fixed["aggregate_file_sha256"],
+            "membership_sha256": primitive_fixed["membership_sha256"],
+        },
+        "paths": copy.deepcopy(semantic["paths"]),
+        "limits": copy.deepcopy(semantic["limits"]),
+        "non_claims": copy.deepcopy(semantic["non_claims"]),
+    }
+    manifest = {**manifest_core, "manifest_sha256": canonical_sha256(manifest_core)}
+    _publish_identical(
+        root / semantic["paths"]["manifest"],
+        _canonical_json(manifest),
+        kind="semantic experiment manifest",
+    )
+    return {**manifest, "artifact_root": root}
+
+
+def _encode_png(pixels: np.ndarray) -> bytes:
+    ok, encoded = cv2.imencode(
+        ".png", cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_PNG_COMPRESSION, 9]
+    )
+    if not ok:
+        raise FixtureReviewContractError("semantic PNG encoding failed")
+    return bytes(encoded)
+
+
+def execute_semantic_fixture_experiment(
+    project_root: Path, *, artifact_root: Path | None = None
+) -> dict[str, Any]:
+    """Run only the predeclared semantic matrix through the frozen public operators."""
+
+    project_root = Path(project_root).resolve()
+    semantic = load_semantic_fixture_control(project_root)
+    root = _semantic_artifact_root(project_root, artifact_root)
+    manifest = _load_semantic_manifest(root)
+    if (
+        manifest["semantic_experiment_sha256"] != semantic["semantic_experiment_sha256"]
+        or manifest["expected_tuple_keys"] != semantic["expected_tuple_keys"]
+    ):
+        raise FixtureReviewContractError("semantic manifest no longer binds the frozen matrix")
+    control = _degradation_control(project_root, semantic)
+    inputs = {row["source_id"]: row for row in manifest["inputs"]}
+    terminal: list[str] = []
+    for source in semantic["sources"]:
+        source_id = source["source_id"]
+        input_record = inputs[source_id]
+        reference = _decode_rgb(
+            root / input_record["relative_path"],
+            encoded_sha256=input_record["encoded_sha256"],
+            pixel_digest=None,
+            kind="semantic HR input",
+        )
+        if _fixture_pixel_sha256(reference) != input_record["pixel_sha256"]:
+            raise FixtureReviewContractError("semantic HR input pixel digest differs")
+        for condition_id in semantic["condition_order"]:
+            degraded = apply_degradation(
+                reference,
+                control=control,
+                condition_id=condition_id,
+                item_id=source_id,
+                source_group_id=source["source_group_id"],
+                fixture_manifest_id=semantic["visual_manifest"]["manifest_id"],
+                purpose="benchmark",
+            )
+            trace_relative = semantic["paths"]["traces"].format(
+                condition_id=condition_id, source_id=source_id
+            )
+            _publish_identical(
+                _safe_relative(root, trace_relative, kind="semantic trace"),
+                _canonical_json(degraded.trace),
+                kind="semantic degradation trace",
+            )
+            extension = "jpg" if degraded.encoded_bytes[:2] == b"\xff\xd8" else "png"
+            lr_relative = f"lr/{condition_id}/{source_id}.{extension}"
+            _publish_identical(
+                _safe_relative(root, lr_relative, kind="semantic LR"),
+                degraded.encoded_bytes,
+                kind="semantic LR",
+            )
+            aligned = align_reference(reference, int(condition_id[1]))
+            for method_id in semantic["method_order"]:
+                tuple_key = f"{source_id}|{condition_id}|{method_id}"
+                if tuple_key not in semantic["expected_tuple_keys"]:
+                    raise FixtureReviewContractError("semantic execution escaped expected matrix")
+                baseline = run_baseline(
+                    method_id,
+                    degraded.pixels,
+                    target_shape=tuple(int(value) for value in aligned.pixels.shape),
+                    condition_id=condition_id,
+                )
+                output_relative = semantic["paths"]["outputs"].format(
+                    condition_id=condition_id,
+                    method_id=method_id,
+                    source_id=source_id,
+                )
+                output_payload = _encode_png(baseline.pixels)
+                _publish_identical(
+                    _safe_relative(root, output_relative, kind="semantic output"),
+                    output_payload,
+                    kind="semantic baseline output",
+                )
+                record_core = {
+                    "schema_version": 2,
+                    "record_type": "semantic-scientific-result",
+                    "tuple_key": tuple_key,
+                    "semantic_experiment_id": semantic["semantic_experiment_id"],
+                    "semantic_experiment_sha256": semantic["semantic_experiment_sha256"],
+                    "source_id": source_id,
+                    "source_group_id": source["source_group_id"],
+                    "source_sha256": source["source_sha256"],
+                    "input_relative_path": input_record["relative_path"],
+                    "input_encoded_sha256": input_record["encoded_sha256"],
+                    "input_pixel_sha256": input_record["pixel_sha256"],
+                    "condition_id": condition_id,
+                    "method_id": method_id,
+                    "degradation_control_sha256": semantic["controls"]["degradation_sha256"],
+                    "evaluation_control_sha256": semantic["controls"]["evaluation_sha256"],
+                    "master_seed": semantic["controls"]["degradation_seed"],
+                    "degradation_trace": copy.deepcopy(degraded.trace),
+                    "trace_relative_path": trace_relative,
+                    "lr_relative_path": lr_relative,
+                    "lr_encoded_sha256": hashlib.sha256(degraded.encoded_bytes).hexdigest(),
+                    "lr_pixel_sha256": _degradation_pixel_sha256(degraded.pixels),
+                    "baseline_evidence": copy.deepcopy(baseline.evidence),
+                    "output_relative_path": output_relative,
+                    "output_encoded_sha256": hashlib.sha256(output_payload).hexdigest(),
+                    "output_pixel_sha256": pixel_sha256(baseline.pixels),
+                    "status": "succeeded",
+                    "claim_boundary": semantic["claim_boundary"],
+                    "non_claims": copy.deepcopy(semantic["non_claims"]),
+                }
+                scientific_sha256 = canonical_sha256(record_core)
+                record = {
+                    **record_core,
+                    "scientific_result_id": f"semantic-result-{scientific_sha256}",
+                    "scientific_sha256": scientific_sha256,
+                }
+                record_relative = semantic["paths"]["records"].format(
+                    condition_id=condition_id,
+                    method_id=method_id,
+                    source_id=source_id,
+                )
+                _publish_identical(
+                    _safe_relative(root, record_relative, kind="semantic record"),
+                    _canonical_json(record),
+                    kind="semantic scientific record",
+                )
+                terminal.append(tuple_key)
+    if terminal != semantic["expected_tuple_keys"]:
+        raise FixtureReviewContractError("semantic execution terminal order differs")
+    return {
+        "semantic_experiment_id": semantic["semantic_experiment_id"],
+        "expected_tuple_count": 36,
+        "terminal_tuple_count": len(terminal),
+    }
+
+
+def reconcile_semantic_fixture_experiment(
+    project_root: Path, *, artifact_root: Path | None = None
+) -> dict[str, Any]:
+    """Fail closed unless the separate stream contains exactly 36 valid terminal tuples."""
+
+    project_root = Path(project_root).resolve()
+    semantic = load_semantic_fixture_control(project_root)
+    root = _semantic_artifact_root(project_root, artifact_root)
+    manifest = _load_semantic_manifest(root)
+    expected_record_paths = {
+        semantic["paths"]["records"].format(
+            source_id=source_id, condition_id=condition_id, method_id=method_id
+        )
+        for source_id in semantic["source_order"]
+        for condition_id in semantic["condition_order"]
+        for method_id in semantic["method_order"]
+    }
+    expected_output_paths = {
+        semantic["paths"]["outputs"].format(
+            source_id=source_id, condition_id=condition_id, method_id=method_id
+        )
+        for source_id in semantic["source_order"]
+        for condition_id in semantic["condition_order"]
+        for method_id in semantic["method_order"]
+    }
+    expected_trace_paths = {
+        semantic["paths"]["traces"].format(source_id=source_id, condition_id=condition_id)
+        for source_id in semantic["source_order"]
+        for condition_id in semantic["condition_order"]
+    }
+    for directory_name, expected in (
+        ("records", expected_record_paths),
+        ("outputs", expected_output_paths),
+        ("traces", expected_trace_paths),
+    ):
+        directory = root / directory_name
+        if not directory.is_dir() or directory.is_symlink():
+            raise FixtureReviewContractError(f"semantic {directory_name} directory is unsafe")
+        observed: set[str] = set()
+        for path in directory.rglob("*"):
+            if path.is_symlink():
+                raise FixtureReviewContractError(f"semantic {directory_name} contains a symlink")
+            if path.is_file():
+                observed.add(path.relative_to(root).as_posix())
+            elif not path.is_dir():
+                raise FixtureReviewContractError(
+                    f"semantic {directory_name} contains a non-regular entry"
+                )
+        if observed != expected:
+            raise FixtureReviewContractError(
+                f"semantic {directory_name} has an unexpected, missing, or partial tuple"
+            )
+    lr_paths: set[str] = set()
+    lr_root = root / "lr"
+    if not lr_root.is_dir() or lr_root.is_symlink():
+        raise FixtureReviewContractError("semantic LR directory is unsafe")
+    for path in lr_root.rglob("*"):
+        if path.is_symlink():
+            raise FixtureReviewContractError("semantic LR contains a symlink")
+        if path.is_file():
+            lr_paths.add(path.relative_to(root).as_posix())
+        elif not path.is_dir():
+            raise FixtureReviewContractError("semantic LR contains a non-regular entry")
+    if len(lr_paths) != 12:
+        raise FixtureReviewContractError("semantic LR denominator differs")
+
+    input_records = {row["source_id"]: row for row in manifest["inputs"]}
+    scientific_rows: list[dict[str, str]] = []
+    observed_keys: list[str] = []
+    expected_lr_paths: set[str] = set()
+    for tuple_key in semantic["expected_tuple_keys"]:
+        source_id, condition_id, method_id = tuple_key.split("|")
+        record_relative = semantic["paths"]["records"].format(
+            source_id=source_id, condition_id=condition_id, method_id=method_id
+        )
+        record = _read_json(root / record_relative, kind="semantic scientific record")
+        record_core = {
+            key: value
+            for key, value in record.items()
+            if key not in {"scientific_result_id", "scientific_sha256"}
+        }
+        digest = canonical_sha256(record_core)
+        if (
+            record.get("tuple_key") != tuple_key
+            or record.get("scientific_sha256") != digest
+            or record.get("scientific_result_id") != f"semantic-result-{digest}"
+            or record.get("semantic_experiment_sha256") != semantic["semantic_experiment_sha256"]
+            or record.get("status") != "succeeded"
+            or record.get("non_claims") != semantic["non_claims"]
+        ):
+            raise FixtureReviewContractError("semantic scientific identity differs")
+        trace = record["degradation_trace"]
+        trace_core = {key: value for key, value in trace.items() if key != "trace_id"}
+        if (
+            trace.get("trace_id") != f"degradation-{canonical_sha256(trace_core)}"
+            or trace.get("control_sha256") != semantic["controls"]["degradation_sha256"]
+            or trace.get("master_seed") != semantic["controls"]["degradation_seed"]
+        ):
+            raise FixtureReviewContractError("semantic degradation trace identity differs")
+        trace_file = _read_json(root / record["trace_relative_path"], kind="semantic trace")
+        if trace_file != trace:
+            raise FixtureReviewContractError("semantic shared trace differs")
+        lr_payload = _read_regular(
+            root / record["lr_relative_path"],
+            maximum_bytes=semantic["limits"]["max_output_bytes"],
+            kind="semantic LR",
+        )
+        if hashlib.sha256(lr_payload).hexdigest() != record["lr_encoded_sha256"]:
+            raise FixtureReviewContractError("semantic LR encoded digest differs")
+        lr = _decode_rgb(
+            root / record["lr_relative_path"],
+            encoded_sha256=record["lr_encoded_sha256"],
+            pixel_digest=None,
+            kind="semantic LR",
+        )
+        if _degradation_pixel_sha256(lr) != record["lr_pixel_sha256"] or record[
+            "baseline_evidence"
+        ]["input_pixel_sha256"] != pixel_sha256(lr):
+            raise FixtureReviewContractError("semantic LR pixel lineage differs")
+        expected_lr_paths.add(record["lr_relative_path"])
+        output = _decode_rgb(
+            root / record["output_relative_path"],
+            encoded_sha256=record["output_encoded_sha256"],
+            pixel_digest=record["output_pixel_sha256"],
+            kind="semantic output",
+        )
+        if record["baseline_evidence"]["output_pixel_sha256"] != pixel_sha256(output):
+            raise FixtureReviewContractError("semantic output baseline lineage differs")
+        input_record = input_records[source_id]
+        if (
+            record["source_sha256"]
+            != next(
+                row["source_sha256"] for row in semantic["sources"] if row["source_id"] == source_id
+            )
+            or record["input_encoded_sha256"] != input_record["encoded_sha256"]
+            or record["input_pixel_sha256"] != input_record["pixel_sha256"]
+        ):
+            raise FixtureReviewContractError("semantic source lineage differs")
+        observed_keys.append(tuple_key)
+        scientific_rows.append(
+            {
+                "tuple_key": tuple_key,
+                "scientific_sha256": digest,
+                "output_encoded_sha256": record["output_encoded_sha256"],
+                "output_pixel_sha256": record["output_pixel_sha256"],
+                "lr_encoded_sha256": record["lr_encoded_sha256"],
+                "lr_pixel_sha256": record["lr_pixel_sha256"],
+                "trace_id": trace["trace_id"],
+            }
+        )
+    if observed_keys != semantic["expected_tuple_keys"] or lr_paths != expected_lr_paths:
+        raise FixtureReviewContractError("semantic closed tuple matrix differs")
+    current_primitive = _artifact_inventory(
+        project_root / "artifacts/phase2-fixture", kind="primitive evidence"
+    )
+    if (
+        current_primitive != manifest["primitive_inventory"]
+        or canonical_sha256(current_primitive) != manifest["primitive_inventory_sha256"]
+    ):
+        raise FixtureReviewContractError("primitive evidence changed during semantic execution")
+    fixed = validate_fixture_review_inputs(project_root)
+    if manifest["primitive_fixed_identities"] != {
+        "experiment_id": fixed["experiment_id"],
+        "reconciliation_id": fixed["reconciliation_id"],
+        "reconciliation_sha256": fixed["reconciliation_sha256"],
+        "replay_id": fixed["replay_id"],
+        "replay_sha256": fixed["replay_sha256"],
+        "aggregate_file_sha256": fixed["aggregate_file_sha256"],
+        "membership_sha256": fixed["membership_sha256"],
+    }:
+        raise FixtureReviewContractError("primitive fixed identities changed")
+    report_core = {
+        "schema_version": 2,
+        "record_type": "semantic-reconciliation",
+        "semantic_experiment_id": semantic["semantic_experiment_id"],
+        "semantic_experiment_sha256": semantic["semantic_experiment_sha256"],
+        "manifest_sha256": manifest["manifest_sha256"],
+        "applicability_sha256": manifest["applicability_sha256"],
+        "expected_tuple_count": 36,
+        "terminal_tuple_count": 36,
+        "counts": {"succeeded": 36, "failed": 0, "excluded": 0},
+        "tuples": scientific_rows,
+        "primitive_inventory_sha256_before": manifest["primitive_inventory_sha256"],
+        "primitive_inventory_sha256_after": canonical_sha256(current_primitive),
+        "primitive_fixed_identities": copy.deepcopy(manifest["primitive_fixed_identities"]),
+        "claim_boundary": semantic["claim_boundary"],
+        "non_claims": copy.deepcopy(semantic["non_claims"]),
+    }
+    report = {**report_core, "reconciliation_sha256": canonical_sha256(report_core)}
+    _publish_identical(
+        root / semantic["paths"]["reconciliation"],
+        _canonical_json(report),
+        kind="semantic reconciliation",
+    )
+    return report
+
+
+def _semantic_method_mapping(panel_id: str, semantic_sha256: str) -> dict[str, str]:
+    ranked = sorted(
+        EXPECTED_METHODS,
+        key=lambda method_id: canonical_sha256(
+            {
+                "domain": "phase2-semantic-masked-method-v1",
+                "semantic_experiment_sha256": semantic_sha256,
+                "panel_id": panel_id,
+                "method_id": method_id,
+            }
+        ),
+    )
+    return dict(zip(MASK_LABELS, ranked, strict=True))
+
+
+def _render_semantic_panel(
+    panel: Mapping[str, Any],
+    mapping: Mapping[str, str],
+    reference: np.ndarray,
+    lr: np.ndarray,
+    outputs: Mapping[str, np.ndarray],
+) -> tuple[bytes, dict[str, Any]]:
+    scale = int(str(panel["condition_id"])[1])
+    roi = panel["roi"]
+    hr_roi, corresponding_lr, roi_evidence = native_physical_review_rois(
+        reference, lr, roi=roi, scale=scale
+    )
+    method_rois = {
+        label: outputs[method][
+            roi["y"] : roi["y"] + roi["height"],
+            roi["x"] : roi["x"] + roi["width"],
+        ]
+        for label, method in mapping.items()
+    }
+    columns = [
+        ("HR", reference, hr_roi, f"HR {reference.shape[1]}x{reference.shape[0]} | fixed ROI"),
+        (
+            "LR",
+            lr,
+            corresponding_lr,
+            f"native LR {lr.shape[1]}x{lr.shape[0]} | exact nearest corresponding ROI",
+        ),
+        *[
+            (label, outputs[method], method_rois[label], f"masked {label} | fixed HR-sized ROI")
+            for label, method in mapping.items()
+        ],
+    ]
+    column_width, context_height, roi_height, gutter = 310, 215, 250, 12
+    header_height, label_height = 54, 54
+    width = len(columns) * column_width + (len(columns) + 1) * gutter
+    height = header_height + label_height + context_height + label_height + roi_height + 3 * gutter
+    canvas = np.full((height, width, 3), 255, dtype=np.uint8)
+    cv2.putText(
+        canvas,
+        f"{panel['panel_id']} | {panel['condition_id']} | {panel['source_id']} | methods masked",
+        (gutter, 34),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        (20, 20, 20),
+        2,
+        cv2.LINE_AA,
+    )
+    for index, (label, context, crop, description) in enumerate(columns):
+        left = gutter + index * (column_width + gutter)
+        cv2.putText(
+            canvas,
+            label,
+            (left, header_height + 24),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.68,
+            (20, 20, 20),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            canvas,
+            description[:48],
+            (left, header_height + 46),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.36,
+            (40, 40, 40),
+            1,
+            cv2.LINE_AA,
+        )
+        context_top = header_height + label_height
+        canvas[context_top : context_top + context_height, left : left + column_width] = _fit(
+            context, column_width, context_height, allow_upscale=label != "LR"
+        )
+        cv2.putText(
+            canvas,
+            "native/corresponding ROI" if label == "LR" else "same fixed ROI",
+            (left, context_top + context_height + 27),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (30, 30, 30),
+            1,
+            cv2.LINE_AA,
+        )
+        roi_top = context_top + context_height + label_height
+        canvas[roi_top : roi_top + roi_height, left : left + column_width] = _fit(
+            crop, column_width, roi_height, allow_upscale=True
+        )
+    return _encode_png(canvas), roi_evidence
+
+
+def prepare_semantic_review(
+    project_root: Path, *, artifact_root: Path | None = None
+) -> dict[str, Any]:
+    """Publish the exact masked twelve-panel review without human evidence."""
+
+    project_root = Path(project_root).resolve()
+    semantic = load_semantic_fixture_control(project_root)
+    root = _semantic_artifact_root(project_root, artifact_root)
+    manifest = _load_semantic_manifest(root)
+    reconciliation = reconcile_semantic_fixture_experiment(project_root, artifact_root=root)
+    if reconciliation.get("terminal_tuple_count") != 36:
+        raise FixtureReviewContractError("semantic reconciliation is incomplete")
+    records = {
+        row["tuple_key"]: _read_json(
+            root
+            / semantic["paths"]["records"].format(
+                source_id=row["tuple_key"].split("|")[0],
+                condition_id=row["tuple_key"].split("|")[1],
+                method_id=row["tuple_key"].split("|")[2],
+            ),
+            kind="semantic scientific record",
+        )
+        for row in reconciliation["tuples"]
+    }
+    inputs = {row["source_id"]: row for row in manifest["inputs"]}
+    mapping_rows: list[dict[str, Any]] = []
+    panel_rows: list[dict[str, Any]] = []
+    for membership in semantic["review_membership"]:
+        panel_id = membership["panel_id"]
+        source_id = membership["source_id"]
+        condition_id = membership["condition_id"]
+        source = next(row for row in semantic["sources"] if row["source_id"] == source_id)
+        input_record = inputs[source_id]
+        reference_full = _decode_rgb(
+            root / input_record["relative_path"],
+            encoded_sha256=input_record["encoded_sha256"],
+            pixel_digest=None,
+            kind="semantic HR input",
+        )
+        aligned = align_reference(reference_full, int(condition_id[1])).pixels
+        method_records = {
+            method_id: records[f"{source_id}|{condition_id}|{method_id}"]
+            for method_id in semantic["method_order"]
+        }
+        first_record = method_records[semantic["method_order"][0]]
+        lr = _decode_rgb(
+            root / first_record["lr_relative_path"],
+            encoded_sha256=first_record["lr_encoded_sha256"],
+            pixel_digest=None,
+            kind="semantic LR",
+        )
+        outputs = {
+            method_id: _decode_rgb(
+                root / record["output_relative_path"],
+                encoded_sha256=record["output_encoded_sha256"],
+                pixel_digest=record["output_pixel_sha256"],
+                kind="semantic output",
+            )
+            for method_id, record in method_records.items()
+        }
+        mapping = _semantic_method_mapping(panel_id, semantic["semantic_experiment_sha256"])
+        panel = {
+            "panel_id": panel_id,
+            "source_id": source_id,
+            "source_group_id": source["source_group_id"],
+            "condition_id": condition_id,
+            "roi": copy.deepcopy(source["roi"]),
+        }
+        encoded, roi_evidence = _render_semantic_panel(panel, mapping, aligned, lr, outputs)
+        relative = f"review/panels/{panel_id}.png"
+        _publish_identical(
+            _safe_relative(root, relative, kind="semantic review panel"),
+            encoded,
+            kind="semantic review panel",
+        )
+        tuple_bindings = [
+            {
+                "masked_label": label,
+                "tuple_key": f"{source_id}|{condition_id}|{method_id}",
+                "scientific_sha256": method_records[method_id]["scientific_sha256"],
+                "output_pixel_sha256": method_records[method_id]["output_pixel_sha256"],
+            }
+            for label, method_id in mapping.items()
+        ]
+        panel_rows.append(
+            {
+                **panel,
+                "relative_path": relative,
+                "sha256": hashlib.sha256(encoded).hexdigest(),
+                "input_encoded_sha256": input_record["encoded_sha256"],
+                "input_pixel_sha256": input_record["pixel_sha256"],
+                "lr_relative_path": first_record["lr_relative_path"],
+                "lr_encoded_sha256": first_record["lr_encoded_sha256"],
+                "lr_pixel_sha256": first_record["lr_pixel_sha256"],
+                "roi_evidence": roi_evidence,
+                "tuple_bindings": tuple_bindings,
+                "semantic_experiment_sha256": semantic["semantic_experiment_sha256"],
+                "applicability_sha256": manifest["applicability_sha256"],
+                "reconciliation_sha256": reconciliation["reconciliation_sha256"],
+            }
+        )
+        mapping_rows.append({"panel_id": panel_id, "masked_methods": mapping})
+    membership_core = {
+        "semantic_experiment_sha256": semantic["semantic_experiment_sha256"],
+        "review_membership": copy.deepcopy(semantic["review_membership"]),
+    }
+    membership_sha256 = canonical_sha256(membership_core)
+    mapping_core = {
+        "schema_version": 2,
+        "record_type": "semantic-method-mapping",
+        "semantic_experiment_id": semantic["semantic_experiment_id"],
+        "semantic_experiment_sha256": semantic["semantic_experiment_sha256"],
+        "membership_sha256": membership_sha256,
+        "mapping": mapping_rows,
+    }
+    mapping = {**mapping_core, "mapping_sha256": canonical_sha256(mapping_core)}
+    _publish_identical(
+        root / "review/method-mapping.json",
+        _canonical_json(mapping),
+        kind="semantic method mapping",
+    )
+    static_identity = {
+        "semantic_experiment_sha256": semantic["semantic_experiment_sha256"],
+        "applicability_sha256": manifest["applicability_sha256"],
+        "reconciliation_sha256": reconciliation["reconciliation_sha256"],
+        "mapping_sha256": mapping["mapping_sha256"],
+        "panel_sha256s": [row["sha256"] for row in panel_rows],
+    }
+    return {
+        "artifact_root": root,
+        "semantic_experiment_id": semantic["semantic_experiment_id"],
+        "semantic_experiment_sha256": semantic["semantic_experiment_sha256"],
+        "applicability_sha256": manifest["applicability_sha256"],
+        "reconciliation_sha256": reconciliation["reconciliation_sha256"],
+        "membership_id": f"semantic-membership-{membership_sha256}",
+        "membership_sha256": membership_sha256,
+        "mapping": mapping_rows,
+        "mapping_sha256": mapping["mapping_sha256"],
+        "panels": panel_rows,
+        "requested_panel_count": 12,
+        "working_copy_token": f"generated:{canonical_sha256(static_identity)}",
+        "claim_boundary": semantic["claim_boundary"],
+        "non_claims": copy.deepcopy(semantic["non_claims"]),
+    }
+
+
+def semantic_notebook_source_sha256(path: Path) -> str:
+    """Return the normalized digest of the source-only semantic review notebook."""
+
+    notebook = _read_json(
+        Path(path), kind="semantic tracked notebook", maximum_bytes=4 * 1024 * 1024
+    )
+    if not isinstance(notebook.get("cells"), list) or not isinstance(
+        notebook.get("metadata"), dict
+    ):
+        raise FixtureReviewContractError("semantic tracked notebook structure is invalid")
+    serialized = json.dumps(notebook, sort_keys=True).casefold()
+    if any(
+        value in serialized for value in ("image/png", "image/jpeg", "application/pdf", "base64,")
+    ):
+        raise FixtureReviewContractError("semantic tracked notebook contains embedded payload")
+    marker_count = 0
+    for cell in notebook["cells"]:
+        if not isinstance(cell, dict) or not isinstance(cell.get("metadata"), dict):
+            raise FixtureReviewContractError("semantic tracked notebook cell is invalid")
+        source = cell.get("source")
+        if not isinstance(source, (str, list)) or (
+            isinstance(source, list) and not all(isinstance(value, str) for value in source)
+        ):
+            raise FixtureReviewContractError("semantic tracked notebook source is invalid")
+        marker_count += (source if isinstance(source, str) else "".join(source)).count(
+            SEMANTIC_WORKING_COPY_MARKER
+        )
+        if cell.get("cell_type") == "code" and (
+            cell.get("execution_count") is not None or cell.get("outputs") != []
+        ):
+            raise FixtureReviewContractError(
+                "semantic tracked notebook must be unexecuted and output-free"
+            )
+    if marker_count != 1:
+        raise FixtureReviewContractError("semantic working-copy guard is absent or ambiguous")
+    return canonical_sha256(notebook)
+
+
+def _semantic_logical_working_sha256(working_path: Path, source_path: Path, token: str) -> str:
+    working = _read_json(
+        working_path, kind="semantic working notebook", maximum_bytes=16 * 1024 * 1024
+    )
+    source = _read_json(
+        source_path, kind="semantic tracked notebook", maximum_bytes=4 * 1024 * 1024
+    )
+
+    def projection(notebook: dict[str, Any], *, working_copy: bool) -> dict[str, Any]:
+        value = copy.deepcopy(notebook)
+        value.get("metadata", {}).pop("widgets", None)
+        language = value.get("metadata", {}).get("language_info")
+        if isinstance(language, dict):
+            for field in (
+                "codemirror_mode",
+                "file_extension",
+                "mimetype",
+                "nbconvert_exporter",
+                "pygments_lexer",
+                "version",
+            ):
+                language.pop(field, None)
+        kernelspec = value.get("metadata", {}).get("kernelspec")
+        if not isinstance(kernelspec, dict) or kernelspec.get("name") != "python3":
+            raise FixtureReviewContractError("semantic working notebook kernelspec differs")
+        if kernelspec.get("language") != "python" or kernelspec.get("display_name") not in {
+            "Python 3 (score-super-resolution)",
+            "score-super-resolution (3.12.12)",
+        }:
+            raise FixtureReviewContractError("semantic working notebook kernel identity differs")
+        kernelspec["display_name"] = "score-super-resolution (3.12.12)"
+        replacements = 0
+        for cell in value["cells"]:
+            cell.get("metadata", {}).pop("execution", None)
+            for field in ("collapsed", "scrolled", "trusted"):
+                cell.get("metadata", {}).pop(field, None)
+            cell_source = cell["source"]
+            joined = cell_source if isinstance(cell_source, str) else "".join(cell_source)
+            expected = token if working_copy else SEMANTIC_WORKING_COPY_MARKER
+            replacements += joined.count(expected)
+            joined = joined.replace(expected, SEMANTIC_WORKING_COPY_MARKER)
+            cell["source"] = (
+                joined if isinstance(cell_source, str) else joined.splitlines(keepends=True)
+            )
+            if cell.get("cell_type") == "code":
+                cell["execution_count"] = None
+                cell["outputs"] = []
+        if replacements != 1:
+            raise FixtureReviewContractError("semantic working notebook token differs")
+        return value
+
+    working_projection = projection(working, working_copy=True)
+    source_projection = projection(source, working_copy=False)
+    if working_projection != source_projection:
+        raise FixtureReviewContractError("semantic working notebook differs from tracked source")
+    return canonical_sha256(
+        {"domain": "phase2-semantic-review-logical-notebook-v1", "notebook": working_projection}
+    )
+
+
+def execute_semantic_review_notebook(project_root: Path) -> dict[str, Any]:
+    """Execute the clean semantic notebook out of place without fabricating human evidence."""
+
+    project_root = Path(project_root).resolve()
+    prepared = prepare_semantic_review(project_root)
+    root = Path(prepared["artifact_root"])
+    source_path = project_root / "notebooks/02-semantic-fixture-baseline-review.ipynb"
+    source_sha256 = semantic_notebook_source_sha256(source_path)
+    notebook = nbformat.read(source_path, as_version=4)
+    replacements = 0
+    for cell in notebook.cells:
+        if SEMANTIC_WORKING_COPY_MARKER in cell.source:
+            cell.source = cell.source.replace(
+                SEMANTIC_WORKING_COPY_MARKER, prepared["working_copy_token"]
+            )
+            replacements += 1
+    if replacements != 1:
+        raise FixtureReviewContractError("semantic tracked notebook guard is ambiguous")
+    try:
+        NotebookClient(
+            notebook,
+            timeout=180,
+            kernel_name="python3",
+            resources={"metadata": {"path": str(project_root)}},
+        ).execute()
+    except Exception as error:
+        raise FixtureReviewContractError("semantic review notebook execution failed") from error
+    for cell in notebook.cells:
+        if isinstance(cell.get("metadata"), dict):
+            cell.metadata.pop("execution", None)
+    working_payload = nbformat.writes(notebook).encode("utf-8")
+    working_path = root / "review/semantic-fixture-baseline-review-working.ipynb"
+    if working_path.exists():
+        existing_logical = _semantic_logical_working_sha256(
+            working_path, source_path, prepared["working_copy_token"]
+        )
+        temporary = working_path.with_name(f".{working_path.name}.tmp-{uuid4().hex}")
+        try:
+            _write_new(temporary, working_payload)
+            replacement_logical = _semantic_logical_working_sha256(
+                temporary, source_path, prepared["working_copy_token"]
+            )
+            if replacement_logical != existing_logical:
+                raise FixtureReviewContractError("semantic working notebook logical source changed")
+            os.replace(temporary, working_path)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+    else:
+        _publish_identical(working_path, working_payload, kind="semantic working notebook")
+    logical_sha256 = _semantic_logical_working_sha256(
+        working_path, source_path, prepared["working_copy_token"]
+    )
+    session_core = {
+        "schema_version": 2,
+        "record_type": "semantic-review-session",
+        "semantic_experiment_id": prepared["semantic_experiment_id"],
+        "semantic_experiment_sha256": prepared["semantic_experiment_sha256"],
+        "applicability_sha256": prepared["applicability_sha256"],
+        "reconciliation_sha256": prepared["reconciliation_sha256"],
+        "notebook_source_sha256": source_sha256,
+        "working_notebook_logical_sha256": logical_sha256,
+        "working_copy_token": prepared["working_copy_token"],
+        "mapping_sha256": prepared["mapping_sha256"],
+        "panels": prepared["panels"],
+        "requested_panel_count": 12,
+        "displayable_panel_count": 12,
+        "failed_panel_count": 0,
+        "confirmation_relative_path": "review/source-confirmations.json",
+        "review_relative_path": "review/notation-review.json",
+    }
+    session = {
+        **session_core,
+        "session_id": f"semantic-session-{canonical_sha256(session_core)}",
+    }
+    try:
+        validate_instance("semantic-review-session", session, version=2)
+    except ContractValidationError as error:
+        raise FixtureReviewContractError("semantic review session fails its schema") from error
+    _publish_identical(
+        root / "review/review-session-manifest.json",
+        _canonical_json(session),
+        kind="semantic review session",
+    )
+    if semantic_notebook_source_sha256(source_path) != source_sha256:
+        raise FixtureReviewContractError("semantic tracked notebook changed during execution")
+    for forbidden in (
+        root / "review/source-confirmations.json",
+        root / "review/notation-review.json",
+    ):
+        if forbidden.exists() or forbidden.is_symlink():
+            raise FixtureReviewContractError("semantic notebook fabricated human evidence")
+    return session
+
+
+class SemanticFixtureReviewSession:
+    """Content-bound review of coherent notation with genuine source confirmations."""
+
+    def __init__(
+        self,
+        project_root: Path | str = ".",
+        *,
+        working_copy_token: str,
+        artifact_root: Path | None = None,
+    ) -> None:
+        start = Path(project_root).resolve()
+        self.project_root = next(
+            (
+                candidate
+                for candidate in (start, *start.parents)
+                if (candidate / "pyproject.toml").is_file()
+                and (candidate / SEMANTIC_CONFIG_RELATIVE).is_file()
+            ),
+            None,
+        )
+        if self.project_root is None:
+            raise FixtureReviewContractError("could not locate the proyecto root")
+        if (
+            not isinstance(working_copy_token, str)
+            or _GENERATED_TOKEN.fullmatch(working_copy_token) is None
+        ):
+            raise FixtureReviewContractError("execute only the generated semantic working notebook")
+        self.prepared = prepare_semantic_review(self.project_root, artifact_root=artifact_root)
+        if working_copy_token != self.prepared["working_copy_token"]:
+            raise FixtureReviewContractError("semantic working token does not bind fixed evidence")
+        self.working_copy_token = working_copy_token
+        self.artifact_root = Path(self.prepared["artifact_root"])
+        self.manifest_path = self.artifact_root / "review/review-session-manifest.json"
+        self.confirmation_path = self.artifact_root / "review/source-confirmations.json"
+        self.review_path = self.artifact_root / "review/notation-review.json"
+        self.manifest = None
+        if self.manifest_path.exists():
+            self.manifest = _read_json(self.manifest_path, kind="semantic review session")
+            try:
+                validate_instance("semantic-review-session", self.manifest, version=2)
+            except ContractValidationError as error:
+                raise FixtureReviewContractError(
+                    "semantic review session fails its schema"
+                ) from error
+            session_core = {
+                key: value for key, value in self.manifest.items() if key != "session_id"
+            }
+            if (
+                self.manifest["session_id"] != f"semantic-session-{canonical_sha256(session_core)}"
+                or self.manifest["semantic_experiment_sha256"]
+                != self.prepared["semantic_experiment_sha256"]
+                or self.manifest["applicability_sha256"] != self.prepared["applicability_sha256"]
+                or self.manifest["reconciliation_sha256"] != self.prepared["reconciliation_sha256"]
+                or self.manifest["working_copy_token"] != working_copy_token
+                or self.manifest["panels"] != self.prepared["panels"]
+                or self.manifest["mapping_sha256"] != self.prepared["mapping_sha256"]
+            ):
+                raise FixtureReviewContractError("semantic review session binding differs")
+        self.reload()
+
+    def _require_manifest(self) -> dict[str, Any]:
+        if self.manifest is None and self.manifest_path.exists():
+            self.manifest = _read_json(self.manifest_path, kind="semantic review session")
+        if self.manifest is None:
+            raise FixtureReviewContractError("semantic session finalizes after notebook generation")
+        source_path = self.project_root / "notebooks/02-semantic-fixture-baseline-review.ipynb"
+        working_path = self.artifact_root / "review/semantic-fixture-baseline-review-working.ipynb"
+        if semantic_notebook_source_sha256(source_path) != self.manifest["notebook_source_sha256"]:
+            raise FixtureReviewContractError("semantic tracked notebook source changed")
+        if (
+            _semantic_logical_working_sha256(working_path, source_path, self.working_copy_token)
+            != self.manifest["working_notebook_logical_sha256"]
+        ):
+            raise FixtureReviewContractError("semantic ignored notebook source changed")
+        return self.manifest
+
+    def _load_confirmations(self) -> dict[str, Any] | None:
+        if not self.confirmation_path.exists() and not self.confirmation_path.is_symlink():
+            return None
+        record = _read_json(self.confirmation_path, kind="semantic source confirmations")
+        if record.get("confirmation_sha256") != _self_digest(record, "confirmation_sha256"):
+            raise FixtureReviewContractError("semantic source confirmation digest differs")
+        confirmations = record.get("confirmations")
+        if (
+            record.get("record_type") != "semantic-source-confirmations"
+            or record.get("session_id") != self._require_manifest()["session_id"]
+            or not isinstance(confirmations, list)
+            or [row.get("source_id") for row in confirmations] != list(SEMANTIC_SOURCE_IDS)
+            or any(row.get("confirmed") is not True for row in confirmations)
+            or any(
+                not isinstance(row.get("reviewer"), str)
+                or not row["reviewer"].strip()
+                or not isinstance(row.get("rationale"), str)
+                or not row["rationale"].strip()
+                or not isinstance(row.get("confirmed_at"), str)
+                or not row["confirmed_at"].endswith("Z")
+                for row in confirmations
+            )
+        ):
+            raise FixtureReviewContractError("semantic source confirmations differ")
+        return record
+
+    def _load_semantic_review(self) -> dict[str, Any] | None:
+        if not self.review_path.exists() and not self.review_path.is_symlink():
+            return None
+        bundle = _read_json(self.review_path, kind="semantic notation review")
+        if bundle.get("review_sha256") != _self_digest(bundle, "review_sha256"):
+            raise FixtureReviewContractError("semantic notation review digest differs")
+        if (
+            bundle.get("record_type") != "semantic-notation-review-bundle"
+            or bundle.get("session_id") != self._require_manifest()["session_id"]
+            or bundle.get("membership_id") != self.prepared["membership_id"]
+            or bundle.get("membership_sha256") != self.prepared["membership_sha256"]
+        ):
+            raise FixtureReviewContractError("semantic notation review lineage differs")
+        reviews = bundle.get("reviews")
+        panel_ids = [row["panel_id"] for row in self.prepared["panels"]]
+        if not isinstance(reviews, list) or [row.get("panel_id") for row in reviews] != [
+            panel_id
+            for panel_id in panel_ids
+            if panel_id in {row.get("panel_id") for row in reviews}
+        ]:
+            raise FixtureReviewContractError("semantic notation review panel order differs")
+        for row in reviews:
+            try:
+                validate_notation_review(row)
+            except (ContractValidationError, ValueError) as error:
+                raise FixtureReviewContractError(
+                    "semantic notation review row is invalid"
+                ) from error
+            if (
+                row["sample_membership_id"] != self.prepared["membership_id"]
+                or row["sample_sha256"] != self.prepared["membership_sha256"]
+            ):
+                raise FixtureReviewContractError("semantic notation review sample differs")
+        if bundle.get("denominators") != {
+            "requested_panels": 12,
+            "displayable_panels": 12,
+            "reviewed_panels": len(reviews),
+            "skipped_panels": 0,
+            "failed_panels": 0,
+        }:
+            raise FixtureReviewContractError("semantic notation review denominators differ")
+        return bundle
+
+    def reload(self) -> None:
+        self.confirmations = self._load_confirmations()
+        self.review = self._load_semantic_review()
+        self.expected_confirmation_sha256 = _review_digest(self.confirmation_path)
+        self.expected_review_sha256 = _review_digest(self.review_path)
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "dataset_role": "authored-coherent-notation-applicability-only",
+            "semantic_experiment_id": self.prepared["semantic_experiment_id"],
+            "confirmed_sources": (
+                len(self.confirmations["confirmations"]) if self.confirmations is not None else 0
+            ),
+            "requested_panels": 12,
+            "displayable_panels": 12,
+            "reviewed_panels": len(self.review["reviews"]) if self.review is not None else 0,
+            "skipped_panels": 0,
+            "failed_panels": 0,
+            "methods_masked": True,
+            "claim_boundary": self.prepared["claim_boundary"],
+        }
+
+    def save_source_confirmations(
+        self, *, reviewer: str, rationales: Mapping[str, str], confirmed_sources: Sequence[str]
+    ) -> str:
+        manifest = self._require_manifest()
+        reviewer_value = reviewer.strip()
+        if (
+            tuple(confirmed_sources) != SEMANTIC_SOURCE_IDS
+            or not reviewer_value
+            or len(reviewer_value) > 200
+            or any(ord(character) < 32 for character in reviewer_value)
+        ):
+            raise FixtureReviewContractError(
+                "both semantic HR sources require genuine confirmation"
+            )
+        rows = []
+        reviewed_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for source_id in SEMANTIC_SOURCE_IDS:
+            rationale = str(rationales.get(source_id, "")).strip()
+            if (
+                not rationale
+                or len(rationale) > 2000
+                or any(ord(character) < 32 and character not in "\n\t" for character in rationale)
+            ):
+                raise FixtureReviewContractError("each semantic HR source requires a rationale")
+            rows.append(
+                {
+                    "source_id": source_id,
+                    "confirmed": True,
+                    "reviewer": reviewer_value,
+                    "confirmed_at": reviewed_at,
+                    "rationale": rationale,
+                }
+            )
+        core = {
+            "schema_version": 2,
+            "record_type": "semantic-source-confirmations",
+            "session_id": manifest["session_id"],
+            "semantic_experiment_sha256": self.prepared["semantic_experiment_sha256"],
+            "applicability_sha256": self.prepared["applicability_sha256"],
+            "confirmations": rows,
+        }
+        record = {**core, "confirmation_sha256": canonical_sha256(core)}
+        self.expected_confirmation_sha256 = _durable_cas_json(
+            self.confirmation_path,
+            _canonical_json(record),
+            expected_sha256=self.expected_confirmation_sha256,
+        )
+        self.confirmations = record
+        return self.expected_confirmation_sha256
+
+    def save_panel_review(
+        self,
+        *,
+        panel_id: str,
+        reviewer: str,
+        labels: Sequence[str],
+        severity: str | None,
+        rationale: str,
+    ) -> str:
+        manifest = self._require_manifest()
+        if self._load_confirmations() is None:
+            raise FixtureReviewContractError(
+                "confirm both coherent HR sources before reviewing panels"
+            )
+        panel_ids = [row["panel_id"] for row in self.prepared["panels"]]
+        if panel_id not in panel_ids:
+            raise FixtureReviewContractError("semantic review panel is outside fixed membership")
+        payload = {
+            "schema_version": 2,
+            "record_type": "notation-review",
+            "sample_membership_id": self.prepared["membership_id"],
+            "sample_sha256": self.prepared["membership_sha256"],
+            "panel_id": panel_id,
+            "reviewer": reviewer.strip(),
+            "reviewed_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "labels": list(labels),
+            "severity": severity,
+            "rationale": rationale.strip(),
+        }
+        row = {**payload, "review_id": f"review-{canonical_sha256(payload)}"}
+        try:
+            row = validate_notation_review(row)
+        except (ContractValidationError, ValueError) as error:
+            raise FixtureReviewContractError("semantic notation review input is invalid") from error
+        rows_by_id = {
+            item["panel_id"]: item for item in (self.review["reviews"] if self.review else [])
+        }
+        rows_by_id[panel_id] = row
+        rows = [rows_by_id[value] for value in panel_ids if value in rows_by_id]
+        core = {
+            "schema_version": 2,
+            "record_type": "semantic-notation-review-bundle",
+            "session_id": manifest["session_id"],
+            "semantic_experiment_sha256": self.prepared["semantic_experiment_sha256"],
+            "applicability_sha256": self.prepared["applicability_sha256"],
+            "reconciliation_sha256": self.prepared["reconciliation_sha256"],
+            "mapping_sha256": self.prepared["mapping_sha256"],
+            "membership_id": self.prepared["membership_id"],
+            "membership_sha256": self.prepared["membership_sha256"],
+            "confirmation_sha256": self.confirmations["confirmation_sha256"],
+            "reviews": rows,
+            "denominators": {
+                "requested_panels": 12,
+                "displayable_panels": 12,
+                "reviewed_panels": len(rows),
+                "skipped_panels": 0,
+                "failed_panels": 0,
+            },
+        }
+        bundle = {**core, "review_sha256": canonical_sha256(core)}
+        self.expected_review_sha256 = _durable_cas_json(
+            self.review_path,
+            _canonical_json(bundle),
+            expected_sha256=self.expected_review_sha256,
+        )
+        self.review = bundle
+        return self.expected_review_sha256
+
+    def source_confirmation_widget(self) -> widgets.Widget:
+        return FixtureReviewSession._semantic_source_confirmation_widget_template(self)
+
+    def panel_widget(self) -> widgets.Widget:
+        return FixtureReviewSession._semantic_panel_widget_template(self)
+
+    def review_widget(self) -> widgets.Widget:
+        return FixtureReviewSession._semantic_review_widget_template(self)
+
+    def progress_widget(self) -> widgets.Widget:
+        return FixtureReviewSession._semantic_progress_widget_template(self)

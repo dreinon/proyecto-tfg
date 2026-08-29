@@ -13,9 +13,7 @@ from score_super_resolution.identities import canonical_sha256
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_NOTEBOOK = PROJECT_ROOT / "notebooks/02-fixture-baseline-review.ipynb"
-SEMANTIC_SOURCE_NOTEBOOK = (
-    PROJECT_ROOT / "notebooks/02-semantic-fixture-baseline-review.ipynb"
-)
+SEMANTIC_SOURCE_NOTEBOOK = PROJECT_ROOT / "notebooks/02-semantic-fixture-baseline-review.ipynb"
 FIXTURE_ROOT = PROJECT_ROOT / "artifacts/phase2-fixture"
 
 
@@ -357,9 +355,7 @@ def test_semantic_matrix_execution_publishes_manifest_before_compute(
     import score_super_resolution.review as review
 
     artifact_root = tmp_path / "phase2-semantic-fixture"
-    prepared = review.prepare_semantic_fixture_experiment(
-        PROJECT_ROOT, artifact_root=artifact_root
-    )
+    prepared = review.prepare_semantic_fixture_experiment(PROJECT_ROOT, artifact_root=artifact_root)
     manifest_path = artifact_root / "semantic-experiment-manifest.json"
     assert manifest_path.exists()
     assert prepared["expected_tuple_count"] == 36
@@ -382,9 +378,7 @@ def test_semantic_matrix_execution_publishes_manifest_before_compute(
 
     monkeypatch.setattr(review, "apply_degradation", checked_degradation)
     monkeypatch.setattr(review, "run_baseline", checked_baseline)
-    executed = review.execute_semantic_fixture_experiment(
-        PROJECT_ROOT, artifact_root=artifact_root
-    )
+    executed = review.execute_semantic_fixture_experiment(PROJECT_ROOT, artifact_root=artifact_root)
 
     assert executed["terminal_tuple_count"] == 36
     assert len(degradation_calls) == 12
@@ -412,7 +406,7 @@ def test_semantic_manifest_reconciliation_rejects_unexpected_or_partial_tuple(
     unexpected = artifact_root / "records/x2-clean/bicubic-opencv-v1/unexpected.json"
     unexpected.parent.mkdir(parents=True, exist_ok=True)
     unexpected.write_text("{}", encoding="utf-8")
-    with pytest.raises(FixtureReviewContractError, match="unexpected|closed|tuple"):
+    with pytest.raises(FixtureReviewContractError, match=r"unexpected|closed|tuple"):
         reconcile_semantic_fixture_experiment(PROJECT_ROOT, artifact_root=artifact_root)
 
 
