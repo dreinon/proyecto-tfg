@@ -14,6 +14,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from fractions import Fraction
+from html import escape
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -1683,17 +1684,38 @@ class FixtureReviewSession:
 
     def _semantic_panel_widget_template(self) -> widgets.Widget:
         panels = self.prepared["panels"]
-        position = widgets.IntSlider(
+        total = len(panels)
+
+        def display_source(source_id: str) -> str:
+            match = re.fullmatch(r"review-(work-\d+)-excerpt-\d+", source_id)
+            return match.group(1) if match is not None else source_id
+
+        def display_label(index: int) -> str:
+            panel = panels[index]
+            return (
+                f"{index + 1}/{total} · {display_source(panel['source_id'])} · "
+                f"{panel['condition_id']}"
+            )
+
+        position = widgets.SelectionSlider(
+            options=tuple((display_label(index), index) for index in range(total)),
             value=0,
-            min=0,
-            max=len(panels) - 1,
             description="Panel:",
             continuous_update=False,
+            layout=widgets.Layout(width="760px"),
         )
         previous = widgets.Button(description="← Anterior")
         following = widgets.Button(description="Siguiente →")
-        show = widgets.Button(description="Mostrar panel", button_style="info")
-        output = widgets.Output()
+        selected_status = widgets.HTML()
+        guidance = widgets.HTML(
+            value=(
+                "<b>Cómo revisar:</b> en una partitura digital limpia, las condiciones "
+                "<code>clean</code> y <code>moderate</code> pueden parecerse legítimamente. "
+                "Por eso no tienes que ordenar la intensidad ni forzar un defecto: compara A/B/C "
+                "con HR/LR y registra solo fallos reales o <code>none-observed</code>."
+            )
+        )
+        image = widgets.Image(format="png", width=1450)
 
         def render(*_args: object) -> None:
             panel = panels[position.value]
@@ -1704,25 +1726,47 @@ class FixtureReviewSession:
             )
             if hashlib.sha256(raw).hexdigest() != panel["sha256"]:
                 raise FixtureReviewContractError("semantic review panel digest differs")
-            with output:
-                clear_output(wait=True)
-                display(widgets.Image(value=raw, format="png", width=1450))
-                print(
-                    f"{position.value + 1}/12 · {panel['source_id']} · "
-                    f"{panel['condition_id']} · métodos A/B/C enmascarados"
-                )
+            image.value = raw
+            selected_status.value = (
+                f"<b>{escape(display_label(position.value))}</b> · métodos A/B/C enmascarados"
+            )
+            previous.disabled = position.value == 0
+            following.disabled = position.value == total - 1
 
-        show.on_click(render)
+        position.observe(render, names="value")
         previous.on_click(lambda _button: setattr(position, "value", max(0, position.value - 1)))
         following.on_click(
-            lambda _button: setattr(position, "value", min(position.max, position.value + 1))
+            lambda _button: setattr(position, "value", min(total - 1, position.value + 1))
         )
-        return widgets.VBox([widgets.HBox([position, previous, show, following]), output])
+        render()
+        return widgets.VBox(
+            [guidance, widgets.HBox([previous, position, following]), selected_status, image]
+        )
 
     def _semantic_review_widget_template(self) -> widgets.Widget:
-        panel_ids = [row["panel_id"] for row in self.prepared["panels"]]
-        panels_by_id = {row["panel_id"]: row for row in self.prepared["panels"]}
-        panel = widgets.Dropdown(options=panel_ids, description="Panel:")
+        panels = self.prepared["panels"]
+        panel_ids = [row["panel_id"] for row in panels]
+        panels_by_id = {row["panel_id"]: row for row in panels}
+        total = len(panel_ids)
+
+        def display_source(source_id: str) -> str:
+            match = re.fullmatch(r"review-(work-\d+)-excerpt-\d+", source_id)
+            return match.group(1) if match is not None else source_id
+
+        def display_label(index: int) -> str:
+            selected = panels[index]
+            return (
+                f"{index + 1}/{total} · {display_source(selected['source_id'])} · "
+                f"{selected['condition_id']}"
+            )
+
+        panel = widgets.Dropdown(
+            options=tuple(
+                (display_label(index), row["panel_id"]) for index, row in enumerate(panels)
+            ),
+            description="Panel:",
+            layout=widgets.Layout(width="520px"),
+        )
         reviewer = widgets.Text(description="Revisor:", placeholder="Nombre")
         checkboxes = {
             label: widgets.Checkbox(value=False, description=label, indent=False)
@@ -1735,12 +1779,20 @@ class FixtureReviewSession:
         rationale = widgets.Textarea(
             description="Justificación:", layout=widgets.Layout(width="1000px", height="90px")
         )
-        show = widgets.Button(description="Mostrar seleccionado", button_style="info")
         save = widgets.Button(description="Guardar revisión", button_style="success")
-        preview = widgets.Output()
+        guidance = widgets.HTML(
+            value=(
+                "<b>Qué se evalúa:</b> <code>clean</code> y <code>moderate</code> pueden "
+                "parecerse legítimamente en una partitura digital limpia; no tienes que ordenar "
+                "la intensidad ni forzar un defecto; compara cada A/B/C con HR/LR y registra "
+                "solo fallos reales o <code>none-observed</code>."
+            )
+        )
+        selected_status = widgets.HTML()
+        preview = widgets.Image(format="png", width=1450)
         status = widgets.Output()
 
-        def render(_button: widgets.Button) -> None:
+        def render(*_args: object) -> None:
             selected = panels_by_id[str(panel.value)]
             raw = _read_regular(
                 self.artifact_root / selected["relative_path"],
@@ -1749,13 +1801,11 @@ class FixtureReviewSession:
             )
             if hashlib.sha256(raw).hexdigest() != selected["sha256"]:
                 raise FixtureReviewContractError("semantic review panel digest differs")
-            with preview:
-                clear_output(wait=True)
-                display(widgets.Image(value=raw, format="png", width=1450))
-                print(
-                    f"{panel_ids.index(str(panel.value)) + 1}/12 · {selected['source_id']} · "
-                    f"{selected['condition_id']} · métodos A/B/C enmascarados"
-                )
+            preview.value = raw
+            selected_status.value = (
+                f"<b>{escape(display_label(panel_ids.index(str(panel.value))))}</b> · "
+                "métodos A/B/C enmascarados"
+            )
 
         def persist(_button: widgets.Button) -> None:
             with status:
@@ -1780,11 +1830,14 @@ class FixtureReviewSession:
                 except Exception as error:
                     print(f"No se guardó: {error}")
 
-        show.on_click(render)
+        panel.observe(render, names="value")
         save.on_click(persist)
+        render()
         return widgets.VBox(
             [
-                widgets.HBox([panel, reviewer, show]),
+                guidance,
+                widgets.HBox([panel, reviewer]),
+                selected_status,
                 preview,
                 widgets.GridBox(
                     list(checkboxes.values()),
