@@ -179,7 +179,7 @@ def test_v2_human_unlock_resolves_every_frozen_prerequisite() -> None:
     )
 
 
-def test_v2_notebook_installs_and_checks_the_cairosvg_runtime_dependency() -> None:
+def test_v2_notebook_installs_and_checks_the_complete_cairosvg_dependency_tree() -> None:
     notebook = json.loads(
         (ROOT / "notebooks/03-smb-model-comparison-v2.ipynb").read_text(encoding="utf-8")
     )
@@ -191,6 +191,8 @@ def test_v2_notebook_installs_and_checks_the_cairosvg_runtime_dependency() -> No
 
     assert len(setup_sources) == 1
     setup = setup_sources[0]
-    assert '["uv", "pip", "install", "--system", "cairocffi==1.7.1"]' in setup
-    assert '[sys.executable, "-c", "import cairocffi, cairosvg"]' in setup
-    assert setup.index("cairocffi==1.7.1") < setup.index("import cairocffi, cairosvg")
+    install = '["uv", "pip", "install", "--system", "cairosvg==2.9.0"]'
+    runtime_check = '[sys.executable, "-c", "import cairocffi, cssselect2, cairosvg"]'
+    assert install in setup
+    assert runtime_check in setup
+    assert setup.index(install) < setup.index(runtime_check)
