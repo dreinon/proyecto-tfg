@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "record_type": "smb-freeze-control",
+  "status": "frozen",
+  "artifact_kind": "seeds_control",
+  "control_id": "seeds_frozen",
+  "content": {
+    "generation_policy_id": "staff-scale-master-seed-20260830",
+    "execution_policy_id": "comparison-v2-seed-20260830",
+    "sampling_policy_id": "fresh-work-sha-rank-seed-20260830"
+  }
+}

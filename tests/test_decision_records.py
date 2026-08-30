@@ -39,6 +39,18 @@ MATERIAL_COLUMNS = (
     "Affected controls/runs",
 )
 FORMULA_PREFIXES = ("=", "+", "-", "@")
+ENACTED_DEVIATION_COLUMNS = (
+    "Record ID",
+    "Date",
+    "Owner",
+    "Status",
+    "Subject",
+    "Old rule",
+    "Replacement rule",
+    "Evidence-backed reason",
+    "Affected controls/runs",
+    "Re-execution and closure",
+)
 
 
 def _markdown_table(path: Path, heading: str) -> tuple[tuple[str, ...], list[dict[str, str]]]:
@@ -116,7 +128,12 @@ def test_pending_human_outcomes_remain_open_while_sanitized_scientific_decisions
             "external-ref:PHASE2-CANDIDATE3-REVIEW",
         )
     ]
-    assert "No enacted deviations are recorded" in DEVIATION_PATH.read_text(encoding="utf-8")
+    enacted_columns, enacted = _markdown_table(DEVIATION_PATH, "## Enacted deviations")
+    assert enacted_columns == ENACTED_DEVIATION_COLUMNS
+    assert [row["Record ID"] for row in enacted] == ["DEV-SCI-01"]
+    assert enacted[0]["Status"] == "enacted_pending_rerun"
+    assert "1152 rows" in enacted[0]["Re-execution and closure"]
+    assert "No enacted deviations are recorded" not in DEVIATION_PATH.read_text(encoding="utf-8")
 
 
 def _claim_rows() -> tuple[tuple[str, ...], list[dict[str, str]]]:

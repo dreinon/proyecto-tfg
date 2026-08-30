@@ -1,0 +1,96 @@
+schema_version: 1
+record_type: staff-scale-degradation-control
+control_id: staff-scale-score-v2
+version: 2
+status: frozen
+claim_boundary: fresh-work-disjoint-smb-pages-with-measurable-staff-scale
+master_seed: 20260830
+correction:
+  supersedes_for_final_evaluation: controlled-score-v1
+  preserves_v1_as: development-pilot-and-stress-evidence
+  reason: >-
+    The fixed pixel-space blur calibrated on large synthetic notation changed severity when
+    transferred to SMB pages with much smaller and variable staff spacing. V2 freezes the blur as
+    a fraction of each page's measured staff space and reserves a fresh work-disjoint sample.
+sample:
+  path: data/audits/smb-evaluation-sample-v2.csv
+  sha256: d2a686c6867a4c5bb3a362d392a466787420e057b217a55cacfe3b7b50fa0523
+  item_count: 64
+  source_group_count: 64
+  selection_rule_id: fresh-source-group-sha-rank-with-staff-estimator-v1
+  selection_seed: 20260830
+  v1_source_groups_path: data/audits/smb-evaluation-v1-source-groups.csv
+  v1_source_groups_sha256: 3df562c62bbe718ea2711bdac1eb047a45d58b6e41c4b8236edea433d9b8fb4c
+calibration:
+  development_sample_path: data/audits/smb-visual-sample-v1.csv
+  development_sample_sha256: 993a9d03fceb733982ee2091de13b2991e57c511013e2f263041835b6e508970
+  fixture_staff_spacing_px: 30.0
+  moderate_fixture_ratio: 0.06
+  strong_fixture_ratio: 0.20
+  decision: >-
+    The v1 run is development-only calibration evidence. On its pages, ratios 0.05 and 0.15 with
+    milder compression preserved the intended ordering: moderate remains usable and strong is
+    difficult but recoverable, including x4 pages with small staff spacing. No v2 page or model
+    output was inspected while choosing these values.
+staff_spacing:
+  estimator_id: region-deskew-horizontal-morphology-v1
+  coordinate_source: official-smb-region-bboxes
+  minimum_sequences: 2
+  accepted_range_px: [4.0, 32.0]
+  runtime_policy: use-frozen-spacing-and-recompute-with-tolerance-before-output
+condition_order:
+  - x2-clean
+  - x2-moderate
+  - x2-strong
+  - x4-clean
+  - x4-moderate
+  - x4-strong
+conditions:
+  - condition_id: x2-clean
+    scale: 2
+    severity: clean
+    operations: [reduction]
+    blur: null
+    reduction: {interpolation: INTER_AREA}
+    noise: null
+    jpeg: null
+  - condition_id: x2-moderate
+    scale: 2
+    severity: moderate
+    operations: [staff-scale-blur, reduction, noise, jpeg]
+    blur: {type: gaussian, staff_ratio: 0.05, minimum_sigma_px: 0.3, kernel_radius_sigma: 3.0}
+    reduction: {interpolation: INTER_AREA}
+    noise: {type: gaussian, sigma: 1.5, channel_mode: achromatic-equal}
+    jpeg: {quality: 80, sampling_factor: '4:4:4', progressive: false, optimize: false}
+  - condition_id: x2-strong
+    scale: 2
+    severity: strong
+    operations: [staff-scale-blur, reduction, noise, jpeg]
+    blur: {type: gaussian, staff_ratio: 0.15, minimum_sigma_px: 0.3, kernel_radius_sigma: 3.0}
+    reduction: {interpolation: INTER_AREA}
+    noise: {type: gaussian, sigma: 2.5, channel_mode: achromatic-equal}
+    jpeg: {quality: 45, sampling_factor: '4:4:4', progressive: false, optimize: false}
+  - condition_id: x4-clean
+    scale: 4
+    severity: clean
+    operations: [reduction]
+    blur: null
+    reduction: {interpolation: INTER_AREA}
+    noise: null
+    jpeg: null
+  - condition_id: x4-moderate
+    scale: 4
+    severity: moderate
+    operations: [staff-scale-blur, reduction, noise, jpeg]
+    blur: {type: gaussian, staff_ratio: 0.05, minimum_sigma_px: 0.3, kernel_radius_sigma: 3.0}
+    reduction: {interpolation: INTER_AREA}
+    noise: {type: gaussian, sigma: 1.5, channel_mode: achromatic-equal}
+    jpeg: {quality: 80, sampling_factor: '4:4:4', progressive: false, optimize: false}
+  - condition_id: x4-strong
+    scale: 4
+    severity: strong
+    operations: [staff-scale-blur, reduction, noise, jpeg]
+    blur: {type: gaussian, staff_ratio: 0.15, minimum_sigma_px: 0.3, kernel_radius_sigma: 3.0}
+    reduction: {interpolation: INTER_AREA}
+    noise: {type: gaussian, sigma: 2.5, channel_mode: achromatic-equal}
+    jpeg: {quality: 45, sampling_factor: '4:4:4', progressive: false, optimize: false}

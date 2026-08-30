@@ -184,8 +184,10 @@ Proyecto en desarrollo como parte de un Trabajo de Fin de Grado.
 La infraestructura inicial del repositorio ya está preparada: entorno reproducible con `uv`, Python 3.12.12, PyTorch local para CPU, soporte para Jupyter y Kaggle, pruebas, linting y captura del entorno de ejecución.
 
 SMB está seleccionado y auditado como fuente principal de evaluación en una revisión inmutable de
-Hugging Face. El inventario reproducible queda bloqueado para evaluación; el siguiente trabajo es
-fijar el protocolo de degradación y ejecutar los experimentos comparativos. Si se justifica
+Hugging Face. Una primera ejecución piloto reveló que la degradación calibrada en píxeles absolutos
+no mantenía la severidad al cambiar la escala de pentagrama. La evaluación final se ha corregido
+con un [protocolo v2 normalizado por pentagrama](docs/smb-protocol-v2.md), una muestra nueva de 64
+obras sin solapamiento con v1 y una notebook Kaggle separada pendiente de ejecución. Si se justifica
 *fine-tuning*, todavía deberá seleccionarse una fuente de entrenamiento adecuada. El alcance
 principal continúa centrado en la **selección, adaptación y evaluación de técnicas de
 superresolución aplicadas a partituras digitalizadas**. Las funcionalidades adicionales descritas

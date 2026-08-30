@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "record_type": "smb-freeze-control",
+  "status": "frozen",
+  "artifact_kind": "independent_units_control",
+  "control_id": "independent_units_frozen",
+  "content": {
+    "grouping_rule_id": "manifest-source-score-group-v2",
+    "pairing_rule_id": "same-page-same-condition-v1",
+    "aggregation_rule_id": "one-page-per-source-group-v2",
+    "uncertainty_rule_id": "source-group-bootstrap-v2"
+  }
+}

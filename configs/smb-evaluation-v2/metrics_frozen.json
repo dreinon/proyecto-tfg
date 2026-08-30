@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "record_type": "smb-freeze-control",
+  "status": "frozen",
+  "artifact_kind": "metrics_control",
+  "control_id": "metrics_frozen",
+  "content": {
+    "quantitative_definition_ids": ["psnr-bt601-y-v1", "ssim-wang11-bt601-y-v1", "psnr-rgb-v1", "ssim-wang11-rgb-v1", "runtime-seconds-v1"],
+    "qualitative_definition_ids": ["music-notation-failure-taxonomy-v1", "natural-image-texture-or-ringing-v1"]
+  }
+}

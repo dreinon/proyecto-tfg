@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "record_type": "smb-freeze-control",
+  "status": "frozen",
+  "artifact_kind": "methods_control",
+  "control_id": "methods_frozen",
+  "content": {
+    "methods": [
+      {"role": "transparent-interpolation-baseline", "implementation_id": "bicubic-opencv-v1"},
+      {"role": "residual-cnn-pretrained-x2", "implementation_id": "edsr-baseline-official-x2-v1"},
+      {"role": "residual-cnn-pretrained-x4", "implementation_id": "edsr-baseline-official-x4-v1"},
+      {"role": "transformer-pretrained-x2", "implementation_id": "swinir-lightweight-official-x2-v1"},
+      {"role": "transformer-pretrained-x4", "implementation_id": "swinir-lightweight-official-x4-v1"}
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "record_type": "smb-freeze-control",
+  "status": "frozen",
+  "artifact_kind": "checkpoints_control",
+  "control_id": "checkpoints_frozen",
+  "content": {
+    "methods": [
+      {"method_id": "bicubic-opencv-v1", "status": "not_applicable"},
+      {"method_id": "edsr-baseline-official-x2-v1", "status": "checkpoint", "checkpoint_id": "edsr-baseline-x2-1bc95232", "sha256": "1bc9523228fdc3b0a5ddb0d7062001e22b31bbb398ae09cfdefb97e8ee06e171"},
+      {"method_id": "edsr-baseline-official-x4-v1", "status": "checkpoint", "checkpoint_id": "edsr-baseline-x4-6b446fab", "sha256": "6b446fab734f4de74448d2fd1f3f990f5bae726e49dc7eff2ae9cefe444a1723"},
+      {"method_id": "swinir-lightweight-official-x2-v1", "status": "checkpoint", "checkpoint_id": "swinir-lightweight-div2k-x2-v0-0", "sha256": "193b229909ca89cd8b55de9c9e7fce146ae759d59dfcd78d8feb9dd1d6fa0fd7"},
+      {"method_id": "swinir-lightweight-official-x4-v1", "status": "checkpoint", "checkpoint_id": "swinir-lightweight-div2k-x4-v0-0", "sha256": "09fad24e32ae62722e1a055efde9921328f4137981bab0a42a4a3a806306c58e"}
+    ]
+  }
+}

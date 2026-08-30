@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "record_type": "smb-freeze-control",
+  "status": "frozen",
+  "artifact_kind": "smb_audit_control",
+  "control_id": "smb_audit_complete",
+  "content": {
+    "source_revision": "96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb",
+    "active_generation_id": "d97ac77f7ee672fca2c3d09b8d6fbf319719306d4ed8315e9cf8b56ec373e3fe",
+    "row_count": 685,
+    "records_sha256": "56cebb344ae512a3dea16ce4848bce197f971493c98c5c388fe9a094922b820b",
+    "benchmark_state": "AUDITED_LOCKED",
+    "grouping_evidence_sha256": "a2285b9e1703158b58f7c5ed62df1975be1b64323ac2bada8c01ac6dee23ef89",
+    "review_evidence_sha256": "944678746dc424055e6a117e8b3064a2e08dc904e57327978d6346364d372ca3",
+    "sample_evidence_sha256": "d2a686c6867a4c5bb3a362d392a466787420e057b217a55cacfe3b7b50fa0523",
+    "rights_evidence_sha256": "7b792bbb246564cd1139002e582ef6c406be993edf302fc14e4112e18a48b70d"
+  }
+}

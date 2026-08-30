@@ -58,6 +58,16 @@ each pipeline, specify and version:
 Include unit and visual checks for dimensions, value range, determinism, alignment with ground
 truth, and absence of accidental data leakage.
 
+### Final SMB correction (v2)
+
+The first full SMB execution is retained as a disclosed development pilot because it revealed that
+the absolute-pixel blur calibrated on large synthetic notation did not preserve severity across
+SMB's smaller, variable staff scales. Final confirmation therefore uses a fresh, work-disjoint
+64-page sample and freezes Gaussian blur as a fraction of each page's input-only measured staff
+spacing. The exact correction, identities, claim boundary, and relationship between v1 and v2 are
+defined in [`smb-protocol-v2.md`](smb-protocol-v2.md). No v2 outcome may be used for further
+calibration, method choice, or parameter adjustment.
+
 ## Comparison ladder
 
 Proceed only as far as evidence and time permit:

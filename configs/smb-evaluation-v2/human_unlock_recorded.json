@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "record_type": "smb-freeze-control",
+  "status": "frozen",
+  "artifact_kind": "human_unlock_approval",
+  "control_id": "human_unlock_recorded",
+  "content": {
+    "reviewer": "Daniel Reinón García",
+    "reviewed_at": "2026-08-30",
+    "decision": "approved",
+    "approval_evidence": {
+      "evidence_type": "human-review",
+      "evidence_id": "smb-protocol-v2-correction-approval-20260830",
+      "artifact_path": "configs/smb-evaluation-v2/human-review.json",
+      "artifact_sha256": "64582e75ccb34be5754559636062e2da40afbe9ec6dbc2a46b3e47e5ef0953d0"
+    },
+    "prerequisite_digests": {
+      "smb_audit_complete": "3a712d78cc60291aa703c92781423c4c13fb359e3dc2e6c2a1d55b1b540c7436",
+      "evaluation_manifest_frozen": "89ff2e88a7e0e65ff1c21806661e8407106f4631884a396bb6f973d36745073c",
+      "methods_frozen": "1e5db96ff61698ce0c6bd1a8de302df78ecbf7b8fe63f8b2cf122fc3ed8475b8",
+      "checkpoints_frozen": "3a04099b710e35884055ad8534f54bb160f549506d44838797f1c11cb7c33549",
+      "controlled_conditions_frozen": "2789c2813c18c50164bcdd468d4e5ec952235c52d8132b0774d881f38b895509",
+      "metrics_frozen": "da988ab0eb223b531d2f21d46b4a6c6b3274281491a4a1fb5ffb45e7e9adf90f",
+      "independent_units_frozen": "dfb58bb0aa34c4746dba0026793d422978adc891235d9f8292c865169f11c496",
+      "exclusions_frozen": "5cc49ec47c110547851cb4e87b15bcf04444d152cbb4ff1cbf7cfc364ea7b542",
+      "seeds_frozen": "845c8284a5d285c980f29710ac4237eedf54666431f6aef0eb8d8c51ab2d1ed3",
+      "qualitative_samples_frozen": "436062ca0ba7d3664b30ee369c16d046de3c0848501827daeca135b10d5d2cd0",
+      "interpretation_rules_frozen": "52ea8068fb6a09ae592ac6a9ac5596e1a8fd7a78646122f0abb5619adcd25ca1"
+    }
+  }
+}

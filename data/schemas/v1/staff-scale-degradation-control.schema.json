@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:score-super-resolution:schema:v1:staff-scale-degradation-control",
+  "title": "Frozen staff-scale-normalized SMB degradation control",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "control_id", "version", "status",
+    "claim_boundary", "master_seed", "correction", "sample", "calibration",
+    "staff_spacing", "condition_order", "conditions"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_type": {"const": "staff-scale-degradation-control"},
+    "control_id": {"const": "staff-scale-score-v2"},
+    "version": {"const": 2},
+    "status": {"const": "frozen"},
+    "claim_boundary": {"const": "fresh-work-disjoint-smb-pages-with-measurable-staff-scale"},
+    "master_seed": {"type": "integer", "minimum": 0},
+    "correction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["supersedes_for_final_evaluation", "preserves_v1_as", "reason"],
+      "properties": {
+        "supersedes_for_final_evaluation": {"const": "controlled-score-v1"},
+        "preserves_v1_as": {"const": "development-pilot-and-stress-evidence"},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "sample": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256", "item_count", "source_group_count", "selection_rule_id", "selection_seed", "v1_source_groups_path", "v1_source_groups_sha256"],
+      "properties": {
+        "path": {"const": "data/audits/smb-evaluation-sample-v2.csv"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "item_count": {"const": 64},
+        "source_group_count": {"const": 64},
+        "selection_rule_id": {"const": "fresh-source-group-sha-rank-with-staff-estimator-v1"},
+        "selection_seed": {"type": "integer", "minimum": 0},
+        "v1_source_groups_path": {"const": "data/audits/smb-evaluation-v1-source-groups.csv"},
+        "v1_source_groups_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "calibration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["development_sample_path", "development_sample_sha256", "fixture_staff_spacing_px", "moderate_fixture_ratio", "strong_fixture_ratio", "decision"],
+      "properties": {
+        "development_sample_path": {"const": "data/audits/smb-visual-sample-v1.csv"},
+        "development_sample_sha256": {"$ref": "#/$defs/sha256"},
+        "fixture_staff_spacing_px": {"const": 30.0},
+        "moderate_fixture_ratio": {"const": 0.06},
+        "strong_fixture_ratio": {"const": 0.20},
+        "decision": {"type": "string", "minLength": 1}
+      }
+    },
+    "staff_spacing": {
+      "type": "object", "additionalProperties": false,
+      "required": ["estimator_id", "coordinate_source", "minimum_sequences", "accepted_range_px", "runtime_policy"],
+      "properties": {
+        "estimator_id": {"const": "region-deskew-horizontal-morphology-v1"},
+        "coordinate_source": {"const": "official-smb-region-bboxes"},
+        "minimum_sequences": {"const": 2},
+        "accepted_range_px": {"const": [4.0, 32.0]},
+        "runtime_policy": {"const": "use-frozen-spacing-and-recompute-with-tolerance-before-output"}
+      }
+    },
+    "condition_order": {"const": ["x2-clean", "x2-moderate", "x2-strong", "x4-clean", "x4-moderate", "x4-strong"]},
+    "conditions": {
+      "type": "array", "minItems": 6, "maxItems": 6,
+      "items": {"$ref": "#/$defs/condition"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "condition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["condition_id", "scale", "severity", "operations", "blur", "reduction", "noise", "jpeg"],
+      "properties": {
+        "condition_id": {"enum": ["x2-clean", "x2-moderate", "x2-strong", "x4-clean", "x4-moderate", "x4-strong"]},
+        "scale": {"enum": [2, 4]},
+        "severity": {"enum": ["clean", "moderate", "strong"]},
+        "operations": {
+          "oneOf": [
+            {"const": ["reduction"]},
+            {"const": ["staff-scale-blur", "reduction", "noise", "jpeg"]}
+          ]
+        },
+        "blur": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["type", "staff_ratio", "minimum_sigma_px", "kernel_radius_sigma"],
+              "properties": {
+                "type": {"const": "gaussian"},
+                "staff_ratio": {"enum": [0.05, 0.15]},
+                "minimum_sigma_px": {"const": 0.3},
+                "kernel_radius_sigma": {"const": 3.0}
+              }
+            }
+          ]
+        },
+        "reduction": {"const": {"interpolation": "INTER_AREA"}},
+        "noise": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["type", "sigma", "channel_mode"],
+              "properties": {
+                "type": {"const": "gaussian"},
+                "sigma": {"enum": [1.5, 2.5]},
+                "channel_mode": {"const": "achromatic-equal"}
+              }
+            }
+          ]
+        },
+        "jpeg": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["quality", "sampling_factor", "progressive", "optimize"],
+              "properties": {
+                "quality": {"enum": [45, 80]},
+                "sampling_factor": {"const": "4:4:4"},
+                "progressive": {"const": false},
+                "optimize": {"const": false}
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

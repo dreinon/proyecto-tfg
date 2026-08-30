@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "record_type": "smb-freeze-control",
+  "status": "frozen",
+  "artifact_kind": "exclusions_control",
+  "control_id": "exclusions_frozen",
+  "content": {
+    "excluded_states": ["v1-item-or-source-group", "duplicate-relation", "staff-estimator-rejected", "outside-fixed-v2-sample"],
+    "failure_handling_rule_id": "retain-and-report-runtime-failures-v2"
+  }
+}

@@ -1,0 +1,78 @@
+schema_version: 1
+record_type: smb-pretrained-comparison
+experiment_id: smb-pretrained-evaluation-v2
+status: frozen
+claim_boundary: fixed-outcome-blind-64-page-64-work-staff-normalized-smb-sample
+correction:
+  prior_experiment: smb-pretrained-evaluation-v1
+  prior_role: development-pilot-and-stress-evidence
+  correction_reason: fixed-pixel-blur-did-not-transfer-across-staff-scales
+dataset:
+  repository_id: PRAIG/SMB
+  revision: 96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb
+  split: test
+  role: evaluation-only
+sample:
+  path: data/audits/smb-evaluation-sample-v2.csv
+  sha256: d2a686c6867a4c5bb3a362d392a466787420e057b217a55cacfe3b7b50fa0523
+  item_count: 64
+  independent_source_group_count: 64
+  selection_algorithm: fresh-source-group-sha-rank-with-staff-estimator-v1
+  selection_seed: 20260830
+  excludes_v1_items: true
+  excludes_v1_source_groups: true
+methods:
+  - bicubic-opencv-v1
+  - edsr-baseline-official-v1
+  - swinir-lightweight-official-v1
+scales: [2, 4]
+conditions:
+  - x2-clean
+  - x2-moderate
+  - x2-strong
+  - x4-clean
+  - x4-moderate
+  - x4-strong
+degradation:
+  control_path: configs/degradations/staff-scale-score-v2.yaml
+  control_sha256: 253916bcaefb1582556a7f3cf0b57639330092199f35c25c2ce47c24cb4a6e33
+  staff_spacing_source: frozen-per-page-input-only-estimate
+  runtime_recompute_tolerance_px: 0.5
+metrics:
+  primary: [psnr-bt601-y-v1, ssim-wang11-bt601-y-v1]
+  diagnostics: [psnr-rgb-v1, ssim-wang11-rgb-v1, runtime-seconds-v1]
+  aggregation_unit: source-group
+  uncertainty: source-group-cluster-bootstrap
+  bootstrap_seed: 20260831
+  bootstrap_repetitions: 2000
+inference:
+  tile_size: 256
+  tile_overlap: 32
+  window_size: 8
+  precision: float32
+qualitative:
+  selection_algorithm: smb-v2-qualitative-rank-v1
+  selection_seed: 20260831
+  assignment_sha256: bd92071d1664ed0cfe6e773a8e5691af1875c5eb72489b743f24c95df7b8dd83
+  assignment:
+    - [smb-test-000252, x2-clean]
+    - [smb-test-000367, x2-moderate]
+    - [smb-test-000264, x2-strong]
+    - [smb-test-000121, x4-clean]
+    - [smb-test-000210, x4-moderate]
+    - [smb-test-000526, x4-strong]
+  failure_taxonomy:
+    - staff-line-breakage-or-removal
+    - staff-line-thickening-or-hallucination
+    - altered-or-missing-symbol
+    - unintended-join-or-separation
+    - text-or-digit-corruption
+    - plausible-musical-change
+    - natural-image-texture-or-ringing
+interpretation:
+  - Compare methods only within the same scale and degradation profile.
+  - Treat v1 as disclosed development and protocol-correction evidence, never as final confirmation.
+  - Treat v2 as final and never tune from its inputs, outputs, metrics, or qualitative assignment.
+  - Retain all failures and negative examples.
+  - Do not claim population prevalence outside the measurable-staff-scale sample boundary.
+  - Prefer fidelity and musical correctness over visually invented detail.
