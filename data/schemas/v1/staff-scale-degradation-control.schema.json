@@ -60,7 +60,7 @@
         "coordinate_source": {"const": "official-smb-region-bboxes"},
         "minimum_sequences": {"const": 2},
         "accepted_range_px": {"const": [4.0, 32.0]},
-        "runtime_policy": {"const": "use-frozen-spacing-and-recompute-with-tolerance-before-output"}
+        "runtime_policy": {"const": "use-frozen-spacing-after-manifest-pixel-identity-preflight"}
       }
     },
     "condition_order": {"const": ["x2-clean", "x2-moderate", "x2-strong", "x4-clean", "x4-moderate", "x4-strong"]},

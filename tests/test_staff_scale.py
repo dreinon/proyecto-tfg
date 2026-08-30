@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 import pytest
 import yaml
+from PIL import Image
 
 from score_super_resolution.benchmark_policy import (
     BenchmarkPurpose,
@@ -23,6 +24,7 @@ from score_super_resolution.staff_scale import (
     ESTIMATOR_ID,
     StaffScaleError,
     apply_scale_normalized_degradation,
+    canonical_smb_pixel_sha256,
     estimate_staff_spacing,
     load_evaluation_sample_v2,
     load_scale_normalized_control,
@@ -93,6 +95,22 @@ def test_staff_estimator_recovers_scale_instead_of_absolute_pixels() -> None:
         estimate_staff_spacing(np.full((200, 300, 3), 255, dtype=np.uint8), small_regions[:1])
 
 
+def test_canonical_smb_pixel_hash_uses_the_audited_rgba_frame() -> None:
+    pixels = np.array([[[1, 2, 3], [4, 5, 6]]], dtype=np.uint8)
+    image = Image.fromarray(pixels, mode="RGB")
+    framed = (
+        b"smb-canonical-rgba-frame-v2\0"
+        + (2).to_bytes(8, "big")
+        + (1).to_bytes(8, "big")
+        + b"RGBA8\0"
+        + image.convert("RGBA").tobytes()
+    )
+
+    assert canonical_smb_pixel_sha256(image) == hashlib.sha256(framed).hexdigest()
+    with pytest.raises(StaffScaleError, match="Pillow image"):
+        canonical_smb_pixel_sha256(pixels)  # type: ignore[arg-type]
+
+
 def test_v2_degradation_scales_blur_with_the_frozen_staff_spacing() -> None:
     control = load_scale_normalized_control(ROOT)
     pixels, _ = _synthetic_staff_page(10)
@@ -126,7 +144,7 @@ def test_v2_control_and_experiment_are_exact_and_outcome_blind() -> None:
     )
     validate_instance("staff-scale-degradation-control", control_payload, version=1)
     assert canonical_sha256(control_payload) == (
-        "253916bcaefb1582556a7f3cf0b57639330092199f35c25c2ce47c24cb4a6e33"
+        "69e80f8884746cfe61b2e52e75bccc9a4cf78e929f37de0b9805a90f3ea0d809"
     )
     assert tuple(control_payload["condition_order"]) == CONDITIONS
     assert experiment["status"] == "frozen"
@@ -186,13 +204,27 @@ def test_v2_notebook_installs_and_checks_the_complete_cairosvg_dependency_tree()
     setup_sources = [
         "".join(cell["source"])
         for cell in notebook["cells"]
-        if cell["cell_type"] == "code" and "cairosvg==2.9.0" in "".join(cell["source"])
+        if cell["cell_type"] == "code" and "torch_before" in "".join(cell["source"])
     ]
 
     assert len(setup_sources) == 1
     setup = setup_sources[0]
-    install = '["uv", "pip", "install", "--system", "cairosvg==2.9.0"]'
+    install = '"cairosvg==2.9.0"'
+    pillow = '"pillow==12.3.0"'
     runtime_check = '[sys.executable, "-c", "import cairocffi, cssselect2, cairosvg"]'
     assert install in setup
+    assert pillow in setup
     assert runtime_check in setup
-    assert setup.index(install) < setup.index(runtime_check)
+    assert setup.index(install) < setup.index(pillow) < setup.index(runtime_check)
+
+
+def test_v2_notebook_preflight_checks_manifest_identity_without_repeating_estimation() -> None:
+    notebook = json.loads(
+        (ROOT / "notebooks/03-smb-model-comparison-v2.ipynb").read_text(encoding="utf-8")
+    )
+    source = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
+
+    assert "canonical_smb_pixel_sha256(source_image)" in source
+    assert 'manifest_row["image"]["pixel_sha256"]' in source
+    assert "preflight.identity_match.all()" in source
+    assert "estimate_staff_spacing" not in source

@@ -26,8 +26,11 @@ horizontal components, detects repeated five-line sequences, and freezes the med
 between adjacent staff lines in HR pixels. It fails closed unless at least two consistent staff
 sequences support a value in the validated 4–32 px range.
 
-Before inference, the notebook recomputes all 64 values from the source inputs and requires every
-value to agree with the frozen sample within 0.5 px. A failure stops the run before any v2 model
+Before inference, the notebook verifies that all 64 source images reproduce the canonical RGBA
+pixel hashes, indices, dimensions, and source-work identities in the authoritative audited
+manifest. It then uses the input-only staff spacing frozen with the sample. This avoids making the
+final run depend on OpenCV-version-sensitive line detection while proving that the exact images
+from which those values were measured are present. A mismatch stops the run before any v2 model
 output is generated.
 
 The six final cells preserve x2 and x4 and the three intended roles:
@@ -69,7 +72,7 @@ support prevalence claims for every SMB page or uncontrolled real scans.
 - V1 work exclusion set: `data/audits/smb-evaluation-v1-source-groups.csv`, SHA-256
   `3df562c62bbe718ea2711bdac1eb047a45d58b6e41c4b8236edea433d9b8fb4c`.
 - Degradation control: `configs/degradations/staff-scale-score-v2.yaml`, canonical SHA-256
-  `253916bcaefb1582556a7f3cf0b57639330092199f35c25c2ce47c24cb4a6e33`.
+  `69e80f8884746cfe61b2e52e75bccc9a4cf78e929f37de0b9805a90f3ea0d809`.
 - Experiment: `configs/experiments/smb-pretrained-evaluation-v2.yaml`.
 - Unlock controls: `configs/smb-evaluation-v2/`.
 - Notebook: `notebooks/03-smb-model-comparison-v2.ipynb`.
@@ -78,7 +81,7 @@ support prevalence claims for every SMB page or uncontrolled real scans.
 
 The notebook must reconcile 1152 method-condition-page rows, 384 unique degradation traces, 64
 independent works, six exact conditions, three exact methods, 30 predeclared qualitative PNGs, and
-the 64-row preflight before it creates the archive.
+the 64-row manifest-identity preflight before it creates the archive.
 
 ## Interpretation
 

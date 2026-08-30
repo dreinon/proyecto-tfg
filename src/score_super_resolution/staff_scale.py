@@ -13,6 +13,7 @@ from typing import Any
 import cv2
 import numpy as np
 import yaml
+from PIL import Image
 
 from score_super_resolution.baselines import pixel_sha256, validate_rgb8
 from score_super_resolution.contracts import ContractValidationError, validate_instance
@@ -287,6 +288,23 @@ def load_evaluation_sample_v2(project_root: Path) -> tuple[EvaluationSampleV2Row
     ):
         raise StaffScaleError("v2 sample independence or estimator evidence differs")
     return rows
+
+
+def canonical_smb_pixel_sha256(image: Image.Image) -> str:
+    """Hash one SMB source image with the audited canonical RGBA v2 framing."""
+
+    if not isinstance(image, Image.Image):
+        raise StaffScaleError("SMB pixel identity requires a Pillow image")
+    canonical = image.convert("RGBA")
+    width, height = canonical.size
+    framed = (
+        b"smb-canonical-rgba-frame-v2\0"
+        + width.to_bytes(8, "big")
+        + height.to_bytes(8, "big")
+        + b"RGBA8\0"
+        + canonical.tobytes()
+    )
+    return hashlib.sha256(framed).hexdigest()
 
 
 def _condition(control: StaffScaleControl, condition_id: str) -> dict[str, Any]:

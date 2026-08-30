@@ -35,9 +35,9 @@ conditions:
   - x4-strong
 degradation:
   control_path: configs/degradations/staff-scale-score-v2.yaml
-  control_sha256: 253916bcaefb1582556a7f3cf0b57639330092199f35c25c2ce47c24cb4a6e33
+  control_sha256: 69e80f8884746cfe61b2e52e75bccc9a4cf78e929f37de0b9805a90f3ea0d809
   staff_spacing_source: frozen-per-page-input-only-estimate
-  runtime_recompute_tolerance_px: 0.5
+  runtime_preflight: audited-manifest-canonical-pixel-identity-v2
 metrics:
   primary: [psnr-bt601-y-v1, ssim-wang11-bt601-y-v1]
   diagnostics: [psnr-rgb-v1, ssim-wang11-rgb-v1, runtime-seconds-v1]
