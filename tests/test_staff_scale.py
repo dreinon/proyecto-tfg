@@ -197,7 +197,7 @@ def test_v2_human_unlock_resolves_every_frozen_prerequisite() -> None:
     )
 
 
-def test_v2_notebook_installs_and_checks_the_complete_cairosvg_dependency_tree() -> None:
+def test_v2_notebook_installs_cairosvg_without_replacing_runtime_pillow() -> None:
     notebook = json.loads(
         (ROOT / "notebooks/03-smb-model-comparison-v2.ipynb").read_text(encoding="utf-8")
     )
@@ -209,13 +209,19 @@ def test_v2_notebook_installs_and_checks_the_complete_cairosvg_dependency_tree()
 
     assert len(setup_sources) == 1
     setup = setup_sources[0]
-    install = '"cairosvg==2.9.0"'
-    pillow = '"pillow==12.3.0"'
-    runtime_check = '[sys.executable, "-c", "import cairocffi, cssselect2, cairosvg"]'
-    assert install in setup
-    assert pillow in setup
-    assert runtime_check in setup
-    assert setup.index(install) < setup.index(pillow) < setup.index(runtime_check)
+    for dependency in (
+        '"cairosvg==2.9.0"',
+        '"cairocffi==1.7.1"',
+        '"cssselect2==0.9.0"',
+        '"defusedxml==0.7.1"',
+        '"tinycss2==1.5.1"',
+        '"webencodings==0.5.1"',
+    ):
+        assert dependency in setup
+    assert '"--no-deps"' in setup
+    assert '"pillow==' not in setup.lower()
+    assert "import PIL, torchvision, spandrel" in setup
+    assert "import cairocffi, cssselect2, cairosvg" in setup
 
 
 def test_v2_notebook_preflight_checks_manifest_identity_without_repeating_estimation() -> None:
