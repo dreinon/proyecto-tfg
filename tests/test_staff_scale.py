@@ -177,3 +177,20 @@ def test_v2_human_unlock_resolves_every_frozen_prerequisite() -> None:
         unlock["prerequisites"]["human_unlock_recorded"]["artifact_sha256"]
         == hashlib.sha256((V2_CONTROL_ROOT / "human_unlock_recorded.json").read_bytes()).hexdigest()
     )
+
+
+def test_v2_notebook_installs_and_checks_the_cairosvg_runtime_dependency() -> None:
+    notebook = json.loads(
+        (ROOT / "notebooks/03-smb-model-comparison-v2.ipynb").read_text(encoding="utf-8")
+    )
+    setup_sources = [
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code" and "cairosvg==2.9.0" in "".join(cell["source"])
+    ]
+
+    assert len(setup_sources) == 1
+    setup = setup_sources[0]
+    assert '["uv", "pip", "install", "--system", "cairocffi==1.7.1"]' in setup
+    assert '[sys.executable, "-c", "import cairocffi, cairosvg"]' in setup
+    assert setup.index("cairocffi==1.7.1") < setup.index("import cairocffi, cairosvg")
