@@ -234,3 +234,12 @@ def test_v2_notebook_preflight_checks_manifest_identity_without_repeating_estima
     assert 'manifest_row["image"]["pixel_sha256"]' in source
     assert "preflight.identity_match.all()" in source
     assert "estimate_staff_spacing" not in source
+
+
+def test_v2_notebook_serializes_numpy_validation_flags_as_builtin_booleans() -> None:
+    notebook = json.loads(
+        (ROOT / "notebooks/03-smb-model-comparison-v2.ipynb").read_text(encoding="utf-8")
+    )
+    source = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
+
+    assert '"validation": {name: bool(passed) for name, passed in checks.items()}' in source
