@@ -131,8 +131,8 @@ def test_pending_human_outcomes_remain_open_while_sanitized_scientific_decisions
     enacted_columns, enacted = _markdown_table(DEVIATION_PATH, "## Enacted deviations")
     assert enacted_columns == ENACTED_DEVIATION_COLUMNS
     assert [row["Record ID"] for row in enacted] == ["DEV-SCI-01"]
-    assert enacted[0]["Status"] == "enacted_pending_rerun"
-    assert "1152 rows" in enacted[0]["Re-execution and closure"]
+    assert enacted[0]["Status"] == "closed_reexecuted"
+    assert "1152/1152 unique rows" in enacted[0]["Re-execution and closure"]
     assert "No enacted deviations are recorded" not in DEVIATION_PATH.read_text(encoding="utf-8")
 
 

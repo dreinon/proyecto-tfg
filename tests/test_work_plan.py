@@ -19,13 +19,15 @@ PHASE_COLUMNS = (
 )
 EFFORT_COLUMNS = (
     "entry_id",
-    "date",
+    "period_start",
+    "period_end",
     "phase",
     "work_item",
-    "activity_type",
-    "actual_hours",
+    "estimate_hours",
+    "low_hours",
+    "high_hours",
     "evidence_reference",
-    "entered_by",
+    "estimate_basis",
     "verification_status",
     "notes",
 )
@@ -103,13 +105,26 @@ def test_work_plan_has_cost_resource_risk_and_checkpoint_controls() -> None:
     assert "material resources" in lowered
 
 
-def test_effort_log_has_no_invented_actual_hours() -> None:
+def test_effort_log_separates_reconstruction_from_forecast() -> None:
     with EFFORT_LOG_PATH.open(encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         rows = list(reader)
 
     assert tuple(reader.fieldnames or ()) == EFFORT_COLUMNS
-    assert all(row["actual_hours"] == "" for row in rows)
+    assert [row["phase"] for row in rows] == ["P1", "P2", "P3", "P4", "P5", "P5"]
+    reconstructed = [row for row in rows if row["verification_status"] == "reconstructed_estimate"]
+    forecast = [row for row in rows if row["verification_status"] == "forecast"]
+    assert sum(int(row["estimate_hours"]) for row in reconstructed) == 326
+    assert sum(int(row["low_hours"]) for row in reconstructed) == 294
+    assert sum(int(row["high_hours"]) for row in reconstructed) == 358
+    assert [int(row["estimate_hours"]) for row in forecast] == [22]
+    assert all(
+        int(row["low_hours"]) <= int(row["estimate_hours"]) <= int(row["high_hours"])
+        for row in rows
+    )
+    assert all(
+        row["estimate_basis"] in {"task_based_reconstruction", "remaining_forecast"} for row in rows
+    )
     for row in rows:
         for value in row.values():
             if value:

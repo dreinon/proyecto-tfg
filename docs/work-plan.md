@@ -1,9 +1,12 @@
 # Work, resource, cost, risk, and deadline plan
 
 This is the initial 12-ECTS workload allocation for the complete TFG. It is a planning control,
-not a claim about work already performed. Planned hours may be revised through the deviation log;
-actual hours are entered only by the student in `effort-log.csv` with evidence. The 330-hour total
-is within the GCD guidance range of approximately 300-360 hours.
+not a claim about work already performed. Because no contemporaneous timesheet was maintained, the
+student authorized a transparent retrospective reconstruction on 1 September 2026. The initial
+330-hour plan and the reconstructed estimate are kept separate; `effort-log.csv` records central
+estimates, uncertainty bounds, and evidence rather than presenting reconstructed values as clocked
+hours. Both the initial plan and the 348-hour final forecast are within the GCD guidance range of
+approximately 300-360 hours.
 
 The target windows below are evidence-gate dates, not statements of actual attendance or completed
 effort. The compressed calendar is a material schedule risk: it is viable only if the student-entered
@@ -23,6 +26,26 @@ path still fits. Otherwise the schedule must be replanned instead of inventing h
 **Planned total: 330 hours.** This is the full-TFG allocation, not a daily forecast for the target
 windows and not an actual-hours statement.
 
+## Retrospective reconstruction and final forecast
+
+The evidence-backed reconstruction is maintained in `effort-log.csv`. Its central estimate is
+**326 hours completed by 1 September 2026** (plausible interval: 294-358 hours), plus **22 hours
+remaining** for two review rounds, deposit closeout, and defence preparation. The resulting final
+forecast is **348 hours**, 18 hours or 5.5% above the initial plan. The principal offsetting
+deviations are:
+
+- fewer hours than planned in Phase 3 because fine-tuning and extra model families were explicit
+  deadline-driven NO-GO decisions;
+- more hours in Phase 2 for degradation calibration and in Phase 4 for diagnosing the non-
+  transferable v1 degradation, implementing staff-scale normalization, rerunning SMB, and
+  repeating qualitative and quantitative analysis;
+- a bounded Phase 5 reserve for sequential review: Jorge Calvo Zaragoza first at the technical-
+  scientific level, then Elena Vázquez Barrachina at the structural and academic level.
+
+This is a task-based retrospective estimate, not a recovered stopwatch log. The interval is
+reported because commit timestamps, compute runtime, and automated-agent duration do not equal
+student dedication. No exact daily attendance or unobserved cost is inferred.
+
 ## Execution lanes under D-16
 
 1. **Phase 2 blocking scientific core:** the locally frozen objectives and questions,
@@ -35,7 +58,8 @@ windows and not an actual-hours statement.
    and ACAD-03 authoritative Overleaf review remain human-owned. They do not block main Phases 1-4
    but must be closed before the Phase 5 deposit gate.
 
-No lane may infer tutor answers, private eligibility, actual hours, or authoritative render status.
+No lane may infer reviewer answers, private eligibility, contemporaneously measured hours, or
+authoritative render status. A retrospective effort estimate must remain labelled as such.
 
 ## Schedule controls
 
@@ -54,8 +78,11 @@ No lane may infer tutor answers, private eligibility, actual hours, or authorita
 
 - **Student:** owns implementation, evidence capture, time entry, scientific reasoning, thesis
   drafting, and explicit acceptance of personal or signed claims.
-- **Tutor:** consulted only for material scope, comparability, interpretation, or delivery gates;
-  no routine technical approval is assumed.
+- **Elena Vázquez Barrachina, tutor:** owns academic and structural guidance and the final formal
+  review gates; no approval is inferred before her attributable response.
+- **Jorge Calvo Zaragoza, experimental director:** proposed the subject and SMB, provided dataset
+  access, and performs the first technical-scientific review; this is guidance and review, not
+  authorship of the student's implementation or conclusions.
 - **Independent reader or operator:** used only where later clean replay, claim review, or access
   conditions permit and the participation is actually evidenced.
 - **Tribunal:** intended audience for the final thesis and defence; no assessment outcome is
@@ -72,8 +99,9 @@ No lane may infer tutor answers, private eligibility, actual hours, or authorita
 | Printing and administrative incidentals | Only if the current live process requires them | EUR 0-50 provisional allowance | Current call and Ebrón instructions determine need |
 
 The direct external planning range is **EUR 20-160**. It is estimated, not incurred. Student labour
-is represented by the 330 planned hours and is not assigned a fabricated monetary rate. No actual cost
-is recorded in this file; actual expenditure requires student evidence and a dated entry.
+is represented by the initial 330-hour plan and revised 348-hour forecast and is not assigned a
+fabricated monetary rate. No actual cost is recorded in this file; actual expenditure requires
+student evidence and a dated entry.
 
 ## Risk register
 
@@ -90,8 +118,8 @@ is recorded in this file; actual expenditure requires student evidence and a dat
 
 ## Checkpoint cadence
 
-- At each phase boundary, compare planned hours and dates with student-entered actuals without
-  backfilling missing time.
+- At each phase boundary, compare planned hours and dates with the explicitly labelled
+  retrospective estimate; never relabel reconstructed values as contemporaneously clocked time.
 - Before any material protocol change, create a deviation record naming old and new versions,
   reason, affected controls and runs, evidence, and re-execution decision.
 - Before every reported run, verify frozen identities, resources, expected denominator, and output
