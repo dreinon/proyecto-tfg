@@ -153,10 +153,10 @@ def _assert_bounded_smb_narrative(text: str) -> None:
         "redistribución no queda establecida",
         "reproducción de figuras permanece prohibida",
         "AUDITED\\_LOCKED",
-        "ACAD-03",
     )
     for fragment in required_fragments:
         assert fragment in normalized
+    assert "ACAD-03" not in normalized
     for forbidden in FORBIDDEN_SMB_OVERCLAIMS:
         assert forbidden not in normalized
 

@@ -30,6 +30,8 @@ def _style() -> None:
     plt.rcParams.update(
         {
             "font.family": "DejaVu Sans",
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
             "font.size": 9,
             "axes.titlesize": 11,
             "axes.labelsize": 9,
@@ -67,27 +69,28 @@ def fidelity_figure(aggregate: pd.DataFrame, output_root: Path) -> list[Path]:
     figure, axes = plt.subplots(2, 1, figsize=(8.5, 7.2))
     figure.subplots_adjust(left=0.10, right=0.98, top=0.94, bottom=0.15, hspace=0.12)
     x = np.arange(len(CONDITIONS))
-    width = 0.24
-    for method_index, (method_id, label, color, hatch) in enumerate(METHODS):
+    markers = ("o", "s", "^")
+    offsets = (-0.16, 0.0, 0.16)
+    for method_index, (method_id, label, color, _) in enumerate(METHODS):
         rows = aggregate[aggregate["method_id"] == method_id].set_index("condition_id")
-        offset = (method_index - 1) * width
         for axis, metric in zip(axes, ("psnr_y_mean", "ssim_y_mean"), strict=True):
             values = [rows.loc[condition_id, metric] for condition_id, _ in CONDITIONS]
-            axis.bar(
-                x + offset,
+            axis.plot(
+                x + offsets[method_index],
                 values,
-                width,
+                linestyle="none",
+                marker=markers[method_index],
+                markersize=6,
                 label=label,
                 color=color,
-                edgecolor="#27313A",
-                linewidth=0.45,
-                hatch=hatch,
+                markeredgecolor="#27313A",
+                markeredgewidth=0.55,
             )
     axes[0].set_title("Fidelidad media por condición y método")
     axes[0].set_ylabel("PSNR-Y (dB)")
-    axes[0].set_ylim(0, 30)
+    axes[0].set_ylim(14, 28)
     axes[1].set_ylabel("SSIM-Y")
-    axes[1].set_ylim(0.58, 1.0)
+    axes[1].set_ylim(0.60, 1.0)
     axes[1].set_xlabel("Condición de degradación")
     for axis in axes:
         axis.set_xticks(x, [label for _, label in CONDITIONS])
@@ -192,7 +195,8 @@ def runtime_figure(runtime: pd.DataFrame, output_root: Path) -> list[Path]:
     figure.text(
         0.01,
         0.03,
-        "Ejecución final en Kaggle con dos Tesla T4; tiempos no portables a otro hardware.",
+        "Kaggle expuso dos Tesla T4; la inferencia usó el dispositivo CUDA por defecto "
+        "(una GPU). Tiempos no portables a otro hardware.",
         fontsize=8,
         color="#4B5563",
     )
