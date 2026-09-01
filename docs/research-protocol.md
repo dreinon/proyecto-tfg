@@ -17,13 +17,19 @@ and evidence-backed professional decision framework rather than a model leaderbo
 
 ## Dataset protocol
 
-SMB (`PRAIG/SMB`) is the primary evaluation source. Its immutable Hugging Face revision and
-upstream metadata are recorded in `data/sources/smb.yaml`; the descriptor reports manual gating,
-CC BY-NC 4.0, and 685 examples in the sole official split `test`, pending authenticated audit.
-Preserve that reported role as a benchmark: do not tune models, select checkpoints, or fit
-degradation parameters on SMB. A separate licensed, group-disjoint training/validation source is
-required for domain fine-tuning. The v1 protocol does not permit repurposing SMB's sole official
-`test` split for training, validation, checkpoint selection, or any other adaptive decision.
+SMB (`PRAIG/SMB`) is the primary source. Its immutable Hugging Face revision and upstream metadata
+are recorded in `data/sources/smb.yaml`; the descriptor reports manual gating, CC BY-NC 4.0, and
+685 examples in the sole official split `test`. Preserve that upstream fact and never describe a
+project-defined partition as official.
+
+The primary pretrained study keeps SMB evaluation-only: its fresh 64-work v2 sample is excluded
+from every adaptive operation. A distinct secondary adaptation study may derive train, validation,
+and test roles from the remaining SMB content only through the frozen, source-disjoint contract in
+[`smb-edsr-finetuning-v1.md`](smb-edsr-finetuning-v1.md). That contract uses prior v1 development
+sources for training, fresh sources for validation/test, opens test only after checkpoint
+selection, and bounds every conclusion to within-SMB domain adaptation. This is a deliberate
+protocol amendment, not a silent reinterpretation of the upstream split and not a retroactive
+change to the primary v2 benchmark.
 
 For every dataset, record:
 
@@ -67,6 +73,15 @@ SMB's smaller, variable staff scales. Final confirmation therefore uses a fresh,
 spacing. The exact correction, identities, claim boundary, and relationship between v1 and v2 are
 defined in [`smb-protocol-v2.md`](smb-protocol-v2.md). No v2 outcome may be used for further
 calibration, method choice, or parameter adjustment.
+
+### Bounded EDSR adaptation study
+
+After the primary v2 comparison was secured, the earlier deadline-driven fine-tuning NO-GO was
+superseded by an explicit decision to test the achievable benefit of domain adaptation. Only EDSR
+is adapted, at x2 and x4, using the already-frozen staff-scale degradation family. The exact split,
+training, checkpoint-selection, fresh-test, bootstrap, qualitative-sampling, and evidence contracts
+are frozen in [`smb-edsr-finetuning-v1.md`](smb-edsr-finetuning-v1.md) before training. The study
+does not retune the v2 protocol or replace its conclusions about pretrained transfer.
 
 ## Comparison ladder
 

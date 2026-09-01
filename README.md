@@ -24,8 +24,8 @@ El flujo experimental básico puede representarse de la siguiente manera:
 
 El núcleo del TFG se centra en:
 
-* Auditar SMB como benchmark principal de evaluación y seleccionar otra fuente únicamente si el
-  ajuste fino llega a justificarse.
+* Auditar SMB como benchmark principal y separar explícitamente el estudio principal de modelos
+  preentrenados de cualquier adaptación secundaria del dominio.
 * Diseñar uno o varios procesos controlados para generar imágenes de baja resolución.
 * Estudiar y seleccionar técnicas y modelos actuales de superresolución potencialmente adecuados para este dominio.
 * Aplicar modelos preentrenados como referencia inicial.
@@ -115,10 +115,14 @@ del repositorio. El descriptor reproducible se encuentra en
 
 El descriptor y la auditoría autenticada confirman que SMB requiere aprobación manual de acceso,
 usa licencia CC BY-NC 4.0 y, en la revisión fijada, publica 685 páginas en un único *split* oficial
-`test`. Por ese motivo se trata como **benchmark de evaluación**, no como conjunto de entrenamiento.
-El entrenamiento o *fine-tuning* necesitará otra fuente con procedencia y particiones adecuadas, o
-una decisión metodológica explícita que cancele o sustituya el protocolo v1 antes de utilizar SMB
-con otro rol.
+`test`. El estudio principal conserva ese rol: evalúa métodos preentrenados sobre 64 obras que no
+se utilizan para ningún ajuste. Como estudio secundario y declarado separadamente, el proyecto
+define particiones propias por obra dentro de las páginas restantes para adaptar EDSR al dominio:
+45 obras/212 páginas de desarrollo previo para entrenamiento, 13 obras/35 páginas nuevas para
+validación y 20 obras/55 páginas nuevas para test. Las 64 obras del estudio principal quedan
+excluidas de las tres particiones. Este uso no se presenta como un *split* oficial de SMB ni como
+evidencia de generalización fuera del corpus; el contrato completo está en
+[`docs/smb-edsr-finetuning-v1.md`](docs/smb-edsr-finetuning-v1.md).
 
 ## Posibles ampliaciones
 
@@ -183,13 +187,12 @@ Proyecto en desarrollo como parte de un Trabajo de Fin de Grado.
 
 La infraestructura inicial del repositorio ya está preparada: entorno reproducible con `uv`, Python 3.12.12, PyTorch local para CPU, soporte para Jupyter y Kaggle, pruebas, linting y captura del entorno de ejecución.
 
-SMB está seleccionado y auditado como fuente principal de evaluación en una revisión inmutable de
-Hugging Face. Una primera ejecución piloto reveló que la degradación calibrada en píxeles absolutos
-no mantenía la severidad al cambiar la escala de pentagrama. La evaluación final se ha corregido
-con un [protocolo v2 normalizado por pentagrama](docs/smb-protocol-v2.md), una muestra nueva de 64
-obras sin solapamiento con v1 y una notebook Kaggle separada pendiente de ejecución. Si se justifica
-*fine-tuning*, todavía deberá seleccionarse una fuente de entrenamiento adecuada. El alcance
-principal continúa centrado en la **selección, adaptación y evaluación de técnicas de
-superresolución aplicadas a partituras digitalizadas**. Las funcionalidades adicionales descritas
-en este documento representan posibles líneas de ampliación y su implementación dependerá de la
-evolución y los resultados del núcleo experimental.
+SMB está seleccionado y auditado en una revisión inmutable de Hugging Face. Una primera ejecución
+piloto reveló que la degradación calibrada en píxeles absolutos no mantenía la severidad al cambiar
+la escala de pentagrama. La evaluación principal final ya usa el
+[protocolo v2 normalizado por pentagrama](docs/smb-protocol-v2.md) y una muestra nueva de 64 obras.
+Tras completar ese núcleo, se ha promovido un estudio secundario acotado de
+[*fine-tuning* de EDSR](docs/smb-edsr-finetuning-v1.md), con particiones propias por obra y test
+nuevo. Su implementación y notebook reproducible están preparados; sus resultados permanecen
+pendientes de la ejecución acelerada y de reconciliación antes de incorporarse a la memoria. Las
+funcionalidades adicionales descritas en este documento continúan siendo ampliaciones opcionales.

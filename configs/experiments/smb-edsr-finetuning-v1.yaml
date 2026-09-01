@@ -1,0 +1,68 @@
+schema_version: 1
+record_type: smb-edsr-finetuning
+experiment_id: smb-edsr-finetuning-v1
+status: frozen-before-training
+claim_boundary: bounded-secondary-within-smb-domain-adaptation-study
+dataset:
+  repository_id: PRAIG/SMB
+  revision: 96332e8c4ac81cbdb7f61093ec5a4bfff76a0adb
+  split: test
+  derived_role: project-defined-source-disjoint-adaptation-corpus
+  licence: CC-BY-NC-4.0
+split:
+  path: data/adaptation/smb-edsr-finetuning-v1-split.csv
+  sha256: ee3e2834679a184168e9fe689eb3e9575d450dbd21be36090eebdb544477075f
+  exclusions_path: data/adaptation/smb-edsr-finetuning-v1-exclusions.csv
+  exclusions_sha256: c128da2e03063ff9933d511ad63622f619828f1866bc08ff07b0bf8d6bab4733
+  seed: 20260901
+  algorithm: input-staff-measurable-v1-development-train-fresh-hash-holdout-v1
+  final_v2_sources: excluded-from-all-partitions
+  prior_v1_sources: train-only
+  fresh_sources: validation-or-test-only
+  input_only_exclusion_count: 134
+  expected_fresh_group_count: 33
+  test_group_count: 20
+  group_counts: {train: 45, validation: 13, test: 20}
+  page_counts: {train: 212, validation: 35, test: 55}
+degradation:
+  control_path: configs/degradations/staff-scale-score-v2.yaml
+  profiles_per_scale: [clean, moderate, strong]
+methods:
+  base: edsr-baseline-official-v1
+  adapted: edsr-smb-finetuned-v1
+  reference: bicubic-opencv-v1
+  scales: [2, 4]
+training:
+  objective: rgb-l1
+  optimizer: Adam
+  learning_rate: 0.00005
+  minimum_learning_rate: 0.000001
+  steps_per_scale: 2500
+  batch_size: 8
+  lr_patch_size: 48
+  validation_every_steps: 250
+  validation_patience: 4
+  validation_min_delta: 0.00001
+  validation_representative_pages_only: true
+  seed: 20260902
+  precision: mixed-float16-on-cuda-float32-otherwise
+  gradient_clip_norm: 1.0
+selection:
+  checkpoint_rule: lowest-mean-validation-rgb-l1
+  test_access: after-both-scale-checkpoints-selected
+evaluation:
+  representative_page_per_test_source: true
+  conditions: [x2-clean, x2-moderate, x2-strong, x4-clean, x4-moderate, x4-strong]
+  metrics: [psnr_y, ssim_y, psnr_rgb, ssim_rgb, runtime_seconds]
+  aggregation_unit: source_group_id
+  bootstrap_seed: 20260903
+  bootstrap_repetitions: 2000
+  qualitative_cases: 6
+  qualitative_seed: 20260904
+  qualitative_assignment:
+    - {condition_id: x2-clean, item_id: smb-test-000001, source_group_id: haydn_sonata15_1, upstream_index: 1}
+    - {condition_id: x2-moderate, item_id: smb-test-000391, source_group_id: beethoven_sonata01_4, upstream_index: 391}
+    - {condition_id: x2-strong, item_id: smb-test-000226, source_group_id: mozart_sonate_in_c_-_kv_545, upstream_index: 226}
+    - {condition_id: x4-clean, item_id: smb-test-000085, source_group_id: joplin_reflection, upstream_index: 85}
+    - {condition_id: x4-moderate, item_id: smb-test-000451, source_group_id: joplin_newrag, upstream_index: 451}
+    - {condition_id: x4-strong, item_id: smb-test-000655, source_group_id: beethoven_sonata31_1, upstream_index: 655}
