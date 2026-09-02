@@ -55,9 +55,10 @@ to the same evaluated population, degradation, rights, and evidence boundaries.
   document/music-score evidence, degradation assumptions, evaluation practice, and
   semantic-alteration risk. Measure: a traceable review matrix satisfying the Phase 1 search and
   coverage protocol.
-- **OBJ-S2:** Authenticate, audit, describe, and immutably inventory SMB while preserving its sole
-  official split as evaluation-only. Measure: a reconciled, checksummed manifest with one explicit
-  status for every upstream item and reviewed provenance, grouping, rights, and suitability.
+- **OBJ-S2:** Authenticate, audit, describe, and immutably inventory SMB while preserving the
+  primary confirmatory sample as evaluation-only and describing any secondary project roles
+  explicitly. Measure: a reconciled, checksummed manifest with one explicit status for every
+  upstream item and reviewed provenance, grouping, rights, and suitability.
 - **OBJ-S3:** Predeclare controlled degradation roles, comparator roles, independent units, outcome
   families, comparison rules, and claim boundaries before final SMB outcomes. Measure: versioned
   controls that fail closed when a required field or unlock prerequisite is absent.
@@ -65,9 +66,9 @@ to the same evaluated population, degradation, rights, and evidence boundaries.
   resource, and music-specific evidence while retaining failures and negative cases. Measure:
   reconciled paired denominators and evidence for each declared outcome family.
 - **OBJ-S5:** Make an evidence-based GO/NO-GO decision on bounded domain adaptation without using
-  SMB for selection. Measure: a recorded gate addressing the hypothesis, independent licensed
-  train/validation data, grouping, selection rule, time, compute, and tutor approval; a justified
-  NO-GO satisfies the objective.
+  its test role for selection or reusing the primary benchmark. Measure: a recorded gate addressing
+  the hypothesis, source-disjoint train/validation/test roles, grouping, selection rule, time,
+  compute, and accountable approval; a justified NO-GO also satisfies the objective.
 - **OBJ-S6:** Produce reproducible professional guidance and a traceable thesis whose material
   claims resolve to reviewed evidence. Measure: a reviewed claim index linking recommendations,
   limitations, tables, figures, and examples to recoverable evidence and rights status.
@@ -84,10 +85,13 @@ to the same evaluated population, degradation, rights, and evidence boundaries.
 - **EQ4:** Do any later-frozen learned comparators add consistent value over bicubic interpolation
   without increasing safety-critical musical alterations?
 - **EQ5:** Conditional on validation-only baselines exposing a specific domain gap, does one bounded
-  adaptation improve the declared balance using independent licensed train/validation data?
+  adaptation improve the declared balance on a fresh work-disjoint test after checkpoint selection
+  on independent training and validation roles?
 
-EQ5 does not authorize adaptation. Its comparison, estimand, direction, unit, outcome, selection
-rule, data source, and stop rule must all be frozen before it can become a formal hypothesis.
+EQ5 did not authorize adaptation by itself. Its comparison, estimand, direction, unit, outcome,
+selection rule, data roles, and stop rule were frozen in the later adaptation protocol before
+training and test access. This is an explicit amendment to the earlier no-SMB-selection wording,
+not a reinterpretation of the upstream split or the primary v2 study.
 
 ## Unit hierarchy
 

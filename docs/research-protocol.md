@@ -81,7 +81,9 @@ superseded by an explicit decision to test the achievable benefit of domain adap
 is adapted, at x2 and x4, using the already-frozen staff-scale degradation family. The exact split,
 training, checkpoint-selection, fresh-test, bootstrap, qualitative-sampling, and evidence contracts
 are frozen in [`smb-edsr-finetuning-v1.md`](smb-edsr-finetuning-v1.md) before training. The study
-does not retune the v2 protocol or replace its conclusions about pretrained transfer.
+does not retune the v2 protocol or replace its conclusions about pretrained transfer. The run is
+complete and independently reconciled; its outcomes and boundaries are recorded in
+[`smb-edsr-finetuning-v1-results.md`](smb-edsr-finetuning-v1-results.md).
 
 ## Comparison ladder
 

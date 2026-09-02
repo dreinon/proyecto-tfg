@@ -193,6 +193,7 @@ la escala de pentagrama. La evaluación principal final ya usa el
 [protocolo v2 normalizado por pentagrama](docs/smb-protocol-v2.md) y una muestra nueva de 64 obras.
 Tras completar ese núcleo, se ha promovido un estudio secundario acotado de
 [*fine-tuning* de EDSR](docs/smb-edsr-finetuning-v1.md), con particiones propias por obra y test
-nuevo. Su implementación y notebook reproducible están preparados; sus resultados permanecen
-pendientes de la ejecución acelerada y de reconciliación antes de incorporarse a la memoria. Las
+nuevo. La ejecución acelerada ya está reconciliada: los resultados y sus límites se documentan en
+[`docs/smb-edsr-finetuning-v1-results.md`](docs/smb-edsr-finetuning-v1-results.md) y se incorporan
+a la memoria sin publicar imágenes ni pesos derivados de SMB. Las
 funcionalidades adicionales descritas en este documento continúan siendo ampliaciones opcionales.

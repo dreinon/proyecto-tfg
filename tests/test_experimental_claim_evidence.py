@@ -32,10 +32,14 @@ def test_experimental_claims_are_bounded_and_resolve_when_evidence_is_retained()
         "RESULT-EDSR-SWINIR",
         "RESULT-QUALITATIVE",
         "PROF-EDSR-DEFAULT",
+        "ADAPT-V1-RECONCILIATION",
+        "ADAPT-V1-FIDELITY",
+        "ADAPT-V1-QUALITATIVE",
     }
     for row in rows:
         assert row["review_status"] == "reviewed"
         assert row["scope_limitations"] and row["reviewer"]
+        assert row["review_date"]
         assert re.fullmatch(r"[0-9a-f]{64}", row["evidence_sha256"])
         evidence = ROOT / row["evidence_path"]
         if evidence.exists():

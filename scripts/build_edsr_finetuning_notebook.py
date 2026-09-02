@@ -67,7 +67,8 @@ en Kaggle; una ejecución local valida el contrato sin entrenar ni inspeccionar 
 
 En Kaggle activa Internet, una GPU compatible y el secreto `HF_TOKEN`. El montaje conserva el
 PyTorch del runtime para no romper su compatibilidad CUDA. Si el repositorio ya existe en
-`/kaggle/working/proyecto-tfg`, se reutiliza; en caso contrario se clona desde GitHub.
+`/kaggle/working/proyecto-tfg`, se actualiza de forma segura a `origin/main`; en caso contrario se
+clona desde GitHub. La revisión exacta ejecutada se registra después de actualizar el checkout.
 """
         ),
         code(
@@ -90,12 +91,43 @@ REPOSITORY_URL = "https://github.com/dreinon/proyecto-tfg.git"
 IS_KAGGLE = Path("/kaggle/working").is_dir()
 
 
+def update_kaggle_checkout(candidate: Path) -> Path:
+    candidate = candidate.resolve()
+    if not (candidate / ".git").is_dir():
+        raise RuntimeError("El proyecto encontrado en Kaggle no es un checkout Git.")
+    origin = subprocess.run(
+        ["git", "-C", str(candidate), "remote", "get-url", "origin"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if origin.removesuffix(".git").rstrip("/") != REPOSITORY_URL.removesuffix(".git").rstrip("/"):
+        raise RuntimeError("El checkout de Kaggle apunta a otro repositorio.")
+    tracked_changes = subprocess.run(
+        ["git", "-C", str(candidate), "status", "--porcelain", "--untracked-files=no"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if tracked_changes:
+        raise RuntimeError("El checkout de Kaggle tiene cambios versionados sin guardar.")
+    subprocess.run(
+        ["git", "-C", str(candidate), "fetch", "--depth", "1", "origin", "main"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(candidate), "checkout", "--detach", "FETCH_HEAD"],
+        check=True,
+    )
+    return candidate
+
+
 def discover_project_root() -> Path:
     starts = [Path.cwd(), Path("/kaggle/working/proyecto-tfg")]
     for start in starts:
         for candidate in (start, *start.parents):
             if (candidate / "pyproject.toml").is_file():
-                return candidate.resolve()
+                return update_kaggle_checkout(candidate) if IS_KAGGLE else candidate.resolve()
     if not IS_KAGGLE:
         raise RuntimeError("No se encuentra el repositorio del proyecto.")
     if shutil.which("uv") is None:
@@ -129,6 +161,7 @@ if IS_KAGGLE:
             "cssselect2==0.9.0",
             "defusedxml==0.7.1",
             "tinycss2==1.5.1",
+            "verovio==6.2.1",
             "webencodings==0.5.1",
         ],
         check=True,
@@ -142,7 +175,11 @@ if IS_KAGGLE:
     if torch_after != torch_before:
         raise RuntimeError("La preparación reemplazó PyTorch; reinicia el runtime.")
     subprocess.run(
-        [sys.executable, "-c", "import cairocffi, cssselect2, cairosvg, cv2, datasets, yaml"],
+        [
+            sys.executable,
+            "-c",
+            "import cairocffi, cssselect2, cairosvg, cv2, datasets, verovio, yaml",
+        ],
         check=True,
     )
 

@@ -114,9 +114,9 @@ def test_effort_log_separates_reconstruction_from_forecast() -> None:
     assert [row["phase"] for row in rows] == ["P1", "P2", "P3", "P4", "P5", "P5"]
     reconstructed = [row for row in rows if row["verification_status"] == "reconstructed_estimate"]
     forecast = [row for row in rows if row["verification_status"] == "forecast"]
-    assert sum(int(row["estimate_hours"]) for row in reconstructed) == 326
-    assert sum(int(row["low_hours"]) for row in reconstructed) == 294
-    assert sum(int(row["high_hours"]) for row in reconstructed) == 358
+    assert sum(int(row["estimate_hours"]) for row in reconstructed) == 346
+    assert sum(int(row["low_hours"]) for row in reconstructed) == 312
+    assert sum(int(row["high_hours"]) for row in reconstructed) == 380
     assert [int(row["estimate_hours"]) for row in forecast] == [22]
     assert all(
         int(row["low_hours"]) <= int(row["estimate_hours"]) <= int(row["high_hours"])

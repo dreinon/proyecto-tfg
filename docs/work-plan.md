@@ -29,18 +29,18 @@ windows and not an actual-hours statement.
 ## Retrospective reconstruction and final forecast
 
 The evidence-backed reconstruction is maintained in `effort-log.csv`. Its central estimate is
-**326 hours completed by 1 September 2026** (plausible interval: 294-358 hours), plus **22 hours
+**346 hours completed by 1 September 2026** (plausible interval: 312-380 hours), plus **22 hours
 remaining** for two review rounds, deposit closeout, and defence preparation. The resulting final
-forecast is **348 hours**, 18 hours or 5.5% above the initial plan. The principal offsetting
+forecast is **368 hours**, 38 hours or 11.5% above the initial plan. The principal
 deviations are:
 
-- fewer hours than planned in Phase 3 because fine-tuning and extra model families were explicit
-  deadline-driven NO-GO decisions;
+- Phase 3 remained close to its initial allocation after the bounded EDSR adaptation added an
+  estimated 20 hours once the primary comparison was secure;
 - more hours in Phase 2 for degradation calibration and in Phase 4 for diagnosing the non-
   transferable v1 degradation, implementing staff-scale normalization, rerunning SMB, and
   repeating qualitative and quantitative analysis;
-- a bounded Phase 5 reserve for sequential review: Jorge Calvo Zaragoza first at the technical-
-  scientific level, then Elena Vázquez Barrachina at the structural and academic level.
+- a bounded Phase 5 reserve for two joint review rounds with Elena Vázquez Barrachina and Jorge
+  Calvo Zaragoza.
 
 This is a task-based retrospective estimate, not a recovered stopwatch log. The interval is
 reported because commit timestamps, compute runtime, and automated-agent duration do not equal
@@ -78,11 +78,10 @@ authoritative render status. A retrospective effort estimate must remain labelle
 
 - **Student:** owns implementation, evidence capture, time entry, scientific reasoning, thesis
   drafting, and explicit acceptance of personal or signed claims.
-- **Elena Vázquez Barrachina, tutor:** owns academic and structural guidance and the final formal
-  review gates; no approval is inferred before her attributable response.
-- **Jorge Calvo Zaragoza, experimental director:** proposed the subject and SMB, provided dataset
-  access, and performs the first technical-scientific review; this is guidance and review, not
-  authorship of the student's implementation or conclusions.
+- **Elena Vázquez Barrachina, tutor, and Jorge Calvo Zaragoza, experimental director:** contribute
+  jointly to the guidance and review of the complete work; no approval is inferred before their
+  attributable responses, and their contribution does not transfer authorship of the student's
+  implementation or conclusions.
 - **Independent reader or operator:** used only where later clean replay, claim review, or access
   conditions permit and the participation is actually evidenced.
 - **Tribunal:** intended audience for the final thesis and defence; no assessment outcome is

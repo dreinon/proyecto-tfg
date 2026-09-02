@@ -109,3 +109,10 @@ qualitative PNGs, two selected checkpoints, and both pixel-identity preflights r
 failure remains evidence; it is not repaired by inspecting test outcomes or changing the frozen
 protocol. Further tuning, model families, realistic-scan evaluation, OMR, or deployment require a
 new prospective decision and cannot delay the thesis core.
+
+## Completed-study pointer
+
+The frozen study completed and passed independent reconciliation on 1 September 2026. Validated
+outcomes, evidence identities, and claim boundaries are reported separately in
+`docs/smb-edsr-finetuning-v1-results.md` so this preregistered protocol remains an auditable record
+of what was decided before training and test access.
