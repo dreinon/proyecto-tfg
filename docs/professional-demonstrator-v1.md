@@ -1,7 +1,7 @@
 # Professional demonstrator and external applicability pilot v1
 
-Status: implementation and external evaluation complete; qualitative review and institutional
-agreement pending
+Status: implementation, external evaluation, qualitative review, and thesis integration complete;
+public deployment and page reproduction are not authorized by this protocol
 
 ## Professional purpose
 
@@ -78,12 +78,13 @@ representative. This dual role and the exact institutional provenance must remai
 student compiled the evaluation corpus but does not own the underlying scores, arrangements, or
 editions.
 
-All pages remain `private-study-only` while the UPV--SJMA agreement for the punctual provision of
-materials is being processed. Full source, LR, and SR pages may not enter Git, the public
-demonstrator, the thesis, or defence slides. Aggregate evidence may be promoted only after the
-administrative basis is resolved. Small analytical excerpts would additionally require a
-case-specific copyright and attribution decision; the institutional agreement does not transfer
-third-party rights.
+SJMA has institutionally authorized access to, upload of, and processing of the supplied pages for
+this TFG. This authorization is sufficient for the private experiment and aggregate reporting, but
+it does not transfer the third-party rights in each work, arrangement, or edition. The pages
+therefore remain `private-study-only` for publication: full source, LR, and SR pages may not enter
+Git, the public demonstrator, the thesis, or defence slides. A small analytical excerpt would also
+require a case-specific reproduction and attribution decision. Any later UPV--SJMA document would
+strengthen the governance record, not replace the underlying rights analysis.
 
 The default execution venue for this private corpus is the local project environment. On 3
 September 2026, the student, acting as SJMA president and legal representative, confirmed that the
@@ -149,7 +150,8 @@ The local CPU run completed from clean Git revision
 `62db40ff8f9491f244ddfaeb0cdc13f7482d8718` in 3396.28 seconds. It reconciled all 216 unique
 work-condition-method outputs across twelve independent works, six conditions, and three methods;
 the analysis produced eighteen aggregate rows, twenty-four paired bootstrap rows, and sixty images
-for the twelve fixed qualitative cases. The artifact manifest verifies 68 retained files. Raw
+for the twelve fixed qualitative cases. After incorporating the review, the final artifact
+manifest verifies 70 retained files. Raw
 pages, generated page images, checkpoints, and the evidence bundle remain ignored by Git.
 
 Before qualitative interpretation, the adapted EDSR has positive mean adapted-minus-official
@@ -157,8 +159,17 @@ deltas for both PSNR-Y and SSIM-Y in every condition. The PSNR-Y differences ran
 (`x4-moderate`) to +8.204 dB (`x2-strong`); the SSIM-Y differences range from +0.0050
 (`x2-clean`) to +0.1581 (`x2-strong`). The source-level 95% bootstrap interval excludes zero for
 every adapted-versus-official comparison except SSIM-Y under `x2-clean`. These are fidelity results
-against synthetically degraded external HR pages, not yet evidence that every derivative is
-professionally acceptable. The fixed twelve-case human review remains mandatory.
+against synthetically degraded external HR pages and do not establish natural-LR restoration or
+musical-semantic correctness.
+
+The fixed student review classified eight derivatives as acceptable for consultation, three as
+acceptable with reservations, and one as rejected. Five cases had no clear new defect and seven
+retained damage already present in LR; none was classified as damage introduced or amplified by
+the adapted model. The recurrent limitations were text, digits, fine symbols, and information lost
+under strong degradation. The sole rejected case was the sparse x4-strong percussion page, whose
+fine typography and atypical noteheads were not recovered reliably. These are twelve descriptive,
+input-selected cases assessed by one unblinded reviewer, not defect prevalence, formal usability,
+or a specialist-panel result.
 
 ## Qualitative and operational acceptance
 
@@ -173,8 +184,8 @@ addition, record:
   rejected;
 - the concrete musical or document defect supporting that decision.
 
-No success percentage or usability claim may be reported from an unexecuted notebook or from a
-single operator beyond this bounded walkthrough.
+No population success percentage or formal usability claim may be inferred from this single-
+operator bounded walkthrough.
 
 After the run, the notebook generates
 `artifacts/professional-pilot-v1/professional-pilot-v1-review.html` and a downloadable ZIP that
@@ -193,10 +204,11 @@ manifest so the reviewed decisions are part of the final evidence bundle.
 
 ## Completion and stop rules
 
-Promote the extension into the thesis only if all twelve works, 216 outputs, metrics, identities,
-fixed qualitative cases, and application checks reconcile and the final Overleaf candidate can be
-reviewed before deposit. Otherwise retain the implementation as post-deposit demonstrator work and
-preserve the current thesis wording that the application and external transfer remain future work.
+The extension passed its promotion gate on 3 September 2026: all twelve works, 216 outputs,
+metrics, identities, fixed qualitative cases, application checks, reviewed decisions, and local
+thesis render reconcile. Its claims remain bounded by the limitations above and by the pending
+authoritative Overleaf review.
 
-A rights ambiguity, a need to retune on external results, an invalid comparison, or insufficient
-time for review triggers NO-GO without weakening the completed SMB study.
+Public deployment, page reproduction, model retuning from these external outcomes, or an expansion
+to PDF/OMR/new model families remains NO-GO before deposit. Any later implementation requires a
+separate protocol and must not retroactively alter this test evidence.

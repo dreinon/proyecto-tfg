@@ -20,9 +20,12 @@ información pequeña perdida bajo degradación fuerte no se recupera de forma f
 presentarse como restauración musical automática.
 
 La versión que os comparto ya está completa y compilada; corresponde a la revisión
-`71f683c`. En paralelo estoy preparando una ampliación profesional acotada: un demostrador web del
-modelo y una prueba de funcionamiento sobre doce obras externas. No dejaré huecos pendientes en la
-memoria ni incorporaré esa ampliación si no queda completamente ejecutada y validada a tiempo.
+`780cdea`. También incluye una ampliación profesional acotada ya cerrada: un demostrador local del
+modelo y una prueba sin reajuste sobre doce obras externas. En las 216 salidas, el modelo adaptado
+mejoró en promedio al EDSR oficial bajo las seis condiciones; la revisión fija consideró ocho
+derivados aceptables para consulta, tres aceptables con reservas y uno no consultable. La memoria
+explicita que las LR se generaron sintéticamente, que revisó los casos un único evaluador y que esto
+no demuestra restauración de LR naturales ni corrección musical universal.
 
 Cuando podáis, ¿podríais revisar el trabajo completo, incluida la estructura, el diseño
 experimental, la interpretación de los resultados, la adecuación del alcance, los límites de las
@@ -31,6 +34,6 @@ cualquier cambio posterior quedará limitado a la ampliación indicada y a las c
 trasladéis.
 
 He reservado los días siguientes para incorporar vuestras indicaciones y realizar la comprobación
-final en Overleaf y Ebrón.
+final en Overleaf y Ebrón. No está previsto añadir más alcance antes del depósito.
 
 Gracias.

@@ -64,12 +64,11 @@ protected and takes precedence over this extension.
 3. **Parallel `academic-closeout`:** ACAD-01 tutor compatibility, ACAD-02 private DELV-01 checks,
    and ACAD-03 authoritative Overleaf review remain human-owned. They do not block main Phases 1-4
    but must be closed before the Phase 5 deposit gate.
-4. **Removable professional pilot:** the image-only demonstrator and external test may proceed in
-   parallel after the current complete thesis is sent for review. The 216-output external run and
-   its fixed twelve-case evidence were reconciled on 3 September; qualitative review,
-   administrative closure, and conditional thesis integration remain. It can enter the thesis only
-   as a complete, reconciled block and is removed immediately if it competes with reviewer
-   corrections.
+4. **Closed professional pilot:** the image-only demonstrator and external test proceeded as the
+   sole scope-freeze exception. On 3 September, the 216-output run, twelve fixed review decisions,
+   final 70-file evidence manifest, aggregate figure, and local thesis render reconciled. The lane
+   is closed to further functionality; authoritative Overleaf review and reviewer corrections now
+   take precedence.
 
 No lane may infer reviewer answers, private eligibility, contemporaneously measured hours, or
 authoritative render status. A retrospective effort estimate must remain labelled as such.
@@ -128,7 +127,7 @@ student evidence and a dated entry.
 | R-06 | Aggregate metrics conflict with notation-failure evidence | Medium | Critical | Systematic musical alteration appears despite favourable image scores | Withhold recommendation; retain negative cases; apply predeclared contradiction rules | Student; accountable interpretation reviewer | Phase 4 reconciliation and claim review |
 | R-07 | Private eligibility, Ebrón access, or authoritative Overleaf state remains pending | Medium | Critical | Any ACAD-02 or ACAD-03 item is unresolved at Phase 5 closeout | Keep private proof outside Git; resolve through academic-closeout; fail deposit readiness while open | Student | Academic-closeout and Phase 5 pre-deposit gate |
 | R-08 | Thesis claims, citations, figures, or defence logistics lack current evidence | Medium | High | Claim ledger is not reviewed or live call differs from planning assumptions | Reject unreviewed promotion; recheck current sources; keep a static defence fallback | Student and tutor at named reviews | Phase 5 evidence and defence gates |
-| R-09 | External pilot inputs, rights, compute, or review are incomplete before final corrections | High | High | The 15 input works are not frozen promptly, 216 outputs do not reconcile, or reviewer corrections need the same time | Apply `DEV-PROF-01` NO-GO, keep the already complete thesis wording, and preserve all deposit-critical work | Student | Daily until thesis integration or NO-GO |
+| R-09 | External pilot evidence or rights are overextended in the final document | Low | High | A page is reproduced, natural-LR restoration is claimed, or aggregate and qualitative denominators are generalized | Keep every page private; retain the synthetic-LR, single-reviewer, and twelve-work limits; remove the extension if reviewer corrections expose an invalidating defect | Student | Final claim review and deposit preflight |
 
 ## Checkpoint cadence
 

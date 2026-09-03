@@ -134,8 +134,10 @@ def test_pending_human_outcomes_remain_open_while_sanitized_scientific_decisions
     assert [row["Record ID"] for row in enacted] == ["DEV-SCI-01", "DEV-PROF-01"]
     assert enacted[0]["Status"] == "closed_reexecuted"
     assert "1152/1152 unique rows" in enacted[0]["Re-execution and closure"]
-    assert enacted[1]["Status"] == "open_bounded"
+    assert enacted[1]["Status"] == "closed_reconciled"
     assert "216/216 outputs" in enacted[1]["Re-execution and closure"]
+    assert "12/12 reviewed cases" in enacted[1]["Re-execution and closure"]
+    assert "70-file final manifest" in enacted[1]["Re-execution and closure"]
     assert "No enacted deviations are recorded" not in DEVIATION_PATH.read_text(encoding="utf-8")
 
 
@@ -218,7 +220,7 @@ def test_superseded_scope_email_and_current_joint_review_remain_unsent() -> None
     assert "tutor-review-email-draft.md" in superseded
     assert "status: draft — not sent" in lowered
     assert "elena" in lowered and "jorge" in lowered
-    assert "smb" in lowered and "71f683c" in lowered
+    assert "smb" in lowered and "780cdea" in lowered
     assert "doce obras externas" in lowered
     assert "completo" in lowered
     assert current.count("¿") == 1 and current.count("?") == 1

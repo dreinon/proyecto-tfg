@@ -35,6 +35,10 @@ def test_experimental_claims_are_bounded_and_resolve_when_evidence_is_retained()
         "ADAPT-V1-RECONCILIATION",
         "ADAPT-V1-FIDELITY",
         "ADAPT-V1-QUALITATIVE",
+        "PROF-PILOT-RECONCILIATION",
+        "PROF-PILOT-FIDELITY",
+        "PROF-PILOT-QUALITATIVE",
+        "PROF-DEMONSTRATOR",
     }
     for row in rows:
         assert row["review_status"] == "reviewed"
