@@ -60,8 +60,9 @@ Coloca las páginas en `data/raw/professional-pilot-v1/` y copia allí la planti
 `docs/templates/professional-pilot-source-metadata.csv` con el nombre `source-metadata.csv`.
 Completa los identificadores, la procedencia institucional y los derechos antes de ejecutar. Los
 ficheros de entrada permanecen ignorados por Git. El corpus SJMA actual es privado. Su
-representante legal ha autorizado el procesamiento en un entorno privado de Kaggle, pero la ruta
-local sigue siendo la predeterminada y ninguna entrada o salida debe hacerse pública.
+representante legal ha autorizado subir los archivos al servicio de cálculo elegido, pero la ruta
+local sigue siendo la predeterminada. Esa autorización de procesamiento no implica permiso para
+publicar las partituras originales ni sus derivados.
 """
         ),
         code(
@@ -271,6 +272,8 @@ derivado sea correcto para edición, conservación u OMR.
 """
         ),
     ]
+    for index, cell in enumerate(notebook.cells, start=1):
+        cell["id"] = f"professional-pilot-{index:02d}"
     return notebook
 
 
