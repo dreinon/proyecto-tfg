@@ -180,6 +180,9 @@ def staff_scale_figure(sample: pd.DataFrame, output_root: Path) -> list[Path]:
 
 def effort_figure(effort: pd.DataFrame, output_root: Path) -> list[Path]:
     _style()
+    # Type 3 avoids a spurious .notdef reference produced by the Matplotlib TrueType subset when
+    # this figure is embedded with pdfTeX; veraPDF otherwise rejects the final PDF/A-2b document.
+    plt.rcParams["pdf.fonttype"] = 3
     completed = effort[effort["entry_id"] != "EFF-P5-REMAINING"].copy()
     planned = np.array([60, 65, 75, 75, 55], dtype=float)
     reconstructed = completed["estimate_hours"].to_numpy(dtype=float)
@@ -211,15 +214,17 @@ def effort_figure(effort: pd.DataFrame, output_root: Path) -> list[Path]:
         linewidth=0.45,
         label="Reconstrucción central",
     )
-    axis.annotate(
-        "+22 h previstas",
-        xy=(x[-1] + width / 2, reconstructed[-1]),
-        xytext=(x[-1] - 0.55, 88),
-        arrowprops={"arrowstyle": "->", "color": INK, "linewidth": 0.8},
+    axis.text(
+        0.98,
+        0.95,
+        "Total reconstruido: 346 h",
+        transform=axis.transAxes,
+        ha="right",
+        va="top",
         fontsize=8,
         color=INK,
     )
-    axis.set_title("Esfuerzo planificado y reconstruido por fase")
+    axis.set_title("Esfuerzo inicial y reconstruido hasta el 1 de septiembre")
     axis.set_xlabel("Fase")
     axis.set_ylabel("Horas")
     axis.set_xticks(x, phases)
@@ -230,8 +235,9 @@ def effort_figure(effort: pd.DataFrame, output_root: Path) -> list[Path]:
     figure.text(
         0.01,
         0.03,
-        "Plan: 330 h. Reconstrucción completada: 326 h (intervalo plausible 294-358 h). "
-        "Previsión final: 348 h. Las estimaciones no son un registro horario.",
+        "Plan: 330 h. Reconstrucción hasta el 1 de septiembre: 346 h "
+        "(intervalo plausible 312-380 h). Previsión final tras cierre y piloto: 378-384 h. "
+        "Las estimaciones no son un registro horario.",
         fontsize=8,
         color="#4B5563",
     )

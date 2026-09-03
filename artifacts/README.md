@@ -1,8 +1,11 @@
 # Experiment artefacts
 
-Generated artefacts are not committed here. Every reported run should preserve, in suitable local
-or remote storage, its configuration, environment snapshot, logs, raw per-item metrics, aggregate
-tables, representative outputs, failure notes, and checkpoint identity/checksum.
+Generated evidence bundles are intentionally ignored by Git. Every reported run preserves, in
+suitable controlled local or remote storage, its configuration, environment snapshot, logs, raw
+per-item metrics, aggregate tables, representative outputs, failure notes, and checkpoint
+identity/checksum.
 
-Published thesis figures and small final tables may later be copied to a specifically reviewed,
-versioned location.
+Reproduction scripts and reviewed summaries are versioned in this repository. Final aggregate
+tables and selected non-restricted figures are incorporated into the separate thesis repository;
+raw SMB or private-corpus images, adapted weights, secrets, caches, and large outputs are never
+committed.

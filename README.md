@@ -12,9 +12,12 @@ La memoria académica del TFG se mantiene en un repositorio independiente. Este 
 
 Las partituras presentan características visuales particulares: líneas finas de pentagrama, símbolos pequeños, texto, ligaduras, alteraciones y otros elementos cuya pérdida o modificación puede cambiar no solo la apariencia de la imagen, sino también su significado musical.
 
-El proyecto parte de partituras disponibles en alta resolución que actuarán como referencia. A partir de ellas se generarán versiones degradadas de menor resolución mediante procesos controlados.
+El proyecto parte de partituras disponibles en alta resolución que actúan como referencia. A partir
+de ellas se generan versiones degradadas de menor resolución mediante procesos controlados.
 
-Sobre estas versiones se aplicarán distintas técnicas y modelos de superresolución. Los resultados obtenidos se compararán posteriormente con las imágenes originales para analizar hasta qué punto los modelos son capaces de reconstruir correctamente la información perdida.
+Sobre estas versiones se aplican distintas técnicas y modelos de superresolución. Los resultados se
+comparan con las imágenes originales para analizar hasta qué punto los modelos reconstruyen la
+información perdida sin introducir defectos de notación.
 
 El flujo experimental básico puede representarse de la siguiente manera:
 
@@ -36,13 +39,15 @@ El núcleo del TFG se centra en:
 
 El objetivo no es necesariamente desarrollar una nueva arquitectura de superresolución, sino estudiar, adaptar y evaluar técnicas existentes en un dominio con características muy específicas.
 
-## Metodología prevista
+## Metodología aplicada
 
 El planteamiento experimental parte de disponer de una imagen original de alta calidad que pueda utilizarse como referencia o *ground truth*.
 
-A partir de dicha imagen se generará una versión degradada utilizando distintos procesos de reducción de resolución. Esta imagen será la entrada del modelo de superresolución.
+A partir de dicha imagen se genera una versión degradada utilizando procesos controlados de
+reducción, desenfoque, ruido y compresión. Esta imagen es la entrada del modelo de superresolución.
 
-La salida generada por el modelo podrá compararse directamente con el original, permitiendo estudiar cuantitativa y cualitativamente la capacidad del sistema para recuperar la información eliminada durante la degradación.
+La salida se compara directamente con el original para estudiar cuantitativa y cualitativamente la
+capacidad del sistema para recuperar la información eliminada durante la degradación.
 
 Además de métricas generales de reconstrucción de imagen, será especialmente importante observar posibles errores relevantes en una partitura, como:
 
@@ -74,7 +79,10 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
-El entorno local instala PyTorch para CPU y se utiliza para preparar datos, probar los pipelines, calcular métricas y ejecutar experimentos pequeños. Los entrenamientos o evaluaciones que necesiten aceleración se ejecutarán en Kaggle, registrando la revisión del *notebook*, el acelerador, el entorno, la configuración, las semillas y los artefactos de cada ejecución.
+El entorno local instala PyTorch para CPU y se utiliza para preparar datos, probar los *pipelines*,
+calcular métricas y ejecutar experimentos pequeños. Los entrenamientos y evaluaciones acelerados se
+ejecutaron en Kaggle y registraron la revisión del *notebook*, el acelerador, el entorno, la
+configuración, las semillas y los artefactos de cada ejecución.
 
 La guía completa está en [`DEVELOPMENT.md`](DEVELOPMENT.md).
 
@@ -91,7 +99,7 @@ La guía completa está en [`DEVELOPMENT.md`](DEVELOPMENT.md).
 
 ## Reproducibilidad
 
-Cada resultado que se utilice en la memoria deberá poder relacionarse con:
+Cada resultado utilizado en la memoria se relaciona con:
 
 * una revisión concreta del código;
 * el origen, versión, licencia y partición del conjunto de datos;
@@ -126,7 +134,8 @@ evidencia de generalización fuera del corpus; el contrato completo está en
 
 ## Alcance profesional y posibles ampliaciones
 
-El proyecto está diseñado de forma que el alcance pueda ampliarse si el desarrollo del núcleo principal avanza adecuadamente. Las siguientes líneas se consideran extensiones posibles y **no forman parte necesariamente del alcance mínimo del TFG**.
+El núcleo y una ampliación profesional acotada están completados. Las restantes líneas se conservan
+como trabajo futuro y no forman parte del resultado evaluado.
 
 ### Demostrador profesional sobre imágenes
 
@@ -178,7 +187,7 @@ Por ello, una posible línea adicional consiste en estudiar métodos de evaluaci
 
 ### Otros experimentos
 
-Dependiendo de los resultados obtenidos durante el desarrollo, también podrán explorarse aspectos como:
+En trabajos posteriores también pueden explorarse aspectos como:
 
 * diferentes tipos y niveles de degradación;
 * diferentes factores de ampliación;
@@ -190,9 +199,9 @@ Dependiendo de los resultados obtenidos durante el desarrollo, también podrán 
 
 ## Estado del proyecto
 
-Proyecto en desarrollo como parte de un Trabajo de Fin de Grado.
-
-La infraestructura inicial del repositorio ya está preparada: entorno reproducible con `uv`, Python 3.12.12, PyTorch local para CPU, soporte para Jupyter y Kaggle, pruebas, linting y captura del entorno de ejecución.
+La implementación y la evaluación previstas para la memoria están completadas. El repositorio
+incluye un entorno reproducible con `uv`, Python 3.12.12, PyTorch local para CPU, soporte para
+Jupyter y Kaggle, pruebas, linting y captura del entorno de ejecución.
 
 SMB está seleccionado y auditado en una revisión inmutable de Hugging Face. Una primera ejecución
 piloto reveló que la degradación calibrada en píxeles absolutos no mantenía la severidad al cambiar
