@@ -1,7 +1,7 @@
 # Professional demonstrator and external applicability pilot v1
 
-Status: implementation complete; external inputs frozen; evaluation and institutional agreement
-pending
+Status: implementation and external evaluation complete; qualitative review and institutional
+agreement pending
 
 ## Professional purpose
 
@@ -86,11 +86,13 @@ case-specific copyright and attribution decision; the institutional agreement do
 third-party rights.
 
 The default execution venue for this private corpus is the local project environment. On 3
-September 2026, the student, acting as SJMA president and legal representative, confirmed the
-entity's authorization to upload the material to a private compute environment if needed. This
-permits Kaggle as a fallback for the experiment, but it does not authorize a public Kaggle dataset,
-public notebook outputs, or broader publication of the pages. The local CPU path remains preferred
-while it completes within the available review window.
+September 2026, the student, acting as SJMA president and legal representative, confirmed that the
+entity authorizes uploading the supplied files to whichever compute service is selected for this
+work. This permits Kaggle or another remote environment as a fallback for the experiment. That
+processing authorization is not, by itself, permission to publish a public dataset, public notebook
+outputs, or the score pages: those acts additionally depend on the rights in each underlying work,
+arrangement, and edition. The local CPU path remains preferred while it completes within the
+available review window.
 
 ### Frozen input selection (3 September 2026)
 
@@ -140,6 +142,23 @@ checkpoints, source bytes, Git revision, device, and fixed qualitative assignmen
 
 This remains an external-corpus test with synthetic LR. Even when HR pages are genuine scans with
 paper or printing defects, it is not evidence about naturally acquired low-resolution pairs.
+
+### Executed evidence (3 September 2026)
+
+The local CPU run completed from clean Git revision
+`62db40ff8f9491f244ddfaeb0cdc13f7482d8718` in 3396.28 seconds. It reconciled all 216 unique
+work-condition-method outputs across twelve independent works, six conditions, and three methods;
+the analysis produced eighteen aggregate rows, twenty-four paired bootstrap rows, and sixty images
+for the twelve fixed qualitative cases. The artifact manifest verifies 68 retained files. Raw
+pages, generated page images, checkpoints, and the evidence bundle remain ignored by Git.
+
+Before qualitative interpretation, the adapted EDSR has positive mean adapted-minus-official
+deltas for both PSNR-Y and SSIM-Y in every condition. The PSNR-Y differences range from +1.838 dB
+(`x4-moderate`) to +8.204 dB (`x2-strong`); the SSIM-Y differences range from +0.0050
+(`x2-clean`) to +0.1581 (`x2-strong`). The source-level 95% bootstrap interval excludes zero for
+every adapted-versus-official comparison except SSIM-Y under `x2-clean`. These are fidelity results
+against synthetically degraded external HR pages, not yet evidence that every derivative is
+professionally acceptable. The fixed twelve-case human review remains mandatory.
 
 ## Qualitative and operational acceptance
 

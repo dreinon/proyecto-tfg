@@ -65,8 +65,11 @@ protected and takes precedence over this extension.
    and ACAD-03 authoritative Overleaf review remain human-owned. They do not block main Phases 1-4
    but must be closed before the Phase 5 deposit gate.
 4. **Removable professional pilot:** the image-only demonstrator and external test may proceed in
-   parallel after the current complete thesis is sent for review. It can enter the thesis only as a
-   complete, reconciled block and is removed immediately if it competes with reviewer corrections.
+   parallel after the current complete thesis is sent for review. The 216-output external run and
+   its fixed twelve-case evidence were reconciled on 3 September; qualitative review,
+   administrative closure, and conditional thesis integration remain. It can enter the thesis only
+   as a complete, reconciled block and is removed immediately if it competes with reviewer
+   corrections.
 
 No lane may infer reviewer answers, private eligibility, contemporaneously measured hours, or
 authoritative render status. A retrospective effort estimate must remain labelled as such.
