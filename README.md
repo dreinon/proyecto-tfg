@@ -128,22 +128,26 @@ evidencia de generalización fuera del corpus; el contrato completo está en
 
 El proyecto está diseñado de forma que el alcance pueda ampliarse si el desarrollo del núcleo principal avanza adecuadamente. Las siguientes líneas se consideran extensiones posibles y **no forman parte necesariamente del alcance mínimo del TFG**.
 
-### Aplicación sobre imágenes y PDF
+### Demostrador profesional sobre imágenes
 
-Una posible ampliación consiste en desarrollar una herramienta o prototipo que permita utilizar los modelos obtenidos de una forma más cercana a un caso de uso real.
+Se ha iniciado una ampliación acotada para utilizar el EDSR adaptado como generador de copias de
+consulta ampliadas. El demostrador local permite cargar una imagen, escoger x2/x4, comparar el
+original y el derivado, descargar la salida y conservar la identidad del modelo. Su contrato y sus
+reglas de seguridad están en
+[`docs/professional-demonstrator-v1.md`](docs/professional-demonstrator-v1.md).
 
-Por ejemplo, podría permitir:
+El alcance actual permite:
 
 * cargar una imagen de una partitura;
-* aplicar automáticamente el proceso de superresolución;
+* aplicar el EDSR adaptado en x2 o x4;
 * visualizar o descargar el resultado;
 * procesar páginas completas;
-* aceptar documentos PDF;
-* convertir las páginas del PDF en imágenes;
-* aplicar superresolución a cada página;
-* reconstruir posteriormente un PDF mejorado.
+* comparar el original y el derivado;
+* mostrar tiempo, escala e identidad del checkpoint.
 
-Esta extensión permitiría transformar los experimentos realizados durante el TFG en un prototipo funcional.
+El tratamiento de PDF, el despliegue público y cualquier garantía de restauración permanecen fuera
+de alcance. La ampliación solo se considerará resultado del TFG si completa la prueba externa y la
+revisión antes del depósito.
 
 ### Superresolución como preprocesamiento para OMR
 
@@ -196,4 +200,5 @@ Tras completar ese núcleo, se ha promovido un estudio secundario acotado de
 nuevo. La ejecución acelerada ya está reconciliada: los resultados y sus límites se documentan en
 [`docs/smb-edsr-finetuning-v1-results.md`](docs/smb-edsr-finetuning-v1-results.md) y se incorporan
 a la memoria sin publicar imágenes ni pesos derivados de SMB. Las
-funcionalidades adicionales descritas en este documento continúan siendo ampliaciones opcionales.
+funcionalidades adicionales continúan siendo opcionales salvo el demostrador de imágenes y su
+prueba externa acotada, promovidos bajo un protocolo removible que no puede retrasar el depósito.

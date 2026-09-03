@@ -11,6 +11,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
   "cairosvg==2.9.0",
   "datasets>=5.0.1,<6",
+  "gradio>=6,<7",
   "imagehash>=4.3.2,<5",
   "jsonschema>=4.26,<5",
   "matplotlib>=3.11.1,<4",

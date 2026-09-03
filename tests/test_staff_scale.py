@@ -11,6 +11,7 @@ import pytest
 import yaml
 from PIL import Image
 
+import score_super_resolution.staff_scale as staff_scale
 from score_super_resolution.benchmark_policy import (
     BenchmarkPurpose,
     BenchmarkState,
@@ -22,10 +23,12 @@ from score_super_resolution.identities import canonical_sha256
 from score_super_resolution.staff_scale import (
     CONDITIONS,
     ESTIMATOR_ID,
+    FULL_PAGE_ESTIMATOR_ID,
     StaffScaleError,
     apply_scale_normalized_degradation,
     canonical_smb_pixel_sha256,
     estimate_staff_spacing,
+    estimate_staff_spacing_full_page,
     load_evaluation_sample_v2,
     load_scale_normalized_control,
 )
@@ -93,6 +96,32 @@ def test_staff_estimator_recovers_scale_instead_of_absolute_pixels() -> None:
     assert large.sequence_count >= 2
     with pytest.raises(StaffScaleError, match="fewer than two"):
         estimate_staff_spacing(np.full((200, 300, 3), 255, dtype=np.uint8), small_regions[:1])
+
+
+@pytest.mark.parametrize("gap", [8, 20])
+def test_full_page_staff_estimator_needs_no_dataset_annotations(gap: int) -> None:
+    pixels, _ = _synthetic_staff_page(gap)
+
+    estimate = estimate_staff_spacing_full_page(pixels)
+
+    assert estimate.spacing_px == pytest.approx(float(gap), abs=0.15)
+    assert estimate.estimator_id == FULL_PAGE_ESTIMATOR_ID
+    assert estimate.sequence_count >= 2
+    with pytest.raises(StaffScaleError, match="fewer than two"):
+        estimate_staff_spacing_full_page(np.full((200, 300, 3), 255, dtype=np.uint8))
+
+
+def test_full_page_staff_estimator_has_input_only_projection_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pixels, _ = _synthetic_staff_page(13)
+    monkeypatch.setattr(staff_scale, "_region_staff_candidates", lambda _region: ([], 0.0))
+
+    estimate = estimate_staff_spacing_full_page(pixels)
+
+    assert estimate.spacing_px == pytest.approx(13.0, abs=0.1)
+    assert estimate.estimator_id == FULL_PAGE_ESTIMATOR_ID
+    assert estimate.sequence_count >= 2
 
 
 def test_canonical_smb_pixel_hash_uses_the_audited_rgba_frame() -> None:

@@ -29,6 +29,7 @@ CONDITIONS = (
     "x4-strong",
 )
 ESTIMATOR_ID = "region-deskew-horizontal-morphology-v1"
+FULL_PAGE_ESTIMATOR_ID = "full-page-hybrid-horizontal-v2"
 SAMPLE_RELATIVE_PATH = Path("data/audits/smb-evaluation-sample-v2.csv")
 CONTROL_RELATIVE_PATH = Path("configs/degradations/staff-scale-score-v2.yaml")
 SAMPLE_SIZE = 64
@@ -180,6 +181,36 @@ def _region_staff_candidates(region: np.ndarray) -> tuple[list[float], float]:
     return _equidistant_five_line_sequences(centers), angle
 
 
+def _projection_staff_candidate(region: np.ndarray) -> float | None:
+    """Estimate staff periodicity when compression breaks long morphological line support."""
+
+    gray = cv2.cvtColor(region, cv2.COLOR_RGB2GRAY)
+    deskewed, _angle = _deskew_region(gray)
+    darkness = 255.0 - deskewed.astype(np.float64)
+    signal = darkness.mean(axis=1)
+    trend = cv2.GaussianBlur(signal[:, None], (1, 0), 20.0).ravel()
+    centered = signal - trend
+    deviation = float(centered.std())
+    if not math.isfinite(deviation) or deviation < 1e-6:
+        return None
+    normalized = (centered - centered.mean()) / deviation
+    maximum_lag = min(32, len(normalized) // 4)
+    correlations = {
+        lag: float(np.mean(normalized[:-lag] * normalized[lag:]))
+        for lag in range(4, maximum_lag + 1)
+    }
+    if not correlations:
+        return None
+    best_lag = max(correlations, key=correlations.get)
+    best_score = correlations[best_lag]
+    if best_lag % 2 == 0 and correlations.get(best_lag // 2, -math.inf) >= 0.75 * best_score:
+        best_lag //= 2
+        best_score = correlations[best_lag]
+    if best_score < 0.20:
+        return None
+    return float(best_lag)
+
+
 def estimate_staff_spacing(pixels: np.ndarray, regions: object) -> StaffSpacingEstimate:
     """Estimate staff-space from annotated systems without using SR outputs or metrics."""
 
@@ -212,6 +243,65 @@ def estimate_staff_spacing(pixels: np.ndarray, regions: object) -> StaffSpacingE
         sequence_count=len(inliers),
         contributing_regions=contributing_regions,
         median_deskew_degrees=float(np.median(angles)) if angles else 0.0,
+    )
+
+
+def estimate_staff_spacing_full_page(pixels: np.ndarray) -> StaffSpacingEstimate:
+    """Estimate staff space without dataset annotations for external professional inputs."""
+
+    validate_rgb8(pixels)
+    height, width = pixels.shape[:2]
+    if height < 120 or width < 200:
+        raise StaffScaleError("full-page staff estimation requires a page-sized image")
+    left = round(width * 0.03)
+    right = round(width * 0.97)
+    top = round(height * 0.03)
+    bottom = round(height * 0.97)
+    page = np.ascontiguousarray(pixels[top:bottom, left:right])
+    midpoint = page.shape[0] // 2
+    regions = (
+        page,
+        np.ascontiguousarray(page[:midpoint]),
+        np.ascontiguousarray(page[midpoint:]),
+    )
+    candidates: list[float] = []
+    angles: list[float] = []
+    contributing_regions = 0
+    for region in regions:
+        region_candidates, angle = _region_staff_candidates(region)
+        angles.append(angle)
+        if region_candidates:
+            contributing_regions += 1
+            candidates.extend(region_candidates)
+    if len(candidates) >= 2:
+        initial_median = float(np.median(candidates))
+        tolerance = max(1.5, 0.20 * initial_median)
+        inliers = [value for value in candidates if abs(value - initial_median) <= tolerance]
+    else:
+        projection_candidates = [
+            candidate
+            for region in regions
+            if (candidate := _projection_staff_candidate(region)) is not None
+        ]
+        if len(projection_candidates) < 2:
+            raise StaffScaleError("fewer than two staff sequences support the full-page scale")
+        initial_median = float(np.median(projection_candidates))
+        tolerance = max(1.5, 0.20 * initial_median)
+        inliers = [
+            value for value in projection_candidates if abs(value - initial_median) <= tolerance
+        ]
+        contributing_regions = len(inliers)
+    if len(inliers) < 2:
+        raise StaffScaleError("full-page staff-spacing candidates are not mutually consistent")
+    spacing = float(np.median(inliers))
+    if not 4.0 <= spacing <= 64.0:
+        raise StaffScaleError("full-page staff spacing is outside the supported range")
+    return StaffSpacingEstimate(
+        spacing_px=spacing,
+        estimator_id=FULL_PAGE_ESTIMATOR_ID,
+        sequence_count=len(inliers),
+        contributing_regions=contributing_regions,
+        median_deskew_degrees=float(np.median(angles)),
     )
 
 

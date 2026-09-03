@@ -6,13 +6,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+from score_super_resolution.contracts import ContractValidationError, validate_instance
 from score_super_resolution.identities import (
     canonical_sha256,
     execution_identity,
     experiment_identity,
 )
-
-from score_super_resolution.contracts import ContractValidationError, validate_instance
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "contracts"
 

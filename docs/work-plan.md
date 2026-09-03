@@ -5,8 +5,8 @@ not a claim about work already performed. Because no contemporaneous timesheet w
 student authorized a transparent retrospective reconstruction on 1 September 2026. The initial
 330-hour plan and the reconstructed estimate are kept separate; `effort-log.csv` records central
 estimates, uncertainty bounds, and evidence rather than presenting reconstructed values as clocked
-hours. Both the initial plan and the 348-hour final forecast are within the GCD guidance range of
-approximately 300-360 hours.
+hours. The original 368-hour closeout forecast already exceeds the approximate 300--360-hour GCD
+guidance range and is reported transparently rather than adjusted to fit it.
 
 The target windows below are evidence-gate dates, not statements of actual attendance or completed
 effort. The compressed calendar is a material schedule risk: it is viable only if the student-entered
@@ -46,6 +46,13 @@ This is a task-based retrospective estimate, not a recovered stopwatch log. The 
 reported because commit timestamps, compute runtime, and automated-agent duration do not equal
 student dedication. No exact daily attendance or unobserved cost is inferred.
 
+On 3 September the student authorized `professional-pilot-v1` as an independently removable
+extension. Its additional planning envelope is **10--16 hours** for source preparation, execution,
+fixed qualitative review, evidence reconciliation, and conditional thesis integration; software
+implementation time is not retroactively asserted as student attendance. If completed, the total
+forecast becomes **378--384 hours**. The original 22-hour review/deposit/defence reserve remains
+protected and takes precedence over this extension.
+
 ## Execution lanes under D-16
 
 1. **Phase 2 blocking scientific core:** the locally frozen objectives and questions,
@@ -57,6 +64,9 @@ student dedication. No exact daily attendance or unobserved cost is inferred.
 3. **Parallel `academic-closeout`:** ACAD-01 tutor compatibility, ACAD-02 private DELV-01 checks,
    and ACAD-03 authoritative Overleaf review remain human-owned. They do not block main Phases 1-4
    but must be closed before the Phase 5 deposit gate.
+4. **Removable professional pilot:** the image-only demonstrator and external test may proceed in
+   parallel after the current complete thesis is sent for review. It can enter the thesis only as a
+   complete, reconciled block and is removed immediately if it competes with reviewer corrections.
 
 No lane may infer reviewer answers, private eligibility, contemporaneously measured hours, or
 authoritative render status. A retrospective effort estimate must remain labelled as such.
@@ -66,7 +76,8 @@ authoritative render status. A retrospective effort estimate must remain labelle
 - Deposit-ready internal target: **31 August 2026**.
 - Contingency: **1-6 September 2026**, reserved for tutor feedback, invalidating defects, clean
   replay, final compliance, and deposit operations.
-- Scope-expansion freeze: **3 September 2026**. Optional work cannot enter after this point.
+- Scope-expansion freeze: **3 September 2026**. `DEV-PROF-01` is the sole bounded exception made on
+  that date; no further optional scope enters.
 - Hard deposit deadline: **7 September 2026**.
 - Missing any critical-path checkpoint triggers a recorded replan and removal of optional scope
   before the contingency is consumed.
@@ -98,7 +109,7 @@ authoritative render status. A retrospective effort estimate must remain labelle
 | Printing and administrative incidentals | Only if the current live process requires them | EUR 0-50 provisional allowance | Current call and Ebrón instructions determine need |
 
 The direct external planning range is **EUR 20-160**. It is estimated, not incurred. Student labour
-is represented by the initial 330-hour plan and revised 348-hour forecast and is not assigned a
+is represented by the initial 330-hour plan and revised forecasts above and is not assigned a
 fabricated monetary rate. No actual cost is recorded in this file; actual expenditure requires
 student evidence and a dated entry.
 
@@ -114,6 +125,7 @@ student evidence and a dated entry.
 | R-06 | Aggregate metrics conflict with notation-failure evidence | Medium | Critical | Systematic musical alteration appears despite favourable image scores | Withhold recommendation; retain negative cases; apply predeclared contradiction rules | Student; accountable interpretation reviewer | Phase 4 reconciliation and claim review |
 | R-07 | Private eligibility, Ebrón access, or authoritative Overleaf state remains pending | Medium | Critical | Any ACAD-02 or ACAD-03 item is unresolved at Phase 5 closeout | Keep private proof outside Git; resolve through academic-closeout; fail deposit readiness while open | Student | Academic-closeout and Phase 5 pre-deposit gate |
 | R-08 | Thesis claims, citations, figures, or defence logistics lack current evidence | Medium | High | Claim ledger is not reviewed or live call differs from planning assumptions | Reject unreviewed promotion; recheck current sources; keep a static defence fallback | Student and tutor at named reviews | Phase 5 evidence and defence gates |
+| R-09 | External pilot inputs, rights, compute, or review are incomplete before final corrections | High | High | The 15 input works are not frozen promptly, 216 outputs do not reconcile, or reviewer corrections need the same time | Apply `DEV-PROF-01` NO-GO, keep the already complete thesis wording, and preserve all deposit-critical work | Student | Daily until thesis integration or NO-GO |
 
 ## Checkpoint cadence
 

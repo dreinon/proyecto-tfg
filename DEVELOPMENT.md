@@ -46,3 +46,17 @@ address the same dataset state.
 - `data/sources/`: immutable external-source descriptors.
 - `data/manifests/`: reproducible selections and project-defined splits.
 - `artifacts/`: documentation of artefact conventions; generated outputs are ignored.
+
+## Professional demonstrator
+
+After restoring the validated x2/x4 adaptation checkpoints under
+`artifacts/kaggle/smb-edsr-finetuning-v1/training/`, launch the local image demonstrator with:
+
+```bash
+uv run python app.py
+```
+
+The interface does not need Hugging Face access because it performs inference on a user-supplied
+image. Set `SCORE_SR_CHECKPOINT_DIR` only when the private checkpoints are mounted elsewhere. The
+full application and external-pilot contract is in
+[`docs/professional-demonstrator-v1.md`](docs/professional-demonstrator-v1.md).

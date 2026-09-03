@@ -1,0 +1,16 @@
+role,work_id,file_name,genre,instrument,orientation,source_type,rights_basis,source_reference,notation_density,document_condition,text_present,notes
+engineering,pilot-001,pilot-001.png,genre,instrument,horizontal,scan,private-study-only,private-collection,medium,clean,yes,Loader and estimator pilot only
+engineering,pilot-002,pilot-002.png,genre,instrument,vertical,born-digital,private-study-only,private-collection,dense,clean,yes,Loader and estimator pilot only
+engineering,pilot-003,pilot-003.png,genre,instrument,vertical,scan,private-study-only,private-collection,sparse,aged,yes,Loader and estimator pilot only
+test,work-001,work-001.png,genre,instrument,horizontal,scan,private-study-only,private-collection,medium,clean,yes,
+test,work-002,work-002.png,genre,instrument,vertical,scan,private-study-only,private-collection,dense,aged,yes,
+test,work-003,work-003.png,genre,instrument,vertical,born-digital,private-study-only,private-collection,sparse,clean,yes,
+test,work-004,work-004.png,genre,instrument,horizontal,scan,private-study-only,private-collection,medium,mixed,yes,
+test,work-005,work-005.png,genre,instrument,vertical,born-digital,private-study-only,private-collection,dense,clean,yes,
+test,work-006,work-006.png,genre,instrument,vertical,scan,private-study-only,private-collection,sparse,aged,yes,
+test,work-007,work-007.png,genre,instrument,horizontal,scan,private-study-only,private-collection,dense,mixed,yes,
+test,work-008,work-008.png,genre,instrument,vertical,born-digital,private-study-only,private-collection,medium,clean,yes,
+test,work-009,work-009.png,genre,instrument,vertical,scan,private-study-only,private-collection,sparse,clean,yes,
+test,work-010,work-010.png,genre,instrument,horizontal,scan,private-study-only,private-collection,medium,aged,yes,
+test,work-011,work-011.png,genre,instrument,vertical,born-digital,private-study-only,private-collection,dense,clean,yes,
+test,work-012,work-012.png,genre,instrument,vertical,scan,private-study-only,private-collection,medium,mixed,yes,

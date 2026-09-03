@@ -16,6 +16,7 @@ DEVIATION_PATH = DOCS / "deviation-log.md"
 CLAIM_PATH = DOCS / "claim-evidence.csv"
 GATE_PATH = DOCS / "checkpoints" / "phase-01-human-gates.md"
 EMAIL_PATH = DOCS / "tutor-email-draft.md"
+REVIEW_EMAIL_PATH = DOCS / "tutor-review-email-draft.md"
 
 CLAIM_COLUMNS = (
     "schema_version",
@@ -130,9 +131,11 @@ def test_pending_human_outcomes_remain_open_while_sanitized_scientific_decisions
     ]
     enacted_columns, enacted = _markdown_table(DEVIATION_PATH, "## Enacted deviations")
     assert enacted_columns == ENACTED_DEVIATION_COLUMNS
-    assert [row["Record ID"] for row in enacted] == ["DEV-SCI-01"]
+    assert [row["Record ID"] for row in enacted] == ["DEV-SCI-01", "DEV-PROF-01"]
     assert enacted[0]["Status"] == "closed_reexecuted"
     assert "1152/1152 unique rows" in enacted[0]["Re-execution and closure"]
+    assert enacted[1]["Status"] == "open_bounded"
+    assert "216/216 outputs" in enacted[1]["Re-execution and closure"]
     assert "No enacted deviations are recorded" not in DEVIATION_PATH.read_text(encoding="utf-8")
 
 
@@ -206,15 +209,17 @@ def test_human_gate_material_is_private_safe_and_routed_to_closeout() -> None:
         assert forbidden not in lowered
 
 
-def test_tutor_email_is_an_unsent_single_question_about_dataset_compatibility() -> None:
-    text = EMAIL_PATH.read_text(encoding="utf-8")
-    lowered = text.lower()
+def test_superseded_scope_email_and_current_joint_review_remain_unsent() -> None:
+    superseded = EMAIL_PATH.read_text(encoding="utf-8")
+    current = REVIEW_EMAIL_PATH.read_text(encoding="utf-8")
+    lowered = current.lower()
 
+    assert "status: superseded — not sent" in superseded.lower()
+    assert "tutor-review-email-draft.md" in superseded
     assert "status: draft — not sent" in lowered
-    assert "academic-closeout" in lowered
-    assert "smb" in lowered
-    assert "conjuntos de datos" in lowered
-    assert "compatib" in lowered
-    assert text.count("¿") == 1 and text.count("?") == 1
-    assert "checkpoint" not in lowered
-    assert not re.search(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", text)
+    assert "elena" in lowered and "jorge" in lowered
+    assert "smb" in lowered and "71f683c" in lowered
+    assert "doce obras externas" in lowered
+    assert "completo" in lowered
+    assert current.count("¿") == 1 and current.count("?") == 1
+    assert not re.search(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", current)

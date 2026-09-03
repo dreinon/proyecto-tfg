@@ -85,6 +85,23 @@ does not retune the v2 protocol or replace its conclusions about pretrained tran
 complete and independently reconciled; its outcomes and boundaries are recorded in
 [`smb-edsr-finetuning-v1-results.md`](smb-edsr-finetuning-v1-results.md).
 
+### Professional demonstrator and external pilot
+
+After the controlled core, adaptation study, and complete review candidate were secured, the
+student promoted one bounded applicability extension under `DEC-PROF-01`. It consists of an
+image-only x2/x4 local demonstrator for reversible consultation derivatives and an outcome-blind
+external-corpus test. Three to five independent works are reserved for engineering; exactly twelve
+other works are test-only, one page per work. Their HR pages are degraded with the unchanged six
+staff-relative conditions and compared through bicubic, official EDSR, and adapted EDSR, yielding
+216 outputs and twelve fixed qualitative cases.
+
+The external test may assess cross-corpus transfer under synthetic paired degradation. It cannot
+establish performance on naturally acquired LR, restoration safety, OMR improvement, usability by
+professionals, or universal generalization. No external outcome may change inputs, degradation,
+weights, thresholds, or case assignment. Exact inputs, rights boundary, evidence, stop rules, and
+application scope are frozen in
+[`professional-demonstrator-v1.md`](professional-demonstrator-v1.md).
+
 ## Comparison ladder
 
 Proceed only as far as evidence and time permit:
@@ -168,7 +185,8 @@ literal token in a notebook. Use the same immutable dataset revision locally and
 - Do not fine-tune until degradation and interpolation/pretrained baselines are reproducible.
 - Do not inspect the final test set to choose models or hyperparameters.
 - Do not start optional OMR/application work until the core SR evaluation answers the approved
-  objectives.
+  objectives. `DEC-PROF-01` records that this precondition was satisfied for the bounded image-only
+  demonstrator; PDF, deployment, OMR, and further model work remain excluded.
 - After the controlled core is reconciled, record a tutor-approved GO/NO-GO decision on one bounded
   applicability enhancement. A NO-GO is valid when evidence, rights, time, or methodological
   quality are insufficient.
