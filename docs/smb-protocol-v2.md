@@ -62,8 +62,16 @@ The frozen v2 sample contains:
 - staff spacing from 6.526 to 18.275 HR px, with a median of 9.996 px.
 
 Estimator-incompatible pages were skipped by the predeclared input-only rule before the sample was
-frozen. This bounds the final claims to fresh SMB pages with a measurable staff scale; it does not
-support prevalence claims for every SMB page or uncontrolled real scans.
+frozen. The 618-page audit flag refers to completeness of the region text fields; full-page SR does
+not consume those fields, so it was not an input filter for v2. After excluding the 53 v1 source
+works and pages with duplicate or pending relations, 427 pages from 207 works were candidates. The
+deterministic run examined 140 pages before 64 source works had been accepted. It rejected 76 pages
+because the estimator could not produce a valid staff scale: 75 belonged to the 618 pages with
+complete region text and one to the 67-page incomplete group. The final sample contains 56 pages
+from the former group and eight from the latter; all 64 have valid image pixels, geometry, and staff
+scale for the executed image-level evaluation. This bounds the final claims to fresh SMB pages with
+a measurable staff scale; it does not support prevalence claims for every SMB page or uncontrolled
+real scans.
 
 ## Frozen identities
 
