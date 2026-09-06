@@ -17,6 +17,7 @@ from pathlib import Path
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import Rectangle
 from PIL import Image
 
@@ -74,7 +75,9 @@ def _crop(pixels: np.ndarray, box: tuple[int, int, int, int]) -> np.ndarray:
 
 
 def _image_axis(axis: plt.Axes, pixels: np.ndarray, title: str, *, title_size: float = 9.0) -> None:
-    axis.imshow(pixels, interpolation="nearest")
+    # The PDF backend embeds the native RGB array without resampling. The PNG is
+    # only a preview; the thesis uses the lossless PDF representation.
+    axis.imshow(pixels, interpolation="none")
     axis.set_title(title, pad=5, fontweight="bold", fontsize=title_size)
     axis.set_xticks([])
     axis.set_yticks([])
@@ -93,6 +96,7 @@ def _save(figure: plt.Figure, output_root: Path, filename: str) -> Path:
         pad_inches=0.05,
         pil_kwargs={"compress_level": 9},
     )
+    figure.savefig(output.with_suffix(".pdf"), bbox_inches="tight", pad_inches=0.05)
     plt.close(figure)
     return output
 
@@ -321,6 +325,16 @@ def _detail_gallery(
             }
         )
     _save(figure, output_root, output_name)
+    # One detail case per PDF page: two columns give each crop twice the
+    # printed width of the contact-sheet preview, retaining native pixels.
+    with PdfPages((output_root / output_name).with_suffix(".pdf")) as document:
+        for case_root, box, label in rows:
+            page, axes = plt.subplots(2, 2, figsize=(7.25, 5.5), constrained_layout=True)
+            page.suptitle(label, fontsize=10, fontweight="bold")
+            for axis, filename, title in zip(axes.flat, filenames, titles, strict=True):
+                _image_axis(axis, _crop(_read_rgb(case_root / filename), box), title)
+            document.savefig(page, bbox_inches="tight", pad_inches=0.05)
+            plt.close(page)
     return FigureRecord(
         filename=output_name,
         inputs=tuple(dict.fromkeys(inputs)),
@@ -358,6 +372,12 @@ def _write_manifest(
                 "filename": record.filename,
                 "sha256": _sha256(output),
                 "bytes": output.stat().st_size,
+                "publication_pdf": {
+                    "filename": output.with_suffix(".pdf").name,
+                    "sha256": _sha256(output.with_suffix(".pdf")),
+                    "pages": len(record.detail_regions) or 1,
+                    "image_encoding": "native-rgb-lossless-no-resampling",
+                },
                 "inputs": [
                     {
                         "path": str(Path(path).resolve().relative_to(project_root)),
