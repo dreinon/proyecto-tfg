@@ -211,7 +211,12 @@ Tras completar ese núcleo, se ha promovido un estudio secundario acotado de
 [*fine-tuning* de EDSR](docs/smb-edsr-finetuning-v1.md), con particiones propias por obra y test
 nuevo. La ejecución acelerada ya está reconciliada: los resultados y sus límites se documentan en
 [`docs/smb-edsr-finetuning-v1-results.md`](docs/smb-edsr-finetuning-v1-results.md) y se incorporan
-a la memoria sin publicar imágenes ni pesos derivados de SMB. El demostrador de imágenes y su
-prueba externa acotada ya forman parte del resultado profesional. Las páginas privadas, el
-despliegue público, PDF, OMR y cualquier ampliación adicional permanecen fuera del alcance previo
-al depósito.
+a la memoria mediante resultados agregados, recortes analíticos y una página completa seleccionada
+para explicar el contexto global, siempre atribuida y comentada; no se publican pesos derivados de
+SMB. El demostrador de imágenes y su prueba externa acotada ya forman parte del resultado
+profesional. Las doce páginas externas predeclaradas se muestran como comparaciones HR/LR/SR
+dentro de la memoria y la defensa, incluyendo todos los casos aceptados, con reservas y rechazados,
+conforme al límite de
+[`docs/professional-pilot-publication-basis.md`](docs/professional-pilot-publication-basis.md).
+El corpus bruto, el despliegue público, PDF, OMR y cualquier ampliación adicional permanecen fuera
+del alcance previo al depósito.

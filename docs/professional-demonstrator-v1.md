@@ -1,7 +1,8 @@
 # Professional demonstrator and external applicability pilot v1
 
 Status: implementation, external evaluation, qualitative review, and thesis integration complete;
-public deployment and page reproduction are not authorized by this protocol
+public deployment is excluded, while selected in-thesis page reproduction is governed by the
+separate publication-basis record
 
 ## Professional purpose
 
@@ -79,21 +80,22 @@ student compiled the evaluation corpus but does not own the underlying scores, a
 editions.
 
 SJMA has institutionally authorized access to, upload of, and processing of the supplied pages for
-this TFG. This authorization is sufficient for the private experiment and aggregate reporting, but
-it does not transfer the third-party rights in each work, arrangement, or edition. The pages
-therefore remain `private-study-only` for publication: full source, LR, and SR pages may not enter
-Git, the public demonstrator, the thesis, or defence slides. A small analytical excerpt would also
-require a case-specific reproduction and attribution decision. Any later UPV--SJMA document would
-strengthen the governance record, not replace the underlying rights analysis.
+this TFG. On 6 September 2026 the student, acting as its president and legal representative, also
+confirmed the entity's express authorization to reproduce the twelve predeclared test pages and
+their HR/LR/SR derivatives inside the TFG and its defence materials. This does not transfer
+third-party rights in any work, arrangement, or edition. The thesis therefore limits reproduction
+to attributed analytical comparisons; raw pages, the full output bundle, and non-selected
+derivatives remain outside Git and are not released as a dataset. The exact open-publication
+boundary is recorded in
+[`professional-pilot-publication-basis.md`](professional-pilot-publication-basis.md).
 
 The default execution venue for this private corpus is the local project environment. On 3
 September 2026, the student, acting as SJMA president and legal representative, confirmed that the
 entity authorizes uploading the supplied files to whichever compute service is selected for this
-work. This permits Kaggle or another remote environment as a fallback for the experiment. That
-processing authorization is not, by itself, permission to publish a public dataset, public notebook
-outputs, or the score pages: those acts additionally depend on the rights in each underlying work,
-arrangement, and edition. The local CPU path remains preferred while it completes within the
-available review window.
+work. This permits Kaggle or another remote environment as a fallback for the experiment. It
+remains distinct from the later, bounded figure-publication authorization and does not permit a
+public dataset or public notebook outputs. The local CPU path remains preferred while it completes
+within the available review window.
 
 ### Frozen input selection (3 September 2026)
 
@@ -114,8 +116,9 @@ medium, and dense notation across several genres.
 *El príncipe de Egipto* is the sole reserve because its vertical film-music/saxophone properties
 are already represented by the selected film-music and saxophone cases. This is an input-only
 redundancy decision, not an output-quality exclusion. All selected files are provisionally marked
-`private-study-only`; no page image may be reproduced publicly unless its rights basis is replaced
-with verified permission.
+`private-study-only` in the frozen manifest. That historical value is not rewritten after review;
+the later authorization permits only the twelve in-thesis and defence cases described in the
+separate publication-basis record.
 
 The resulting 15-row input manifest was frozen before generating any LR or SR output with SHA-256
 `5e5a1a1be2ea73fc4e65795165acb40c488fa4003eb5b72e5b17ab56cbcca126`. This supersedes the
