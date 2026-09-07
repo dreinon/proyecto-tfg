@@ -88,6 +88,9 @@ La guía completa está en [`DEVELOPMENT.md`](DEVELOPMENT.md).
 
 ## Estructura del repositorio
 
+Mapa completo y criterios de conservación: [organización del repositorio](docs/repository-layout.md).
+Protocolos, resultados y registros: [índice de documentación](docs/README.md).
+
 * `src/score_super_resolution/`: código reutilizable del proyecto;
 * `tests/`: pruebas deterministas sobre datos pequeños;
 * `notebooks/`: exploración, análisis visual y comunicación de resultados;

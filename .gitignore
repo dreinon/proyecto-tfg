@@ -27,3 +27,10 @@ models/
 data/manifests/.smb-evaluation-v1.install.lock
 
 kaggle.json
+
+# Local editor and operating-system clutter
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo

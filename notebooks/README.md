@@ -15,3 +15,17 @@ and environment snapshot that produced its results.
   `artifacts/phase3-smb-evaluation-v2/` and `phase3-smb-evaluation-v2.zip`.
 
 The rationale and frozen identities are in [`../docs/smb-protocol-v2.md`](../docs/smb-protocol-v2.md).
+
+## Adaptation and professional pilot
+
+- `04-smb-edsr-finetuning.ipynb`: bounded EDSR adaptation with frozen work-disjoint partitions;
+  see [the adaptation protocol](../docs/smb-edsr-finetuning-v1.md).
+- `05-professional-demonstrator-validation.ipynb`: external professional pilot;
+  see [the demonstrator contract](../docs/professional-demonstrator-v1.md).
+
+## Earlier development and review
+
+`smb_human_review.ipynb` and the three `02-*.ipynb` notebooks retain the dataset audit,
+degradation calibration and fixture reviews used during development. They are not the entry
+point for rerunning the final studies, but they are not unused code either. Keep them and
+their generated images as process evidence.
