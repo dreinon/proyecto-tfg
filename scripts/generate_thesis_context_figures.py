@@ -71,6 +71,8 @@ def read_manifest(path: Path) -> pd.DataFrame:
 
 def dataset_profile_figure(records: pd.DataFrame, output_root: Path) -> list[Path]:
     _style()
+    # Avoid the spurious TrueType .notdef reference when embedded by pdfTeX (PDF/A-2b).
+    plt.rcParams["pdf.fonttype"] = 3
     figure, axes = plt.subplots(1, 3, figsize=(10.4, 3.5))
     figure.subplots_adjust(left=0.06, right=0.99, top=0.85, bottom=0.22, wspace=0.34)
 
@@ -84,9 +86,9 @@ def dataset_profile_figure(records: pd.DataFrame, output_root: Path) -> list[Pat
         edgecolor=INK,
         linewidth=0.45,
     )
-    axes[0].set_title("Páginas por obra fuente")
+    axes[0].set_title("Páginas por grupo documental")
     axes[0].set_xlabel("Páginas en el grupo")
-    axes[0].set_ylabel("Número de obras")
+    axes[0].set_ylabel("Número de grupos")
     axes[0].set_xticks([1, 3, 5, 7, 9, 11, 14])
 
     axes[1].scatter(
@@ -123,7 +125,7 @@ def dataset_profile_figure(records: pd.DataFrame, output_root: Path) -> list[Pat
     figure.text(
         0.01,
         0.03,
-        f"{len(records)} páginas, {group_sizes.size} obras fuente. "
+        f"{len(records)} páginas, {group_sizes.size} grupos documentales. "
         "Cada punto representa una página; no se reproducen imágenes del corpus.",
         fontsize=8,
         color="#4B5563",
@@ -144,7 +146,7 @@ def staff_scale_figure(sample: pd.DataFrame, output_root: Path) -> list[Path]:
     )
     axes[0].set_title("Escala observada en la muestra")
     axes[0].set_xlabel("Separación entre líneas del pentagrama (px)")
-    axes[0].set_ylabel("Número de obras")
+    axes[0].set_ylabel("Número de grupos documentales")
     axes[0].legend(loc="upper right")
 
     scale = np.linspace(spacing.min(), spacing.max(), 150)
@@ -170,7 +172,7 @@ def staff_scale_figure(sample: pd.DataFrame, output_root: Path) -> list[Path]:
     figure.text(
         0.01,
         0.03,
-        f"Muestra de {len(sample)} obras independientes; rango observado "
+        f"Muestra de {len(sample)} grupos documentales; rango observado "
         f"{spacing.min():.2f}-{spacing.max():.2f} px. La condición limpia no aplica desenfoque.",
         fontsize=8,
         color="#4B5563",
@@ -188,12 +190,12 @@ def effort_figure(effort: pd.DataFrame, output_root: Path) -> list[Path]:
     reconstructed = completed["estimate_hours"].to_numpy(dtype=float)
     low = completed["low_hours"].to_numpy(dtype=float)
     high = completed["high_hours"].to_numpy(dtype=float)
-    phases = ["P1", "P2", "P3", "P4", "P5"]
+    phases = ["P1\nContrato", "P2\nDiseño", "P3\nModelos", "P4\nEvaluación", "P5\nMemoria"]
     x = np.arange(len(phases))
     width = 0.34
 
     figure, axis = plt.subplots(figsize=(8.6, 4.3))
-    figure.subplots_adjust(left=0.09, right=0.98, top=0.88, bottom=0.22)
+    figure.subplots_adjust(left=0.09, right=0.98, top=0.88, bottom=0.28)
     axis.bar(
         x - width / 2,
         planned,
@@ -224,7 +226,7 @@ def effort_figure(effort: pd.DataFrame, output_root: Path) -> list[Path]:
         fontsize=8,
         color=INK,
     )
-    axis.set_title("Esfuerzo inicial y reconstruido hasta el 1 de septiembre")
+    axis.set_title("Esfuerzo inicial y reconstrucción de referencia")
     axis.set_xlabel("Fase")
     axis.set_ylabel("Horas")
     axis.set_xticks(x, phases)
@@ -235,8 +237,8 @@ def effort_figure(effort: pd.DataFrame, output_root: Path) -> list[Path]:
     figure.text(
         0.01,
         0.03,
-        "Plan: 330 h. Reconstrucción hasta el 1 de septiembre: 346 h "
-        "(intervalo plausible 312-380 h). Previsión final tras cierre y piloto: 378-384 h. "
+        "Plan: 330 h. Reconstrucción de referencia anterior al cierre y al piloto: 346 h\n"
+        "(intervalo plausible 312-380 h). Previsión final tras cierre y piloto: 378-384 h.\n"
         "Las estimaciones no son un registro horario.",
         fontsize=8,
         color="#4B5563",

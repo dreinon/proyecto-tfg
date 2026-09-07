@@ -1,5 +1,16 @@
 # SMB final-evaluation protocol v2
 
+> **AVISO — interpretación posterior, 7 de septiembre de 2026.** El cuerpo de este protocolo
+> congelado conserva la redacción histórica. Sus «works» o «independent works» designan en la
+> implementación IDs documentales SMB: 64 grupos principales y 53 del piloto previo, derivados
+> eliminando solo el sufijo de página `_pN`. No acreditan independencia entre composiciones
+> completas. Los intervalos son condicionales a esa agrupación; movimientos relacionados pueden
+> introducir dependencia residual. Véase la [auditoría de unidad de análisis](unit-of-analysis-audit.md).
+> Además, 618/67 distingue anotación válida/no válida; la completitud textual aislada es 619/66
+> (66 textos incompletos y una caja inválida con texto completo). No cambian las 64 páginas ni
+> los 76 descartes del estimador. Este aviso no modifica contratos, manifiestos, configuración,
+> semillas, imágenes ni resultados congelados.
+
 ## Status and purpose
 
 Protocol v2 corrects a transfer defect found during the first complete SMB run. The degradation

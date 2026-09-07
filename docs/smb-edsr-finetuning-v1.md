@@ -1,5 +1,16 @@
 # SMB EDSR fine-tuning protocol v1
 
+> **AVISO — interpretación posterior, 7 de septiembre de 2026.** Se conserva debajo el contrato
+> histórico congelado, incluidas sus denominaciones «works» y «independent score/work». La
+> implementación separó 45/13/20 grupos documentales por `source_group_id`, no composiciones
+> completas verificadas. No hay páginas ni IDs compartidos entre roles ni reutilización de los
+> 64 IDs principales, pero movimientos de una misma composición sí pueden cruzar roles. Los
+> intervalos bootstrap están condicionados a la independencia supuesta de esos grupos, que la
+> comprobación de IDs no certifica. «Independent reconciliation» al final describe verificación
+> automatizada separada del pipeline principal, no otro revisor humano. Véase la
+> [auditoría de unidad de análisis](unit-of-analysis-audit.md). Este aviso posterior no altera
+> particiones, entrenamiento, selección, configuración, manifiestos ni resultados.
+
 ## Purpose and claim boundary
 
 This is a bounded secondary study of **within-SMB domain adaptation**. It asks whether fine-tuning

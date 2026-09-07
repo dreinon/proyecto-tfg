@@ -100,7 +100,7 @@ def fidelity_figure(aggregate: pd.DataFrame, output_root: Path) -> list[Path]:
     figure.text(
         0.01,
         0.02,
-        "Media de 64 obras independientes por condición. "
+        "Media de 64 grupos documentales por condición. "
         "Comparar métodos solo dentro de cada condición.",
         fontsize=8,
         color="#4B5563",
@@ -156,7 +156,8 @@ def paired_delta_figure(paired: pd.DataFrame, output_root: Path) -> list[Path]:
     figure.text(
         0.01,
         0.02,
-        "Puntos: diferencia media. Barras: IC percentil del 95 %, 2.000 remuestreos de 64 obras.",
+        "Puntos: diferencia media. Barras: IC percentil del 95 %, "
+        "2.000 remuestreos de 64 grupos documentales.",
         fontsize=8,
         color="#4B5563",
     )

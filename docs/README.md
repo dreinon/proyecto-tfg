@@ -9,6 +9,7 @@
 
 ## Estudios y resultados
 
+- [Unidad de análisis SMB: alcance y limitaciones de la agrupación](unit-of-analysis-audit.md).
 - [Evaluación principal SMB v2](smb-protocol-v2.md).
 - [Adaptación de EDSR: protocolo](smb-edsr-finetuning-v1.md) y
   [resultados](smb-edsr-finetuning-v1-results.md).

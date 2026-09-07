@@ -112,10 +112,12 @@ Cada resultado utilizado en la memoria se relaciona con:
 * las métricas por elemento y agregadas;
 * los logs y artefactos de salida.
 
-Cuando haya que crear particiones, se definirán por partitura, obra o documento fuente antes de
-generar páginas o parches, evitando que contenido relacionado aparezca simultáneamente en
-entrenamiento, validación y prueba. Los *splits* oficiales de un benchmark no se redistribuirán
-silenciosamente.
+En futuros estudios, las particiones deberán validar el parentesco entre obras, ediciones y
+documentos antes de generar páginas o parches. En el estudio SMB ejecutado, la separación se
+implementó por identificador documental, sin certificar independencia entre composiciones
+completas. La [auditoría de la unidad de análisis](docs/unit-of-analysis-audit.md) delimita esta
+implementación y sus consecuencias estadísticas. Los *splits* oficiales de un benchmark no se
+redistribuyen silenciosamente.
 
 ## Fuente principal de evaluación
 
@@ -126,13 +128,15 @@ del repositorio. El descriptor reproducible se encuentra en
 
 El descriptor y la auditoría autenticada confirman que SMB requiere aprobación manual de acceso,
 usa licencia CC BY-NC 4.0 y, en la revisión fijada, publica 685 páginas en un único *split* oficial
-`test`. El estudio principal conserva ese rol: evalúa métodos preentrenados sobre 64 obras que no
-se utilizan para ningún ajuste. Como estudio secundario y declarado separadamente, el proyecto
-define particiones propias por obra dentro de las páginas restantes para adaptar EDSR al dominio:
-45 obras/212 páginas de desarrollo previo para entrenamiento, 13 obras/35 páginas nuevas para
-validación y 20 obras/55 páginas nuevas para test. Las 64 obras del estudio principal quedan
-excluidas de las tres particiones. Este uso no se presenta como un *split* oficial de SMB ni como
-evidencia de generalización fuera del corpus; el contrato completo está en
+`test`. La auditoría identifica 260 grupos documentales; no equivalen necesariamente a 260 obras
+completas. El estudio principal evalúa métodos preentrenados sobre una página de cada uno de 64
+grupos que no se utilizan para ningún ajuste. Como estudio secundario y declarado separadamente,
+el proyecto define particiones propias por identificador documental para adaptar EDSR al dominio:
+45 grupos/212 páginas de desarrollo previo para entrenamiento, 13 grupos/35 páginas nuevas para
+validación y 20 grupos/55 páginas nuevas para test. Los 64 identificadores del estudio principal
+quedan excluidos de las tres particiones, pero movimientos de una misma composición pueden cruzar
+roles. Este uso no se presenta como un *split* oficial de SMB ni como evidencia de generalización
+a composiciones completas nunca vistas o fuera del corpus; el contrato histórico está en
 [`docs/smb-edsr-finetuning-v1.md`](docs/smb-edsr-finetuning-v1.md).
 
 ## Alcance profesional y posibles ampliaciones
@@ -209,10 +213,11 @@ Jupyter y Kaggle, pruebas, linting y captura del entorno de ejecución.
 SMB está seleccionado y auditado en una revisión inmutable de Hugging Face. Una primera ejecución
 piloto reveló que la degradación calibrada en píxeles absolutos no mantenía la severidad al cambiar
 la escala de pentagrama. La evaluación principal final ya usa el
-[protocolo v2 normalizado por pentagrama](docs/smb-protocol-v2.md) y una muestra nueva de 64 obras.
+[protocolo v2 normalizado por pentagrama](docs/smb-protocol-v2.md) y una muestra nueva de 64 grupos documentales.
 Tras completar ese núcleo, se ha promovido un estudio secundario acotado de
-[*fine-tuning* de EDSR](docs/smb-edsr-finetuning-v1.md), con particiones propias por obra y test
-nuevo. La ejecución acelerada ya está reconciliada: los resultados y sus límites se documentan en
+[*fine-tuning* de EDSR](docs/smb-edsr-finetuning-v1.md), con particiones propias por ID documental y
+test con IDs no usados para entrenamiento o validación. La ejecución acelerada se comprobó mediante
+verificación automatizada separada del pipeline principal; los resultados y sus límites se documentan en
 [`docs/smb-edsr-finetuning-v1-results.md`](docs/smb-edsr-finetuning-v1-results.md) y se incorporan
 a la memoria mediante resultados agregados, recortes analíticos y una página completa seleccionada
 para explicar el contexto global, siempre atribuida y comentada; no se publican pesos derivados de

@@ -1013,7 +1013,12 @@ def _raw_metadata_sha256(metadata: object) -> str | None:
 
 
 def _canonical_source_group_id(original_score_normalized: object) -> str:
-    """Derive one leakage-safe score identity from a normalized SMB page identity."""
+    """Remove the page suffix to identify an SMB documentary group.
+
+    Movements or editions with different prefixes remain distinct. This identity
+    does not certify independence at the level of a complete composition; see
+    docs/unit-of-analysis-audit.md for the retained experiments' scope.
+    """
 
     if (
         not isinstance(original_score_normalized, str)

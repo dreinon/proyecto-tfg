@@ -1,9 +1,14 @@
 # SMB EDSR fine-tuning v1: validated results
 
+> **Interpretation update — 7 September 2026.** The numerical results and frozen evidence below
+> are unchanged. The analysis unit is the SMB document-group ID, not a certified independent
+> complete composition. See the [unit-of-analysis audit](unit-of-analysis-audit.md) for observed
+> cross-role relationships and the conditional interpretation of bootstrap intervals.
+
 ## Status and evidence identity
 
-The bounded within-SMB adaptation study completed on 1 September 2026 and passed the independent
-local reconciliation in `scripts/validate_smb_edsr_finetuning.py`.
+The bounded within-SMB adaptation study completed on 1 September 2026 and passed local automated
+verification separate from the main pipeline in `scripts/validate_smb_edsr_finetuning.py`.
 
 - Archive: `artifacts/kaggle/smb-edsr-finetuning-v1.zip`
 - Archive SHA-256: `414613156e71e4242f295b68143950122072fd02027600b44337d00ee972cd1f`
@@ -21,20 +26,20 @@ first recovered bundle.
 
 ## Reconciliation
 
-All expected evidence is present and independently checked:
+All expected evidence is present and checked through that separate automated verification:
 
 | Check | Result |
 |---|---:|
 | Manifest files | 50 / 50 valid hashes and sizes |
 | Source groups | 45 train, 13 validation, 20 test |
 | Eligible pages | 212 train, 35 validation, 55 test |
-| Cross-partition source overlap | 0 |
+| Cross-partition document-group ID overlap | 0 |
 | Raw test tuples | 360 / 360 unique |
 | Paired bootstrap rows | 24 / 24 reproduced exactly |
 | Fixed qualitative PNGs | 30 / 30 pixel hashes valid |
 | Selected checkpoints | 2 / 2 identities valid |
 
-The primary 64-work pretrained benchmark is excluded from all three adaptation roles. The roles
+The primary 64 document-group IDs are excluded from all three adaptation roles. The roles
 are project-defined partitions of SMB's single official `test` split; they are not official SMB
 splits and must not be pooled with the primary study.
 
@@ -53,8 +58,10 @@ reason to extend training after seeing the result.
 
 ## Quantitative outcome
 
-The primary comparison is adapted minus pretrained EDSR on 20 independent test works. All twelve
-condition-specific intervals exclude zero.
+The primary comparison is adapted minus pretrained EDSR on 20 test document groups. All twelve
+condition-specific intervals exclude zero under the executed group-resampling calculation. These
+intervals are conditional on treating the IDs as independent; related movements can affect their
+precision, and this computation does not certify complete-composition independence.
 
 | Condition | PSNR-Y delta, dB [95% interval] | SSIM-Y delta [95% interval] | Sources improved in PSNR-Y |
 |---|---:|---:|---:|
@@ -69,12 +76,12 @@ The adapted model also exceeds bicubic on both primary metrics in every conditio
 paired-interval level. Its mean PSNR-Y advantage over bicubic ranges from 4.962 to 8.421 dB.
 
 The two repeated x4 PSNR-Y exceptions versus pretrained EDSR are the pages with the smallest staff
-spacing in the 20-work test sample. Because this is a post-hoc observation involving two works, it
+spacing in the 20-group test sample. Because this is a post-hoc observation involving two groups, it
 is retained only as a limitation and hypothesis for future stratified evaluation.
 
 ## Qualitative boundary
 
-The fixed evidence contains one test work per condition and five views per work: HR, enlarged LR,
+The fixed evidence contains one test document group per condition and five views per group: HR, enlarged LR,
 bicubic, pretrained EDSR, and adapted EDSR. The student completed the notation-level review on
 2 September 2026. Four cases (x2/x4 clean and moderate) were classified as improvement without a
 clear new defect; the x2/x4 strong cases were classified as damage already present in LR and not
@@ -90,16 +97,18 @@ therefore does not establish musical correctness.
 
 ## Defensible conclusion
 
-Within this pinned SMB revision, the project-defined source-disjoint roles, the matched synthetic
+Within this pinned SMB revision, the project-defined document-ID-disjoint roles, the matched synthetic
 degradation protocol, and the frozen 2,500-step budget, bounded EDSR fine-tuning produces a large
 and stable fidelity improvement over the official pretrained EDSR checkpoint. This is evidence for
 within-corpus domain adaptation, not for real-scan restoration, other collections, OMR accuracy,
-archival replacement, autonomous publication, or deployment.
+archival replacement, autonomous publication, or deployment. It also does not establish
+generalization to unseen complete compositions: distinct IDs can be movements of the same work.
 
 The primary pretrained benchmark remains the basis for comparing EDSR, SwinIR, and bicubic without
 SMB adaptation. The adaptation study answers a separate secondary question and does not
 retroactively alter model selection in that benchmark.
 
 SMB is declared CC BY-NC 4.0 at dataset level, while per-item provenance is unresolved. The
-adapted checkpoints and qualitative SMB images are therefore retained outside Git and must not be
-redistributed or used commercially without a separate rights review.
+adapted checkpoints, raw corpus and unselected qualitative outputs are retained outside Git.
+The thesis includes selected attributed analytical comparisons with transformations identified;
+access to SMB does not by itself authorize unrestricted reproduction or commercial use.

@@ -22,14 +22,19 @@ are recorded in `data/sources/smb.yaml`; the descriptor reports manual gating, C
 685 examples in the sole official split `test`. Preserve that upstream fact and never describe a
 project-defined partition as official.
 
-The primary pretrained study keeps SMB evaluation-only: its fresh 64-work v2 sample is excluded
-from every adaptive operation. A distinct secondary adaptation study may derive train, validation,
-and test roles from the remaining SMB content only through the frozen, source-disjoint contract in
+The primary pretrained study keeps its SMB sample evaluation-only: its 64 v2 document-group IDs
+are excluded from every adaptive operation. The audit contains 260 document groups, not a verified
+catalogue of 260 independent compositions. The distinct secondary adaptation study derives train,
+validation, and test roles from the remaining SMB content through the frozen, ID-disjoint contract in
 [`smb-edsr-finetuning-v1.md`](smb-edsr-finetuning-v1.md). That contract uses prior v1 development
 sources for training, fresh sources for validation/test, opens test only after checkpoint
 selection, and bounds every conclusion to within-SMB domain adaptation. This is a deliberate
 protocol amendment, not a silent reinterpretation of the upstream split and not a retroactive
-change to the primary v2 benchmark.
+change to the primary v2 benchmark. The implemented roles contain 45/13/20 document groups
+(212/35/55 pages). The grouping removes only the terminal page suffix from SMB's source identity;
+related movements can cross roles. It therefore does not establish complete-composition
+independence. The post-execution [unit-of-analysis audit](unit-of-analysis-audit.md) governs this
+interpretation without changing the frozen experiment.
 
 For every dataset, record:
 
@@ -40,10 +45,12 @@ For every dataset, record:
   size, notation density, language/text, scan vs. born-digital origin, and quality;
 - exact split manifest.
 
-When project-defined splits are needed, split independent source scores/works/documents first.
+For future project-defined splits, validate independent source scores/works/documents first.
 Only then derive pages, crops, or patches. Preserve official benchmark splits and document any
 deliberate departure from them.
 Grouping must prevent near-duplicate material and pages from the same score from crossing splits.
+This is a prospective requirement: the executed SMB grouping verified page/ID disjointness, but
+did not certify the stronger musical-work separation intended by that requirement.
 Keep test data untouched until the analysis protocol is fixed.
 
 ## Degradation protocol
@@ -68,7 +75,7 @@ truth, and absence of accidental data leakage.
 
 The first full SMB execution is retained as a disclosed development pilot because it revealed that
 the absolute-pixel blur calibrated on large synthetic notation did not preserve severity across
-SMB's smaller, variable staff scales. Final confirmation therefore uses a fresh, work-disjoint
+SMB's smaller, variable staff scales. Final confirmation therefore uses a fresh, source-ID-disjoint
 64-page sample and freezes Gaussian blur as a fraction of each page's input-only measured staff
 spacing. The exact correction, identities, claim boundary, and relationship between v1 and v2 are
 defined in [`smb-protocol-v2.md`](smb-protocol-v2.md). No v2 outcome may be used for further
@@ -82,7 +89,8 @@ is adapted, at x2 and x4, using the already-frozen staff-scale degradation famil
 training, checkpoint-selection, fresh-test, bootstrap, qualitative-sampling, and evidence contracts
 are frozen in [`smb-edsr-finetuning-v1.md`](smb-edsr-finetuning-v1.md) before training. The study
 does not retune the v2 protocol or replace its conclusions about pretrained transfer. The run is
-complete and independently reconciled; its outcomes and boundaries are recorded in
+complete and checked through automated verification separate from the main pipeline; its outcomes
+and boundaries are recorded in
 [`smb-edsr-finetuning-v1-results.md`](smb-edsr-finetuning-v1-results.md).
 
 ### Professional demonstrator and external pilot
@@ -122,6 +130,13 @@ input assumptions, and expected scientific value must be explicit.
 
 Use identical aligned test inputs and aggregation for every comparable method. Report results
 overall and by relevant subgroup/degradation severity.
+
+For the executed SMB studies, bootstrap intervals resample document groups and are conditional on
+treating those groups as independent. Residual correlation between related movements or editions
+may affect their precision; correct recomputation does not certify independence or justify
+generalization to unseen complete compositions. Keep the 64 principal and 20 adaptation-test
+group denominators distinct from the twelve works in the external pilot. Any composition-level
+sensitivity analysis must be explicitly post hoc and preserve the original results.
 
 Quantitative evaluation should cover complementary properties rather than rely on one score:
 

@@ -29,7 +29,8 @@ def _style() -> None:
     plt.rcParams.update(
         {
             "font.family": "DejaVu Sans",
-            "pdf.fonttype": 42,
+            # Avoid spurious TrueType .notdef references in pdfTeX embedding (PDF/A-2b).
+            "pdf.fonttype": 3,
             "ps.fonttype": 42,
             "font.size": 9,
             "axes.titlesize": 10,
@@ -107,7 +108,7 @@ def adaptation_delta_figure(paired: pd.DataFrame, output_root: Path) -> list[Pat
         0.01,
         0.025,
         "Puntos: diferencia media pareada. Barras: IC percentil del 95 %, "
-        "2.000 remuestreos de 20 obras test independientes.",
+        "2.000 remuestreos de 20 grupos documentales de prueba.",
         fontsize=8,
         color="#4B5563",
     )
@@ -159,7 +160,7 @@ def checkpoint_selection_figure(artifact_root: Path, output_root: Path) -> list[
     figure.text(
         0.01,
         0.03,
-        "Validación sobre 13 obras independientes y casos fijados por perfil. "
+        "Validación sobre 13 grupos documentales y casos fijados por perfil. "
         "Presupuesto máximo: 2.500 pasos por escala.",
         fontsize=8,
         color="#4B5563",
